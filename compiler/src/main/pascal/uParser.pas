@@ -321,6 +321,18 @@ begin
       Advance;
     end;
     Expect(tkSemicolon);
+    if Check(tkVirtual) then
+    begin
+      Result.IsVirtual := True;
+      Advance;
+      Expect(tkSemicolon);
+    end
+    else if Check(tkOverride) then
+    begin
+      Result.IsOverride := True;
+      Advance;
+      Expect(tkSemicolon);
+    end;
     Result.Body := ParseBlock;
     Expect(tkSemicolon);
   except

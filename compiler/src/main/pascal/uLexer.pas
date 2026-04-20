@@ -44,6 +44,8 @@ type
     tkUnit,
     tkIntf,
     tkImplementation,
+    tkVirtual,
+    tkOverride,
     { Identifier }
     tkIdent,
     { Arithmetic operators }
@@ -131,6 +133,8 @@ begin
   else if AUpper = 'UNIT'           then Result := tkUnit
   else if AUpper = 'INTERFACE'      then Result := tkIntf
   else if AUpper = 'IMPLEMENTATION' then Result := tkImplementation
+  else if AUpper = 'VIRTUAL'        then Result := tkVirtual
+  else if AUpper = 'OVERRIDE'       then Result := tkOverride
   else
     Result := tkIdent;  { keyword outside Phase 1 grammar treated as ident }
 end;
@@ -198,7 +202,10 @@ begin
 
     fptkIdentifier:
       begin
-        Result.Kind  := tkIdent;
+        text := FTok.TokenTextUpper;
+        if      text = 'VIRTUAL'  then Result.Kind := tkVirtual
+        else if text = 'OVERRIDE' then Result.Kind := tkOverride
+        else                           Result.Kind := tkIdent;
         Result.Value := FTok.TokenText;
       end;
 

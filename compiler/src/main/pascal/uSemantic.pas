@@ -52,6 +52,8 @@ type
     procedure SemanticError(const AMsg: string; ALine, ACol: Integer);
     procedure CheckTypesMatch(AExpected, AActual: TTypeDesc;
       const AContext: string; ALine, ACol: Integer);
+    { Returns True if AActual is AExpected or a subclass of AExpected. }
+    function  IsSubtypeOf(AActual, AExpected: TTypeDesc): Boolean;
   public
     constructor Create;
     destructor Destroy; override;
@@ -84,6 +86,26 @@ begin
   raise ESemanticError.CreateFmt('%s at line %d col %d', [AMsg, ALine, ACol]);
 end;
 
+function TSemanticAnalyser.IsSubtypeOf(AActual, AExpected: TTypeDesc): Boolean;
+var
+  Walk: TRecordTypeDesc;
+begin
+  Result := AActual = AExpected;
+  if Result then Exit;
+  if (AActual = nil) or (AExpected = nil) then Exit;
+  if (AActual.Kind <> tyClass) or (AExpected.Kind <> tyClass) then Exit;
+  Walk := TRecordTypeDesc(AActual).Parent;
+  while Walk <> nil do
+  begin
+    if Walk = AExpected then
+    begin
+      Result := True;
+      Exit;
+    end;
+    Walk := Walk.Parent;
+  end;
+end;
+
 procedure TSemanticAnalyser.CheckTypesMatch(AExpected, AActual: TTypeDesc;
   const AContext: string; ALine, ACol: Integer);
 begin
@@ -91,6 +113,9 @@ begin
     Exit;
   { nil is compatible with any class type }
   if (AActual.Kind = tyNil) and (AExpected.Kind = tyClass) then
+    Exit;
+  { subtype assignment: TDerived → TBase is allowed }
+  if IsSubtypeOf(AActual, AExpected) then
     Exit;
   SemanticError(
     Format('Type mismatch in %s: expected ''%s'' but got ''%s''',
@@ -323,7 +348,7 @@ begin
       FieldList  := TClassTypeDef(TD.Def).Fields;
       MethodList := TClassTypeDef(TD.Def).Methods;
 
-      { Copy inherited fields from parent class first }
+      { Copy inherited fields and vtable from parent class first }
       if TClassTypeDef(TD.Def).ParentName <> '' then
       begin
         ParentSym := FTable.Lookup(TClassTypeDef(TD.Def).ParentName);
@@ -334,15 +359,30 @@ begin
             TD.Line, TD.Col);
         ParentRT     := TRecordTypeDesc(ParentSym.TypeDesc);
         RT.Parent    := ParentRT;
+        RT.CopyVTableFrom(ParentRT);
         for K := 0 to ParentRT.Fields.Count - 1 do
         begin
           FldInfo := TFieldInfo(ParentRT.Fields[K]);
           RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
         end;
       end;
+
+      { Pre-pass: register vtable slots for virtual/override methods BEFORE
+        adding own fields, so that field offsets correctly account for the vptr. }
+      if MethodList <> nil then
+        for J := 0 to MethodList.Count - 1 do
+        begin
+          MDecl := TMethodDecl(MethodList[J]);
+          if MDecl.IsVirtual then
+            RT.AddVTableSlot(MDecl.Name, '$' + TD.Name + '_' + MDecl.Name)
+          else if MDecl.IsOverride then
+            RT.OverrideVTableSlot(
+              RT.FindVTableSlot(MDecl.Name),
+              '$' + TD.Name + '_' + MDecl.Name);
+        end;
     end;
 
-    { Resolve own field declarations }
+    { Resolve own field declarations (offsets now include vptr if HasVTable) }
     for J := 0 to FieldList.Count - 1 do
     begin
       FDecl   := TFieldDecl(FieldList[J]);
@@ -359,7 +399,7 @@ begin
       end;
     end;
 
-    { Index class methods and resolve param/return types }
+    { Index class methods, record VTableSlot on MDecl, resolve param/return types }
     if MethodList <> nil then
       for J := 0 to MethodList.Count - 1 do
       begin
@@ -367,6 +407,17 @@ begin
         MDecl.OwnerTypeName := TD.Name;
         Key                 := TD.Name + '.' + MDecl.Name;
         FMethodIndex.AddObject(Key, MDecl);
+
+        { Retrieve the vtable slot assigned in the pre-pass above }
+        if MDecl.IsVirtual or MDecl.IsOverride then
+        begin
+          MDecl.VTableSlot := RT.FindVTableSlot(MDecl.Name);
+          if MDecl.IsOverride and (MDecl.VTableSlot < 0) then
+            SemanticError(
+              Format('Method ''%s'' marked override but no virtual base method found',
+                [MDecl.Name]),
+              MDecl.Line, MDecl.Col);
+        end;
 
         for K := 0 to MDecl.Params.Count - 1 do
         begin

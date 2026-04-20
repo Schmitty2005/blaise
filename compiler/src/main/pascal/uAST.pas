@@ -222,6 +222,9 @@ type
     ReturnTypeName:     string;      { empty = procedure }
     ResolvedReturnType: TTypeDesc;   { set by uSemantic; nil = procedure }
     Body:               TBlock;      { owned }
+    IsVirtual:          Boolean;     { declared with 'virtual' directive }
+    IsOverride:         Boolean;     { declared with 'override' directive }
+    VTableSlot:         Integer;     { -1 = static; >=0 = vtable index (set by uSemantic) }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -497,7 +500,8 @@ end;
 constructor TMethodDecl.Create;
 begin
   inherited Create;
-  Params := TObjectList.Create(True);
+  Params     := TObjectList.Create(True);
+  VTableSlot := -1;
 end;
 
 destructor TMethodDecl.Destroy;

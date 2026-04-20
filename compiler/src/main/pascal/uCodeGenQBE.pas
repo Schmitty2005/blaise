@@ -29,6 +29,7 @@ type
     procedure EmitDataSection;
     procedure EmitMainHeader;
     procedure EmitMainFooter;
+    procedure EmitVTableDefs(AProg: TProgram);
     procedure EmitMethodDefs(AProg: TProgram);
     procedure EmitMethodDef(const ATypeName: string; AMethod: TMethodDecl);
     procedure EmitStandaloneDefs(AProg: TProgram);
@@ -553,19 +554,16 @@ var
   I:        Integer;
   QType:    string;
   FuncName: string;
+  VTblTemp: string;
+  FPtrTemp: string;
+  SlotOff:  Integer;
 begin
-  RT     := TRecordTypeDesc(ACall.ResolvedClassType);
-  MDecl  := TMethodDecl(ACall.ResolvedMethod);
+  RT    := TRecordTypeDesc(ACall.ResolvedClassType);
+  MDecl := TMethodDecl(ACall.ResolvedMethod);
 
   { Load the object pointer (Self) from the caller's variable slot }
   SelfTemp := AllocTemp;
   EmitLine(Format('  %s =l loadl %%_var_%s', [SelfTemp, ACall.ObjectName]));
-
-  { Use OwnerTypeName so inherited methods resolve to the defining class }
-  if MDecl.OwnerTypeName <> '' then
-    FuncName := '$' + MDecl.OwnerTypeName + '_' + ACall.Name
-  else
-    FuncName := '$' + RT.Name + '_' + ACall.Name;
 
   { Build argument string: l Self, then each explicit arg }
   ArgLine := Format('l %s', [SelfTemp]);
@@ -577,7 +575,32 @@ begin
     ArgLine := ArgLine + Format(', %s %s', [QType, ArgTemp]);
   end;
 
-  EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+  if MDecl.VTableSlot >= 0 then
+  begin
+    { Virtual dispatch: load vptr from instance[0], then load fptr from vtable[slot] }
+    VTblTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %s', [VTblTemp, SelfTemp]));
+    FPtrTemp := AllocTemp;
+    SlotOff  := MDecl.VTableSlot * 8;
+    if SlotOff > 0 then
+    begin
+      ArgTemp := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
+      EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
+    end
+    else
+      EmitLine(Format('  %s =l loadl %s', [FPtrTemp, VTblTemp]));
+    EmitLine(Format('  call %%%s(%s)', [FPtrTemp, ArgLine]));
+  end
+  else
+  begin
+    { Static dispatch }
+    if MDecl.OwnerTypeName <> '' then
+      FuncName := '$' + MDecl.OwnerTypeName + '_' + ACall.Name
+    else
+      FuncName := '$' + RT.Name + '_' + ACall.Name;
+    EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+  end;
 end;
 
 procedure TCodeGenQBE.EmitParamAllocs(AMethod: TMethodDecl;
@@ -679,6 +702,36 @@ begin
     EmitLine('  ret');
 
   EmitLine('}');
+  EmitLine('');
+end;
+
+procedure TCodeGenQBE.EmitVTableDefs(AProg: TProgram);
+var
+  I, S:  Integer;
+  TD:    TTypeDecl;
+  TDesc: TTypeDesc;
+  RT:    TRecordTypeDesc;
+  E:     TVTableEntry;
+  Line:  string;
+begin
+  for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(AProg.Block.TypeDecls[I]);
+    if not (TD.Def is TClassTypeDef) then Continue;
+    TDesc := AProg.SymbolTable.FindType(TD.Name);
+    if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
+    RT := TRecordTypeDesc(TDesc);
+    if not RT.HasVTable then Continue;
+    Line := 'data $vtable_' + TD.Name + ' = {';
+    for S := 0 to RT.VTableCount - 1 do
+    begin
+      E := RT.VTableEntryAt(S);
+      if S > 0 then Line := Line + ',';
+      Line := Line + ' l ' + E.ImplName;
+    end;
+    Line := Line + ' }';
+    EmitLine(Line);
+  end;
   EmitLine('');
 end;
 
@@ -1013,6 +1066,10 @@ begin
       T := AllocTemp;
       EmitLine(Format('  %s =l call $malloc(l %d)',
         [T, TRecordTypeDesc(FldAccess.ResolvedType).TotalSize]));
+      { Store vtable pointer at offset 0 if this class has virtual methods }
+      if TRecordTypeDesc(FldAccess.ResolvedType).HasVTable then
+        EmitLine(Format('  storel $vtable_%s, %s',
+          [FldAccess.ResolvedType.Name, T]));
       Result := T;
     end
     else if FldAccess.IsClassAccess then
@@ -1176,6 +1233,7 @@ begin
     EmitLine('# Source: ' + AProg.Name);
     EmitLine('');
     EmitDataSection;
+    EmitVTableDefs(AProg);
     FOutput.AddStrings(Body);
   finally
     Body.Free;

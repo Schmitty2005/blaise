@@ -47,12 +47,21 @@ type
     Offset:   Integer;    { byte offset from record base }
   end;
 
+  { One entry in a class vtable — tracks slot index and implementing method. }
+  TVTableEntry = class
+  public
+    Slot:     Integer;  { index in vtable }
+    MethName: string;   { unqualified method name }
+    ImplName: string;   { fully-qualified QBE label, e.g. $TDog_Speak }
+  end;
+
   { Extended type descriptor for record types. }
   TRecordTypeDesc = class(TTypeDesc)
   private
-    FFields: TObjectList;  { owned TFieldInfo }
-    FKeys:   TStringList;  { sorted, case-insensitive; Objects[] = TFieldInfo (not owned) }
-    FParent: TRecordTypeDesc;  { not owned; nil for root classes }
+    FFields:  TObjectList;  { owned TFieldInfo }
+    FKeys:    TStringList;  { sorted, case-insensitive; Objects[] = TFieldInfo (not owned) }
+    FParent:  TRecordTypeDesc;  { not owned; nil for root classes }
+    FVTable:  TObjectList;  { owned TVTableEntry; nil if no virtual methods }
   public
     constructor Create(const AName: string; AKind: TTypeKind = tyRecord);
     destructor Destroy; override;
@@ -60,6 +69,19 @@ type
     function  FindField(const AName: string): TFieldInfo;
     function  TotalSize: Integer;
     function  MaxAlign: Integer;
+
+    { Vtable management }
+    function  HasVTable: Boolean;
+    function  VTableCount: Integer;
+    function  VTableEntryAt(ASlot: Integer): TVTableEntry;
+    function  FindVTableSlot(const AMethodName: string): Integer;
+    { Assigns a new slot for a virtual method; returns the slot index. }
+    function  AddVTableSlot(const AMethodName, AImplName: string): Integer;
+    { Overrides an existing slot (for 'override' declarations). }
+    procedure OverrideVTableSlot(ASlot: Integer; const AImplName: string);
+    { Copies all vtable entries from the parent (called during class analysis). }
+    procedure CopyVTableFrom(AParent: TRecordTypeDesc);
+
     property  Fields: TObjectList read FFields;
     property  Parent: TRecordTypeDesc read FParent write FParent;
   end;
@@ -230,19 +252,21 @@ end;
 constructor TRecordTypeDesc.Create(const AName: string; AKind: TTypeKind = tyRecord);
 begin
   inherited Create;
-  Kind   := AKind;
-  Name   := AName;
+  Kind    := AKind;
+  Name    := AName;
   FFields := TObjectList.Create(True);
   FKeys   := TStringList.Create;
   FKeys.Sorted        := True;
   FKeys.CaseSensitive := False;
   FKeys.Duplicates    := dupIgnore;
+  FVTable := nil;  { allocated on first use }
 end;
 
 destructor TRecordTypeDesc.Destroy;
 begin
   FKeys.Free;
   FFields.Free;
+  FVTable.Free;
   inherited Destroy;
 end;
 
@@ -251,7 +275,7 @@ var
   Info:   TFieldInfo;
   Offset: Integer;
 begin
-  Offset := TotalSize;  { next available byte }
+  Offset := TotalSize;  { next available byte (includes vptr if present) }
   Info          := TFieldInfo.Create;
   Info.Name     := AName;
   Info.TypeDesc := AType;
@@ -274,7 +298,11 @@ function TRecordTypeDesc.TotalSize: Integer;
 var
   I: Integer;
 begin
-  Result := 0;
+  { vptr (8 bytes) precedes all fields when this class has a vtable }
+  if HasVTable then
+    Result := 8
+  else
+    Result := 0;
   for I := 0 to FFields.Count - 1 do
     Inc(Result, TFieldInfo(FFields[I]).TypeDesc.ByteSize);
 end;
@@ -284,11 +312,91 @@ var
   I, A: Integer;
 begin
   Result := 4;
+  if HasVTable then
+    Result := 8;  { vptr requires 8-byte alignment }
   for I := 0 to FFields.Count - 1 do
   begin
     A := TFieldInfo(FFields[I]).TypeDesc.AllocAlign;
     if A > Result then
       Result := A;
+  end;
+end;
+
+function TRecordTypeDesc.HasVTable: Boolean;
+begin
+  Result := (FVTable <> nil) and (FVTable.Count > 0);
+end;
+
+function TRecordTypeDesc.VTableCount: Integer;
+begin
+  if FVTable = nil then
+    Result := 0
+  else
+    Result := FVTable.Count;
+end;
+
+function TRecordTypeDesc.VTableEntryAt(ASlot: Integer): TVTableEntry;
+begin
+  if (FVTable = nil) or (ASlot < 0) or (ASlot >= FVTable.Count) then
+    Result := nil
+  else
+    Result := TVTableEntry(FVTable[ASlot]);
+end;
+
+function TRecordTypeDesc.FindVTableSlot(const AMethodName: string): Integer;
+var
+  I: Integer;
+  E: TVTableEntry;
+begin
+  Result := -1;
+  if FVTable = nil then Exit;
+  for I := 0 to FVTable.Count - 1 do
+  begin
+    E := TVTableEntry(FVTable[I]);
+    if SameText(E.MethName, AMethodName) then
+    begin
+      Result := I;
+      Exit;
+    end;
+  end;
+end;
+
+function TRecordTypeDesc.AddVTableSlot(const AMethodName, AImplName: string): Integer;
+var
+  E: TVTableEntry;
+begin
+  if FVTable = nil then
+    FVTable := TObjectList.Create(True);
+  E            := TVTableEntry.Create;
+  E.Slot       := FVTable.Count;
+  E.MethName := AMethodName;
+  E.ImplName   := AImplName;
+  FVTable.Add(E);
+  Result := E.Slot;
+end;
+
+procedure TRecordTypeDesc.OverrideVTableSlot(ASlot: Integer; const AImplName: string);
+begin
+  if (FVTable <> nil) and (ASlot >= 0) and (ASlot < FVTable.Count) then
+    TVTableEntry(FVTable[ASlot]).ImplName := AImplName;
+end;
+
+procedure TRecordTypeDesc.CopyVTableFrom(AParent: TRecordTypeDesc);
+var
+  I: Integer;
+  Src, Dst: TVTableEntry;
+begin
+  if (AParent = nil) or (AParent.VTableCount = 0) then Exit;
+  if FVTable = nil then
+    FVTable := TObjectList.Create(True);
+  for I := 0 to AParent.VTableCount - 1 do
+  begin
+    Src      := AParent.VTableEntryAt(I);
+    Dst      := TVTableEntry.Create;
+    Dst.Slot       := Src.Slot;
+    Dst.MethName := Src.MethName;
+    Dst.ImplName   := Src.ImplName;
+    FVTable.Add(Dst);
   end;
 end;
 
