@@ -455,7 +455,19 @@ var
   I:    Integer;
   CondType: TTypeDesc;
 begin
-  if AStmt is TIfStmt then
+  if AStmt is TWhileStmt then
+  begin
+    with TWhileStmt(AStmt) do
+    begin
+      CondType := AnalyseExpr(Condition);
+      if CondType.Kind <> tyBoolean then
+        SemanticError(
+          Format('while condition must be Boolean, got ''%s''', [CondType.Name]),
+          AStmt.Line, AStmt.Col);
+      AnalyseStmt(Body);
+    end;
+  end
+  else if AStmt is TIfStmt then
   begin
     IfS      := TIfStmt(AStmt);
     CondType := AnalyseExpr(IfS.Condition);

@@ -31,6 +31,8 @@ type
     tkIf,
     tkThen,
     tkElse,
+    tkWhile,
+    tkDo,
     { Identifier }
     tkIdent,
     { Arithmetic operators }
@@ -105,6 +107,8 @@ begin
   else if AUpper = 'IF'        then Result := tkIf
   else if AUpper = 'THEN'      then Result := tkThen
   else if AUpper = 'ELSE'      then Result := tkElse
+  else if AUpper = 'WHILE'     then Result := tkWhile
+  else if AUpper = 'DO'        then Result := tkDo
   else
     Result := tkIdent;  { keyword outside Phase 1 grammar treated as ident }
 end;

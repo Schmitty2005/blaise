@@ -39,6 +39,7 @@ type
     procedure EmitStringCleanup(ABlock: TBlock);
     procedure EmitStmt(AStmt: TASTStmt);
     procedure EmitIfStmt(AStmt: TIfStmt);
+    procedure EmitWhileStmt(AStmt: TWhileStmt);
     procedure EmitCompoundStmt(AStmt: TCompoundStmt);
     procedure EmitAssignment(AAssign: TAssignment);
     procedure EmitFieldAssignment(AAssign: TFieldAssignment);
@@ -235,7 +236,9 @@ end;
 
 procedure TCodeGenQBE.EmitStmt(AStmt: TASTStmt);
 begin
-  if AStmt is TIfStmt then
+  if AStmt is TWhileStmt then
+    EmitWhileStmt(TWhileStmt(AStmt))
+  else if AStmt is TIfStmt then
     EmitIfStmt(TIfStmt(AStmt))
   else if AStmt is TCompoundStmt then
     EmitCompoundStmt(TCompoundStmt(AStmt))
@@ -282,6 +285,34 @@ begin
     EmitLine(Format('  jmp @%s', [LblEnd]));
   end;
 
+  EmitLine('@' + LblEnd);
+end;
+
+procedure TCodeGenQBE.EmitWhileStmt(AStmt: TWhileStmt);
+var
+  LblCond: string;
+  LblBody: string;
+  LblEnd:  string;
+  CondTemp: string;
+begin
+  LblCond := AllocLabel('while_cond');
+  LblBody := AllocLabel('while_body');
+  LblEnd  := AllocLabel('while_end');
+
+  { Jump into the condition block (terminates current block) }
+  EmitLine(Format('  jmp @%s', [LblCond]));
+
+  { Condition evaluation block }
+  EmitLine('@' + LblCond);
+  CondTemp := EmitExpr(AStmt.Condition);
+  EmitLine(Format('  jnz %s, @%s, @%s', [CondTemp, LblBody, LblEnd]));
+
+  { Loop body block }
+  EmitLine('@' + LblBody);
+  EmitStmt(AStmt.Body);
+  EmitLine(Format('  jmp @%s', [LblCond]));
+
+  { Continuation block }
   EmitLine('@' + LblEnd);
 end;
 

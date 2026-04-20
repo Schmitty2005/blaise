@@ -87,6 +87,13 @@ type
     destructor Destroy; override;
   end;
 
+  TWhileStmt = class(TASTStmt)
+  public
+    Condition: TASTExpr;  { owned }
+    Body:      TASTStmt;  { owned }
+    destructor Destroy; override;
+  end;
+
   TFieldAssignment = class(TASTStmt)
   public
     RecordName:    string;
@@ -283,6 +290,15 @@ end;
 destructor TCompoundStmt.Destroy;
 begin
   Stmts.Free;
+  inherited Destroy;
+end;
+
+{ TWhileStmt }
+
+destructor TWhileStmt.Destroy;
+begin
+  Condition.Free;
+  Body.Free;
   inherited Destroy;
 end;
 

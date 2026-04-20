@@ -63,6 +63,7 @@ type
     procedure ParseStmtList(ABlock: TBlock);
     function  ParseStmt: TASTStmt;
     function  ParseIfStmt: TIfStmt;
+    function  ParseWhileStmt: TWhileStmt;
     function  ParseCompoundStmt: TCompoundStmt;
     function  ParseExpr: TASTExpr;
     function  ParseAddSub: TASTExpr;
@@ -502,6 +503,12 @@ begin
     Exit;
   end;
 
+  if Check(tkWhile) then
+  begin
+    Result := ParseWhileStmt;
+    Exit;
+  end;
+
   if Check(tkBegin) then
   begin
     Result := ParseCompoundStmt;
@@ -581,6 +588,22 @@ begin
       Expect(tkRParen);
     end;
     Result := Call;
+  end;
+end;
+
+function TParser.ParseWhileStmt: TWhileStmt;
+begin
+  Result := TWhileStmt.Create;
+  try
+    Result.Line := FCurrent.Line;
+    Result.Col  := FCurrent.Col;
+    Expect(tkWhile);
+    Result.Condition := ParseExpr;
+    Expect(tkDo);
+    Result.Body := ParseStmt;
+  except
+    Result.Free;
+    raise;
   end;
 end;
 

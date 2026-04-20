@@ -74,6 +74,23 @@ type
     procedure TestCodegen_Comparison_GT_UsescGtw;
     procedure TestCodegen_Comparison_NE_UsescNew;
     procedure TestCodegen_Compound_EmitsAllStmts;
+
+    { ------------------------------------------------------------------ }
+    { While loops                                                          }
+    { ------------------------------------------------------------------ }
+    procedure TestLexer_While_Keyword;
+    procedure TestLexer_Do_Keyword;
+    procedure TestParse_While_IsWhileStmt;
+    procedure TestParse_While_HasCondition;
+    procedure TestParse_While_BodyIsAssignment;
+    procedure TestParse_While_CompoundBody;
+    procedure TestSemantic_While_Resolves;
+    procedure TestSemantic_While_NonBooleanCondition_RaisesError;
+    procedure TestCodegen_While_EmitsCondLabel;
+    procedure TestCodegen_While_EmitsBodyLabel;
+    procedure TestCodegen_While_EmitsEndLabel;
+    procedure TestCodegen_While_LoopsBack;
+    procedure TestCodegen_While_EmitsJnz;
   end;
 
 implementation
@@ -605,6 +622,138 @@ begin
   IR := GenIR(SrcCompound);
   { Compound then branch has WriteLn + assignment, so printf should appear }
   AssertTrue('printf in compound branch', Pos('printf', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ While loop tests                                                    }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcWhile =
+    'program P;'              + LineEnding +
+    'var N: Integer;'         + LineEnding +
+    'begin'                   + LineEnding +
+    '  N := 5;'               + LineEnding +
+    '  while N > 0 do'        + LineEnding +
+    '    N := N - 1'          + LineEnding +
+    'end.';
+
+  SrcWhileCompound =
+    'program P;'              + LineEnding +
+    'var N, S: Integer;'      + LineEnding +
+    'begin'                   + LineEnding +
+    '  N := 3;'               + LineEnding +
+    '  S := 0;'               + LineEnding +
+    '  while N > 0 do'        + LineEnding +
+    '  begin'                 + LineEnding +
+    '    S := S + N;'         + LineEnding +
+    '    N := N - 1'          + LineEnding +
+    '  end'                   + LineEnding +
+    'end.';
+
+procedure TControlTests.TestLexer_While_Keyword;
+var L: TLexer; T: TToken;
+begin
+  L := TLexer.Create('while');
+  try
+    T := L.Next;
+    AssertEquals('while token', Ord(tkWhile), Ord(T.Kind));
+  finally L.Free; end;
+end;
+
+procedure TControlTests.TestLexer_Do_Keyword;
+var L: TLexer; T: TToken;
+begin
+  L := TLexer.Create('do');
+  try
+    T := L.Next;
+    AssertEquals('do token', Ord(tkDo), Ord(T.Kind));
+  finally L.Free; end;
+end;
+
+procedure TControlTests.TestParse_While_IsWhileStmt;
+var Prog: TProgram;
+begin
+  Prog := ParseSrc(SrcWhile);
+  try
+    AssertTrue('second stmt is TWhileStmt', Prog.Block.Stmts[1] is TWhileStmt);
+  finally Prog.Free; end;
+end;
+
+procedure TControlTests.TestParse_While_HasCondition;
+var Prog: TProgram; S: TWhileStmt;
+begin
+  Prog := ParseSrc(SrcWhile);
+  try
+    S := TWhileStmt(Prog.Block.Stmts[1]);
+    AssertNotNull('condition not nil', S.Condition);
+    AssertTrue('condition is TBinaryExpr', S.Condition is TBinaryExpr);
+  finally Prog.Free; end;
+end;
+
+procedure TControlTests.TestParse_While_BodyIsAssignment;
+var Prog: TProgram; S: TWhileStmt;
+begin
+  Prog := ParseSrc(SrcWhile);
+  try
+    S := TWhileStmt(Prog.Block.Stmts[1]);
+    AssertTrue('body is TAssignment', S.Body is TAssignment);
+  finally Prog.Free; end;
+end;
+
+procedure TControlTests.TestParse_While_CompoundBody;
+var Prog: TProgram; S: TWhileStmt;
+begin
+  Prog := ParseSrc(SrcWhileCompound);
+  try
+    S := TWhileStmt(Prog.Block.Stmts[2]);
+    AssertTrue('body is TCompoundStmt', S.Body is TCompoundStmt);
+    AssertEquals('two stmts in body', 2,
+      TCompoundStmt(S.Body).Stmts.Count);
+  finally Prog.Free; end;
+end;
+
+procedure TControlTests.TestSemantic_While_Resolves;
+begin
+  AnalyseSrc(SrcWhile).Free;
+end;
+
+procedure TControlTests.TestSemantic_While_NonBooleanCondition_RaisesError;
+begin
+  AnalyseExpectError(
+    'program P;'       + LineEnding +
+    'var N: Integer;'  + LineEnding +
+    'begin'            + LineEnding +
+    '  N := 1;'        + LineEnding +
+    '  while N do'     + LineEnding +
+    '    N := N - 1'   + LineEnding +
+    'end.');
+end;
+
+procedure TControlTests.TestCodegen_While_EmitsCondLabel;
+begin
+  AssertTrue('@while_cond label', Pos('@while_cond', GenIR(SrcWhile)) > 0);
+end;
+
+procedure TControlTests.TestCodegen_While_EmitsBodyLabel;
+begin
+  AssertTrue('@while_body label', Pos('@while_body', GenIR(SrcWhile)) > 0);
+end;
+
+procedure TControlTests.TestCodegen_While_EmitsEndLabel;
+begin
+  AssertTrue('@while_end label', Pos('@while_end', GenIR(SrcWhile)) > 0);
+end;
+
+procedure TControlTests.TestCodegen_While_LoopsBack;
+begin
+  { The body block must jump back to @while_cond }
+  AssertTrue('jmp @while_cond', Pos('jmp @while_cond', GenIR(SrcWhile)) > 0);
+end;
+
+procedure TControlTests.TestCodegen_While_EmitsJnz;
+begin
+  AssertTrue('jnz in while', Pos('jnz', GenIR(SrcWhile)) > 0);
 end;
 
 initialization
