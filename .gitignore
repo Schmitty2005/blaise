@@ -65,3 +65,6 @@ Desktop.ini
 *.tmp
 *.bak
 *.orig
+
+# Claude Code session notes — not for version control
+CLAUDE.md
