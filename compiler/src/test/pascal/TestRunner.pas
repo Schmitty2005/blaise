@@ -12,7 +12,8 @@ uses
   consoletestrunner,
   cp.test.lexer,
   cp.test.parser,
-  cp.test.codegen;
+  cp.test.codegen,
+  cp.test.symtable;
 
 var
   Application: TTestRunner;
