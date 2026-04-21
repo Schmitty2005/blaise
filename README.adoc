@@ -73,22 +73,22 @@ never committed to the repository.
 
 | 1
 | Bootstrap pipeline — Hello World on Linux x86_64 via PasBuild
-| In progress
+| Complete
 
 | 2
 | Type system — classes, records, ARC, exceptions
-| Planned
+| Complete
 
 | 3
 | Generics + zero-GUID interfaces
-| Planned
+| In progress
 
 | 4
 | OPDF debug info emission
 | Planned
 
 | 5
-| Self-hosting + LLVM + Windows
+| Self-hosting + LLVM + Windows + macOS ARM64
 | Planned
 
 | 6
