@@ -583,6 +583,9 @@ These are not open for reconsideration:
 | Hello World compiles to a native binary via PasBuild
 | Phase 1
 
+| A non-trivial Linked-List program using TObject descendants.
+| Phase 2
+
 | A real library (generic list, hash map) compiles and passes tests
 | Phase 3
 
@@ -715,50 +718,57 @@ are required for correct generic type bounds).
 | Item | Status | Notes
 
 | Interface declaration parsing
-| Pending
+| Done
 | `type IFoo = interface ... end;` — methods only, no fields;
   `interface(IParent)` for inheritance; `['{GUID}']` attribute silently ignored
-  (zero-GUID design)
+  (zero-GUID design); `TInterfaceTypeDef` AST node; `tkIntf` token reused from
+  unit interface section (context disambiguates)
 
 | TYPEID generation
-| Pending
-| `TYPEID = CRC32(UnitName + '.' + InterfaceName)` emitted as a data constant;
-  used for interface identity checks at runtime
+| Done
+| `data $typeinfo_IFoo = { l 0 }` — address of block IS the identity token;
+  emitted by `EmitInterfaceDefs`; used for future `is`/`as` interface checks
 
 | Interface type in symbol table
-| Pending
-| `TInterfaceTypeDesc` alongside `TRecordTypeDesc`; method signature storage;
-  `implements` relationship on class types
+| Done
+| `TInterfaceTypeDesc` (tyInterface) alongside `TRecordTypeDesc`; methods stored
+  in declaration order (unsorted list for correct itab indexing);
+  `FImplements` non-owning list on `TRecordTypeDesc` tracks class→interface pairs;
+  `TObject` pre-registered as built-in root class
 
 | Semantic: class implements interface
-| Pending
-| Verify all interface methods are present on the class with matching signatures;
-  record `implements` list on `TRecordTypeDesc` for codegen
+| Done
+| Parser parses `class(TBase, IFoo, IBar)` — first name = parent class, rest =
+  interfaces; semantic pass verifies all interface methods exist on the class;
+  `CheckTypesMatch` extended to allow class→interface assignment when class
+  implements that interface
 
 | Interface vtable (itab) generation
-| Pending
-| Per `(class, interface)` pair: `data $itab_TFoo_IBar = { l $TFoo_Method, ... }`;
-  itab pointer stored as a hidden field alongside the object pointer in interface
-  variable slots
+| Done
+| `data $itab_TFoo_IFoo = { l $TFoo_DoIt, ... }` emitted by `EmitInterfaceDefs`;
+  method order matches interface declaration order; one itab per (class, interface)
+  pair
 
 | Interface variable assignment
-| Pending
-| Assigning a class instance to an interface variable loads the matching itab;
-  ARC addref/release on interface variables (same RC string rules)
+| Done
+| Interface var = fat pointer: `%_var_F_obj` + `%_var_F_itab` (two alloc8 slots);
+  assignment stores obj pointer and itab address; ARC on interface refs deferred
+  (Phase 3 follow-up)
 
 | Interface method dispatch
-| Pending
-| Load itab pointer from interface var slot; index into itab by method slot;
-  indirect `call %fptr(l obj, ...)` — similar to virtual method dispatch
+| Done
+| Load obj from `%_var_F_obj`, load itab from `%_var_F_itab`; index by method
+  slot (slot × 8); indirect `call %fptr(l obj)` — same pattern as virtual dispatch
 
 | `as` cast to interface
 | Pending
-| Checked downcast: verify class implements interface via TYPEID lookup;
+| Checked downcast: verify class implements interface via typeinfo pointer walk;
   raise `EInvalidCast` on failure
 
 | `is` test against interface
 | Pending
-| Runtime check: walk class `implements` list for matching TYPEID; return boolean
+| Runtime check: walk class `implements` list for matching typeinfo pointer;
+  return boolean
 
 | RTL: `IInterface` base
 | Pending

@@ -84,9 +84,10 @@ type
 
   TAssignment = class(TASTStmt)
   public
-    Name:       string;
-    Expr:       TASTExpr;  { owned }
-    IsVarParam: Boolean;   { set by uSemantic — True if target is a var parameter }
+    Name:            string;
+    Expr:            TASTExpr;   { owned }
+    IsVarParam:      Boolean;    { set by uSemantic — True if target is a var parameter }
+    ResolvedLhsType: TTypeDesc;  { set by uSemantic — type of the target variable }
     destructor Destroy; override;
   end;
 
@@ -256,9 +257,18 @@ type
 
   TClassTypeDef = class(TASTTypeDef)
   public
+    ParentName:      string;
+    ImplementsNames: TStringList;  { owned — names of implemented interfaces }
+    Fields:          TObjectList;  { owned TFieldDecl }
+    Methods:         TObjectList;  { owned TMethodDecl }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+  TInterfaceTypeDef = class(TASTTypeDef)
+  public
     ParentName: string;
-    Fields:     TObjectList;  { owned TFieldDecl }
-    Methods:    TObjectList;  { owned TMethodDecl }
+    Methods:    TObjectList;  { owned TMethodDecl — forward signatures only }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -560,14 +570,30 @@ end;
 constructor TClassTypeDef.Create;
 begin
   inherited Create;
-  Fields  := TObjectList.Create(True);
-  Methods := TObjectList.Create(True);
+  ImplementsNames := TStringList.Create;
+  Fields          := TObjectList.Create(True);
+  Methods         := TObjectList.Create(True);
 end;
 
 destructor TClassTypeDef.Destroy;
 begin
   Methods.Free;
   Fields.Free;
+  ImplementsNames.Free;
+  inherited Destroy;
+end;
+
+{ TInterfaceTypeDef }
+
+constructor TInterfaceTypeDef.Create;
+begin
+  inherited Create;
+  Methods := TObjectList.Create(True);
+end;
+
+destructor TInterfaceTypeDef.Destroy;
+begin
+  Methods.Free;
   inherited Destroy;
 end;
 

@@ -21,6 +21,7 @@ type
     tyString,     { ARC-managed UTF-8 string }
     tyRecord,     { Stack-allocated aggregate (Phase 2) }
     tyClass,      { Heap-allocated, single-inheritance (Phase 2) }
+    tyInterface,  { Zero-GUID interface reference (Phase 3) }
     tyVoid,       { No value — used as procedure return type }
     tyNil         { Pseudo-type for the nil literal; compatible with tyClass }
   );
@@ -55,13 +56,16 @@ type
     ImplName: string;   { fully-qualified QBE label, e.g. $TDog_Speak }
   end;
 
+  TInterfaceTypeDesc = class;  { forward }
+
   { Extended type descriptor for record types. }
   TRecordTypeDesc = class(TTypeDesc)
   private
-    FFields:  TObjectList;  { owned TFieldInfo }
-    FKeys:    TStringList;  { sorted, case-insensitive; Objects[] = TFieldInfo (not owned) }
-    FParent:  TRecordTypeDesc;  { not owned; nil for root classes }
-    FVTable:  TObjectList;  { owned TVTableEntry; nil if no virtual methods }
+    FFields:     TObjectList;  { owned TFieldInfo }
+    FKeys:       TStringList;  { sorted, case-insensitive; Objects[] = TFieldInfo (not owned) }
+    FParent:     TRecordTypeDesc;   { not owned; nil for root classes }
+    FVTable:     TObjectList;  { owned TVTableEntry; nil if no virtual methods }
+    FImplements: TObjectList;  { not owned — TInterfaceTypeDesc references }
   public
     constructor Create(const AName: string; AKind: TTypeKind = tyRecord);
     destructor Destroy; override;
@@ -75,15 +79,33 @@ type
     function  VTableCount: Integer;
     function  VTableEntryAt(ASlot: Integer): TVTableEntry;
     function  FindVTableSlot(const AMethodName: string): Integer;
-    { Assigns a new slot for a virtual method; returns the slot index. }
     function  AddVTableSlot(const AMethodName, AImplName: string): Integer;
-    { Overrides an existing slot (for 'override' declarations). }
     procedure OverrideVTableSlot(ASlot: Integer; const AImplName: string);
-    { Copies all vtable entries from the parent (called during class analysis). }
     procedure CopyVTableFrom(AParent: TRecordTypeDesc);
+
+    { Interface implements tracking }
+    procedure AddImplements(AIntf: TInterfaceTypeDesc);
+    function  ImplementsCount: Integer;
+    function  ImplementsIntfAt(AIndex: Integer): TInterfaceTypeDesc;
 
     property  Fields: TObjectList read FFields;
     property  Parent: TRecordTypeDesc read FParent write FParent;
+  end;
+
+  { Type descriptor for zero-GUID interface types (Phase 3). }
+  TInterfaceTypeDesc = class(TTypeDesc)
+  private
+    FMethods: TStringList;  { method names, case-insensitive sorted }
+    FParent:  TInterfaceTypeDesc;  { not owned; nil if no parent }
+  public
+    constructor Create(const AName: string);
+    destructor Destroy; override;
+    procedure AddMethod(const AName: string);
+    function  HasMethod(const AName: string): Boolean;
+    function  MethodCount: Integer;
+    function  MethodName(AIndex: Integer): string;
+    function  MethodIndex(const AName: string): Integer;
+    property  Parent: TInterfaceTypeDesc read FParent write FParent;
   end;
 
   { ------------------------------------------------------------------ }
@@ -182,6 +204,9 @@ type
     { Creates a new class type descriptor (tyClass, heap-allocated). }
     function NewClassType(const AName: string): TRecordTypeDesc;
 
+    { Creates a new interface type descriptor (tyInterface). }
+    function NewInterfaceType(const AName: string): TInterfaceTypeDesc;
+
     { Convenience type accessors }
     property TypeInteger: TTypeDesc read FTypeInteger;
     property TypeInt64:   TTypeDesc read FTypeInt64;
@@ -252,18 +277,20 @@ end;
 constructor TRecordTypeDesc.Create(const AName: string; AKind: TTypeKind = tyRecord);
 begin
   inherited Create;
-  Kind    := AKind;
-  Name    := AName;
-  FFields := TObjectList.Create(True);
-  FKeys   := TStringList.Create;
+  Kind        := AKind;
+  Name        := AName;
+  FFields     := TObjectList.Create(True);
+  FKeys       := TStringList.Create;
   FKeys.Sorted        := True;
   FKeys.CaseSensitive := False;
   FKeys.Duplicates    := dupIgnore;
-  FVTable := nil;  { allocated on first use }
+  FVTable     := nil;  { allocated on first use }
+  FImplements := TObjectList.Create(False);  { not owned }
 end;
 
 destructor TRecordTypeDesc.Destroy;
 begin
+  FImplements.Free;
   FKeys.Free;
   FFields.Free;
   FVTable.Free;
@@ -381,6 +408,21 @@ begin
     TVTableEntry(FVTable[ASlot]).ImplName := AImplName;
 end;
 
+procedure TRecordTypeDesc.AddImplements(AIntf: TInterfaceTypeDesc);
+begin
+  FImplements.Add(AIntf);
+end;
+
+function TRecordTypeDesc.ImplementsCount: Integer;
+begin
+  Result := FImplements.Count;
+end;
+
+function TRecordTypeDesc.ImplementsIntfAt(AIndex: Integer): TInterfaceTypeDesc;
+begin
+  Result := TInterfaceTypeDesc(FImplements[AIndex]);
+end;
+
 procedure TRecordTypeDesc.CopyVTableFrom(AParent: TRecordTypeDesc);
 var
   I: Integer;
@@ -398,6 +440,51 @@ begin
     Dst.ImplName   := Src.ImplName;
     FVTable.Add(Dst);
   end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ TInterfaceTypeDesc                                                  }
+{ ------------------------------------------------------------------ }
+
+constructor TInterfaceTypeDesc.Create(const AName: string);
+begin
+  inherited Create;
+  Kind     := tyInterface;
+  Name     := AName;
+  FMethods := TStringList.Create;
+  FMethods.CaseSensitive := False;  { unsorted — preserves declaration order }
+  FParent  := nil;
+end;
+
+destructor TInterfaceTypeDesc.Destroy;
+begin
+  FMethods.Free;
+  inherited Destroy;
+end;
+
+procedure TInterfaceTypeDesc.AddMethod(const AName: string);
+begin
+  FMethods.Add(AName);
+end;
+
+function TInterfaceTypeDesc.HasMethod(const AName: string): Boolean;
+begin
+  Result := FMethods.IndexOf(AName) >= 0;
+end;
+
+function TInterfaceTypeDesc.MethodCount: Integer;
+begin
+  Result := FMethods.Count;
+end;
+
+function TInterfaceTypeDesc.MethodName(AIndex: Integer): string;
+begin
+  Result := FMethods[AIndex];
+end;
+
+function TInterfaceTypeDesc.MethodIndex(const AName: string): Integer;
+begin
+  Result := FMethods.IndexOf(AName);
 end;
 
 { ------------------------------------------------------------------ }
@@ -522,6 +609,12 @@ begin
   FAllTypes.Add(Result);
 end;
 
+function TSymbolTable.NewInterfaceType(const AName: string): TInterfaceTypeDesc;
+begin
+  Result := TInterfaceTypeDesc.Create(AName);
+  FAllTypes.Add(Result);
+end;
+
 procedure TSymbolTable.RegisterBuiltins;
 var
   Sym: TSymbol;
@@ -543,6 +636,9 @@ begin
   Define(TSymbol.Create('Byte',    skType, FTypeByte));
   Define(TSymbol.Create('Boolean', skType, FTypeBoolean));
   Define(TSymbol.Create('string',  skType, FTypeString));
+
+  { TObject — root of the class hierarchy; no fields, no parent }
+  Define(TSymbol.Create('TObject', skType, NewClassType('TObject')));
 
   { Built-in I/O procedures }
   Sym := TSymbol.Create('Write',   skProcedure, nil);

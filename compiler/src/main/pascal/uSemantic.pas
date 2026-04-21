@@ -111,15 +111,26 @@ end;
 
 procedure TSemanticAnalyser.CheckTypesMatch(AExpected, AActual: TTypeDesc;
   const AContext: string; ALine, ACol: Integer);
+var
+  RT: TRecordTypeDesc;
+  I:  Integer;
 begin
   if AExpected = AActual then
     Exit;
-  { nil is compatible with any class type }
-  if (AActual.Kind = tyNil) and (AExpected.Kind = tyClass) then
+  { nil is compatible with any class or interface type }
+  if (AActual.Kind = tyNil) and (AExpected.Kind in [tyClass, tyInterface]) then
     Exit;
   { subtype assignment: TDerived → TBase is allowed }
   if IsSubtypeOf(AActual, AExpected) then
     Exit;
+  { class → interface: allowed when the class implements that interface }
+  if (AExpected.Kind = tyInterface) and (AActual.Kind = tyClass) then
+  begin
+    RT := TRecordTypeDesc(AActual);
+    for I := 0 to RT.ImplementsCount - 1 do
+      if RT.ImplementsIntfAt(I) = AExpected then
+        Exit;
+  end;
   SemanticError(
     Format('Type mismatch in %s: expected ''%s'' but got ''%s''',
       [AContext, AExpected.Name, AActual.Name]),
@@ -328,6 +339,7 @@ end;
 procedure TSemanticAnalyser.AnalyseTypeDecls(ABlock: TBlock);
 var
   I, J, K:    Integer;
+  L:          Integer;
   TD:         TTypeDecl;
   FieldList:  TObjectList;
   MethodList: TObjectList;
@@ -343,6 +355,10 @@ var
   Sym:        TSymbol;
   Key:        string;
   FldInfo:    TFieldInfo;
+  IntfDesc:   TInterfaceTypeDesc;
+  IntfName:   string;
+  IntfSym:    TSymbol;
+  ITD:        TInterfaceTypeDef;
 begin
   { Pass 1 — register all type symbols with empty descriptors.
     This allows self-referential field types to resolve in pass 2. }
@@ -353,9 +369,20 @@ begin
       RT := FTable.NewRecordType(TD.Name)
     else if TD.Def is TClassTypeDef then
       RT := FTable.NewClassType(TD.Name)
+    else if TD.Def is TInterfaceTypeDef then
+    begin
+      IntfDesc := FTable.NewInterfaceType(TD.Name);
+      Sym      := TSymbol.Create(TD.Name, skType, IntfDesc);
+      if not FTable.Define(Sym) then
+      begin
+        Sym.Free;
+        SemanticError(Format('Duplicate type name ''%s''', [TD.Name]), TD.Line, TD.Col);
+      end;
+      Continue;
+    end
     else
     begin
-      SemanticError('Only record and class type definitions are supported',
+      SemanticError('Only record, class, or interface type definitions are supported',
         TD.Line, TD.Col);
       Continue;
     end;
@@ -371,6 +398,30 @@ begin
   for I := 0 to ABlock.TypeDecls.Count - 1 do
   begin
     TD := TTypeDecl(ABlock.TypeDecls[I]);
+
+    { Interface types: register methods and resolve optional parent }
+    if TD.Def is TInterfaceTypeDef then
+    begin
+      ITD      := TInterfaceTypeDef(TD.Def);
+      IntfSym  := FTable.Lookup(TD.Name);
+      IntfDesc := TInterfaceTypeDesc(IntfSym.TypeDesc);
+      if ITD.ParentName <> '' then
+      begin
+        Sym := FTable.Lookup(ITD.ParentName);
+        if (Sym = nil) or not (Sym.TypeDesc is TInterfaceTypeDesc) then
+          SemanticError(
+            Format('Unknown parent interface ''%s'' for ''%s''',
+              [ITD.ParentName, TD.Name]),
+            TD.Line, TD.Col);
+        IntfDesc.Parent := TInterfaceTypeDesc(Sym.TypeDesc);
+        { Inherit parent methods }
+        for J := 0 to IntfDesc.Parent.MethodCount - 1 do
+          IntfDesc.AddMethod(IntfDesc.Parent.MethodName(J));
+      end;
+      for J := 0 to ITD.Methods.Count - 1 do
+        IntfDesc.AddMethod(TMethodDecl(ITD.Methods[J]).Name);
+      Continue;
+    end;
 
     Sym := FTable.Lookup(TD.Name);
     RT  := TRecordTypeDesc(Sym.TypeDesc);
@@ -477,6 +528,42 @@ begin
                 [MDecl.ReturnTypeName, MDecl.Name]),
               MDecl.Line, MDecl.Col);
           MDecl.ResolvedReturnType := ParType;
+        end;
+      end;
+
+    { Verify class implements all methods of each declared interface }
+    if TD.Def is TClassTypeDef then
+      for L := 0 to TClassTypeDef(TD.Def).ImplementsNames.Count - 1 do
+      begin
+        IntfName := TClassTypeDef(TD.Def).ImplementsNames[L];
+        IntfSym  := FTable.Lookup(IntfName);
+        if (IntfSym = nil) or not (IntfSym.TypeDesc is TInterfaceTypeDesc) then
+          SemanticError(
+            Format('Unknown interface ''%s'' in implements list of ''%s''',
+              [IntfName, TD.Name]),
+            TD.Line, TD.Col);
+        IntfDesc := TInterfaceTypeDesc(IntfSym.TypeDesc);
+        RT.AddImplements(IntfDesc);
+        for J := 0 to IntfDesc.MethodCount - 1 do
+        begin
+          Key := IntfDesc.MethodName(J);
+          if RT.FindField(Key) = nil then
+          begin
+            { Check method exists in class — search method list }
+            MDecl := nil;
+            if TD.Def is TClassTypeDef then
+              for K := 0 to TClassTypeDef(TD.Def).Methods.Count - 1 do
+                if SameText(TMethodDecl(TClassTypeDef(TD.Def).Methods[K]).Name, Key) then
+                begin
+                  MDecl := TMethodDecl(TClassTypeDef(TD.Def).Methods[K]);
+                  Break;
+                end;
+            if MDecl = nil then
+              SemanticError(
+                Format('Class ''%s'' does not implement method ''%s'' from interface ''%s''',
+                  [TD.Name, Key, IntfName]),
+                TD.Line, TD.Col);
+          end;
         end;
       end;
   end;
@@ -875,10 +962,24 @@ begin
     SemanticError(
       Format('''%s'' is not a variable', [ACall.ObjectName]),
       ACall.Line, ACall.Col);
-  if ObjSym.TypeDesc.Kind <> tyClass then
+  if not (ObjSym.TypeDesc.Kind in [tyClass, tyInterface]) then
     SemanticError(
-      Format('''%s'' is not a class variable', [ACall.ObjectName]),
+      Format('''%s'' is not a class or interface variable', [ACall.ObjectName]),
       ACall.Line, ACall.Col);
+
+  { Interface method call: look up method in interface type descriptor }
+  if ObjSym.TypeDesc.Kind = tyInterface then
+  begin
+    if not TInterfaceTypeDesc(ObjSym.TypeDesc).HasMethod(ACall.Name) then
+      SemanticError(
+        Format('Interface ''%s'' has no method ''%s''',
+          [ObjSym.TypeDesc.Name, ACall.Name]),
+        ACall.Line, ACall.Col);
+    { Args for interface methods not checked in Phase 3 (no param info stored) }
+    ACall.ResolvedClassType := ObjSym.TypeDesc;
+    ACall.ResolvedMethod    := nil;  { nil = interface dispatch, not class dispatch }
+    Exit;
+  end;
 
   RT    := TRecordTypeDesc(ObjSym.TypeDesc);
   MDecl := FindMethodDecl(RT.Name, ACall.Name);
@@ -930,7 +1031,8 @@ begin
       Format('''%s'' is not a variable', [AAssign.Name]),
       AAssign.Line, AAssign.Col);
 
-  AAssign.IsVarParam := (VarSym.Kind = skVarParameter);
+  AAssign.IsVarParam      := (VarSym.Kind = skVarParameter);
+  AAssign.ResolvedLhsType := VarSym.TypeDesc;
 
   ExprType := AnalyseExpr(AAssign.Expr);
   CheckTypesMatch(VarSym.TypeDesc, ExprType, 'assignment', AAssign.Line, AAssign.Col);

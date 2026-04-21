@@ -33,6 +33,7 @@ type
     procedure EmitTypeInfoDefs(AProg: TProgram);
     procedure EmitVTableDefs(AProg: TProgram);
     procedure EmitMethodDefs(AProg: TProgram);
+    procedure EmitInterfaceDefs(AProg: TProgram);
     procedure EmitMethodDef(const ATypeName: string; AMethod: TMethodDecl);
     procedure EmitStandaloneDefs(AProg: TProgram);
     procedure EmitStandaloneDef(ADecl: TMethodDecl);
@@ -210,6 +211,15 @@ begin
             { Class var holds a heap pointer — allocate one pointer slot, nil-init }
             EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
             EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
+          end;
+
+        tyInterface:
+          begin
+            { Interface var = fat pointer: obj slot + itab slot, both nil-init }
+            EmitLine(Format('  %%_var_%s_obj  =l alloc8 1', [VarName]));
+            EmitLine(Format('  storel 0, %%_var_%s_obj',    [VarName]));
+            EmitLine(Format('  %%_var_%s_itab =l alloc8 1', [VarName]));
+            EmitLine(Format('  storel 0, %%_var_%s_itab',   [VarName]));
           end;
 
       else
@@ -539,10 +549,27 @@ end;
 procedure TCodeGenQBE.EmitAssignment(AAssign: TAssignment);
 var
   ValTemp, OldTemp, QType, StoreInstr, PtrTemp: string;
+  IntfDesc: TInterfaceTypeDesc;
+  ClassRT:  TRecordTypeDesc;
+  ItabName: string;
 begin
   if AAssign.Expr.ResolvedType = nil then
     raise ECodeGenError.CreateFmt(
       'Expression in assignment to ''%s'' has no resolved type', [AAssign.Name]);
+
+  { Interface assignment: store obj pointer + itab pointer }
+  if (AAssign.ResolvedLhsType <> nil) and
+     (AAssign.ResolvedLhsType.Kind = tyInterface) and
+     (AAssign.Expr.ResolvedType.Kind = tyClass) then
+  begin
+    IntfDesc := TInterfaceTypeDesc(AAssign.ResolvedLhsType);
+    ClassRT  := TRecordTypeDesc(AAssign.Expr.ResolvedType);
+    ItabName := '$itab_' + ClassRT.Name + '_' + IntfDesc.Name;
+    ValTemp  := EmitExpr(AAssign.Expr);
+    EmitLine(Format('  storel %s, %%_var_%s_obj',  [ValTemp, AAssign.Name]));
+    EmitLine(Format('  storel %s, %%_var_%s_itab', [ItabName, AAssign.Name]));
+    Exit;
+  end;
 
   if AAssign.IsVarParam then
   begin
@@ -638,7 +665,31 @@ var
   VTblTemp: string;
   FPtrTemp: string;
   SlotOff:  Integer;
+  IntfDesc: TInterfaceTypeDesc;
 begin
+  { Interface method dispatch: load obj + itab, index by method slot }
+  if (ACall.ResolvedClassType <> nil) and
+     (ACall.ResolvedClassType.Kind = tyInterface) then
+  begin
+    IntfDesc := TInterfaceTypeDesc(ACall.ResolvedClassType);
+    SelfTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %%_var_%s_obj', [SelfTemp, ACall.ObjectName]));
+    VTblTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %%_var_%s_itab', [VTblTemp, ACall.ObjectName]));
+    SlotOff  := IntfDesc.MethodIndex(ACall.Name) * 8;
+    FPtrTemp := AllocTemp;
+    if SlotOff = 0 then
+      EmitLine(Format('  %s =l loadl %s', [FPtrTemp, VTblTemp]))
+    else
+    begin
+      ArgTemp := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
+      EmitLine(Format('  %s =l loadl %s',   [FPtrTemp, ArgTemp]));
+    end;
+    EmitLine(Format('  call %%%s(l %s)', [FPtrTemp, SelfTemp]));
+    Exit;
+  end;
+
   { Built-in Free: load Self pointer and call C free() }
   if (ACall.ResolvedMethod = nil) and SameText(ACall.Name, 'Free') then
   begin
@@ -845,6 +896,55 @@ begin
     end;
     Line := Line + ' }';
     EmitLine(Line);
+  end;
+  EmitLine('');
+end;
+
+procedure TCodeGenQBE.EmitInterfaceDefs(AProg: TProgram);
+{ Emit typeinfo blocks for interfaces and itab blocks for class-interface pairs.
+  Interface typeinfo: data $typeinfo_IFoo = { l 0 }  (address IS the identity)
+  Itab: data $itab_TFoo_IFoo = { l $TFoo_DoIt, l $TFoo_GetVal }
+  Methods appear in declaration order (itab slot N = interface method N). }
+var
+  I, J, K:  Integer;
+  TD:       TTypeDecl;
+  TDesc:    TTypeDesc;
+  IntfDesc: TInterfaceTypeDesc;
+  ClassRT:  TRecordTypeDesc;
+  ItabLine: string;
+  MethName: string;
+begin
+  { Typeinfo blocks for every interface }
+  for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(AProg.Block.TypeDecls[I]);
+    if not (TD.Def is TInterfaceTypeDef) then Continue;
+    EmitLine('data $typeinfo_' + TD.Name + ' = { l 0 }');
+  end;
+
+  { Itab blocks for each (class, interface) pair }
+  for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(AProg.Block.TypeDecls[I]);
+    if not (TD.Def is TClassTypeDef) then Continue;
+    TDesc := AProg.SymbolTable.FindType(TD.Name);
+    if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
+    ClassRT := TRecordTypeDesc(TDesc);
+    for J := 0 to ClassRT.ImplementsCount - 1 do
+    begin
+      IntfDesc := ClassRT.ImplementsIntfAt(J);
+      ItabLine := 'data $itab_' + TD.Name + '_' + IntfDesc.Name + ' = {';
+      for K := 0 to IntfDesc.MethodCount - 1 do
+      begin
+        MethName := IntfDesc.MethodName(K);
+        if K = 0 then
+          ItabLine := ItabLine + ' l $' + TD.Name + '_' + MethName
+        else
+          ItabLine := ItabLine + ', l $' + TD.Name + '_' + MethName;
+      end;
+      ItabLine := ItabLine + ' }';
+      EmitLine(ItabLine);
+    end;
   end;
   EmitLine('');
 end;
@@ -1409,6 +1509,7 @@ begin
     EmitLine('# Source: ' + AProg.Name);
     EmitLine('');
     EmitDataSection;
+    EmitInterfaceDefs(AProg);
     EmitTypeInfoDefs(AProg);
     EmitVTableDefs(AProg);
     FOutput.AddStrings(Body);

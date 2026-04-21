@@ -54,6 +54,7 @@ type
     procedure ParseTypeDecl(ABlock: TBlock);
     function  ParseRecordDef: TRecordTypeDef;
     function  ParseClassDef: TClassTypeDef;
+    function  ParseInterfaceDef: TInterfaceTypeDef;
     procedure ParseFieldDecl(AFields: TObjectList);
     function  ParseMethodDecl(IsFunction: Boolean): TMethodDecl;
     procedure ParseParamList(AParams: TObjectList);
@@ -228,9 +229,11 @@ begin
       TD.Def := ParseRecordDef
     else if Check(tkClass) then
       TD.Def := ParseClassDef
+    else if Check(tkIntf) then
+      TD.Def := ParseInterfaceDef
     else
       raise EParseError.CreateFmt(
-        'Expected ''record'' or ''class'' at line %d col %d',
+        'Expected ''record'', ''class'', or ''interface'' at line %d col %d',
         [FCurrent.Line, FCurrent.Col]);
     Expect(tkSemicolon);
     ABlock.TypeDecls.Add(TD);
@@ -271,10 +274,51 @@ begin
           [FCurrent.Line, FCurrent.Col]);
       Result.ParentName := FCurrent.Value;
       Advance;
+      { Additional names after a comma are implemented interface names }
+      while Check(tkComma) do
+      begin
+        Advance;
+        if not Check(tkIdent) then
+          raise EParseError.CreateFmt('Expected interface name at line %d col %d',
+            [FCurrent.Line, FCurrent.Col]);
+        Result.ImplementsNames.Add(FCurrent.Value);
+        Advance;
+      end;
       Expect(tkRParen);
     end;
     while Check(tkIdent) do
       ParseFieldDecl(Result.Fields);
+    while Check(tkProcedure) or Check(tkFunction) do
+    begin
+      if Check(tkFunction) then
+        Result.Methods.Add(ParseMethodDecl(True))
+      else
+        Result.Methods.Add(ParseMethodDecl(False));
+    end;
+    Expect(tkEnd);
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+function TParser.ParseInterfaceDef: TInterfaceTypeDef;
+begin
+  Result := TInterfaceTypeDef.Create;
+  try
+    Result.Line := FCurrent.Line;
+    Result.Col  := FCurrent.Col;
+    Expect(tkIntf);
+    if Check(tkLParen) then
+    begin
+      Advance;
+      if not Check(tkIdent) then
+        raise EParseError.CreateFmt('Expected parent interface name at line %d col %d',
+          [FCurrent.Line, FCurrent.Col]);
+      Result.ParentName := FCurrent.Value;
+      Advance;
+      Expect(tkRParen);
+    end;
     while Check(tkProcedure) or Check(tkFunction) do
     begin
       if Check(tkFunction) then
