@@ -29,6 +29,8 @@ type
     FTempCount:    Integer;
     FLabelCount:   Integer;
     FCurrentBlock: TBlock;       { block currently being emitted; set by EmitBlock }
+    FBreakLabels:  TStringList;  { stack of active loop-end labels; top = innermost }
+    FExitLabel:    string;       { label to jmp to for 'exit'; '' = main program }
 
     function  AllocTemp: string;
     function  AllocLabel(const APrefix: string): string;
@@ -67,6 +69,10 @@ type
     function  EmitExpr(AExpr: TASTExpr): string;
     function  EmitIsExpr(AExpr: TIsExpr): string;
     function  EmitAsExpr(AExpr: TAsExpr): string;
+    { Returns a QBE temp holding a pointer to the storage of a record or class
+      instance referenced by AExpr.  Used by chained field access to traverse
+      base nodes without loading record aggregates as scalars. }
+    function  EmitInstancePtr(AExpr: TASTExpr): string;
     function  FieldPtr(const ARecordVar: string; AOffset: Integer): string;
     function  QbeTypeOf(AType: TTypeDesc): string;
     function  QbeEscapeString(const AStr: string): string;
@@ -85,13 +91,15 @@ implementation
 constructor TCodeGenQBE.Create;
 begin
   inherited Create;
-  FOutput    := TStringList.Create;
-  FStrLits   := TStringList.Create;
-  FTempCount := 0;
+  FOutput       := TStringList.Create;
+  FStrLits      := TStringList.Create;
+  FBreakLabels  := TStringList.Create;
+  FTempCount    := 0;
 end;
 
 destructor TCodeGenQBE.Destroy;
 begin
+  FBreakLabels.Free;
   FOutput.Free;
   FStrLits.Free;
   inherited Destroy;
@@ -227,6 +235,12 @@ begin
               EmitLine(Format('  %%_var_%s =l alloc8 %d', [VarName, RecSize]))
             else
               EmitLine(Format('  %%_var_%s =l alloc4 %d', [VarName, RecSize]));
+            { Zero-initialise record storage: Pascal records default to 0 and
+              QBE's SSA checker requires every loaded slot to have at least
+              one prior store. }
+            if RecSize > 0 then
+              EmitLine(Format('  call $memset(l %%_var_%s, w 0, l %d)',
+                [VarName, RecSize]));
           end;
 
         tyClass:
@@ -290,6 +304,12 @@ begin
   EmitVarAllocs(ABlock);
   for I := 0 to ABlock.Stmts.Count - 1 do
     EmitStmt(TASTStmt(ABlock.Stmts[I]));
+  { Fall-through to exit label so 'exit' and normal flow share cleanup. }
+  if FExitLabel <> '' then
+  begin
+    EmitLine(Format('  jmp @%s', [FExitLabel]));
+    EmitLine('@' + FExitLabel);
+  end;
   EmitStringCleanup(ABlock);
 end;
 
@@ -318,6 +338,8 @@ begin
 end;
 
 procedure TCodeGenQBE.EmitStmt(AStmt: TASTStmt);
+var
+  DeadLbl: string;
 begin
   if AStmt is TTryFinallyStmt then
     EmitTryFinallyStmt(TTryFinallyStmt(AStmt))
@@ -343,6 +365,25 @@ begin
     EmitMethodCall(TMethodCallStmt(AStmt))
   else if AStmt is TProcCall then
     EmitProcCall(TProcCall(AStmt))
+  else if AStmt is TExitStmt then
+  begin
+    if FExitLabel <> '' then
+      EmitLine(Format('  jmp @%s', [FExitLabel]))
+    else
+      EmitLine('  ret 0');
+    { QBE basic blocks must follow a terminator with a new labelled block. }
+    DeadLbl := AllocLabel('after_exit');
+    EmitLine('@' + DeadLbl);
+  end
+  else if AStmt is TBreakStmt then
+  begin
+    if FBreakLabels.Count = 0 then
+      raise ECodeGenError.Create('break outside loop');
+    EmitLine(Format('  jmp @%s',
+      [FBreakLabels[FBreakLabels.Count - 1]]));
+    DeadLbl := AllocLabel('after_break');
+    EmitLine('@' + DeadLbl);
+  end
   else
     raise ECodeGenError.Create('Unknown statement node type');
 end;
@@ -526,7 +567,12 @@ begin
 
   { Body block }
   EmitLine('@' + LblBody);
-  EmitStmt(AStmt.Body);
+  FBreakLabels.Add(LblEnd);
+  try
+    EmitStmt(AStmt.Body);
+  finally
+    FBreakLabels.Delete(FBreakLabels.Count - 1);
+  end;
 
   { Increment or decrement loop variable }
   CurT  := AllocTemp;
@@ -565,7 +611,12 @@ begin
 
   { Loop body block }
   EmitLine('@' + LblBody);
-  EmitStmt(AStmt.Body);
+  FBreakLabels.Add(LblEnd);
+  try
+    EmitStmt(AStmt.Body);
+  finally
+    FBreakLabels.Delete(FBreakLabels.Count - 1);
+  end;
   EmitLine(Format('  jmp @%s', [LblCond]));
 
   { Continuation block }
@@ -669,6 +720,74 @@ begin
                    else StoreInstr := 'storel';
     EmitLine(Format('  %s %s, %%_var_%s', [StoreInstr, ValTemp, AAssign.Name]));
   end;
+end;
+
+function TCodeGenQBE.EmitInstancePtr(AExpr: TASTExpr): string;
+var
+  Id:     TIdentExpr;
+  Fld:    TFieldAccessExpr;
+  Base:   string;
+  Ptr:    string;
+  Loaded: string;
+begin
+  if AExpr is TIdentExpr then
+  begin
+    Id := TIdentExpr(AExpr);
+    if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyClass) then
+    begin
+      Loaded := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s', [Loaded, Id.Name]));
+      Result := Loaded;
+    end
+    else
+      Result := Format('%%_var_%s', [Id.Name]);  { inline record }
+    Exit;
+  end;
+
+  if AExpr is TFieldAccessExpr then
+  begin
+    Fld := TFieldAccessExpr(AExpr);
+    if Fld.Base <> nil then
+      Base := EmitInstancePtr(Fld.Base)
+    else
+    begin
+      { Leaf: RecordName-based access, same rules as for TIdentExpr. }
+      if (Fld.ResolvedType = nil) then
+        raise ECodeGenError.Create('Chained base has no resolved type');
+      if Fld.IsClassAccess then
+      begin
+        Loaded := AllocTemp;
+        EmitLine(Format('  %s =l loadl %%_var_%s', [Loaded, Fld.RecordName]));
+        Base := Loaded;
+      end
+      else
+        Base := Format('%%_var_%s', [Fld.RecordName]);
+    end;
+    if Fld.FieldInfo = nil then
+      raise ECodeGenError.Create(
+        'Chained field access ''' + Fld.FieldName + ''' has no resolved field info');
+    if Fld.FieldInfo.Offset > 0 then
+    begin
+      Ptr := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d',
+        [Ptr, Base, Fld.FieldInfo.Offset]));
+    end
+    else
+      Ptr := Base;
+    { If this field is a class pointer, load it to get the heap object pointer.
+      If it is an inline record, the pointer itself points to the storage. }
+    if Fld.FieldInfo.TypeDesc.Kind = tyClass then
+    begin
+      Loaded := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [Loaded, Ptr]));
+      Result := Loaded;
+    end
+    else
+      Result := Ptr;
+    Exit;
+  end;
+
+  raise ECodeGenError.Create('EmitInstancePtr: unsupported base expression');
 end;
 
 function TCodeGenQBE.FieldPtr(const ARecordVar: string; AOffset: Integer): string;
@@ -855,13 +974,14 @@ end;
 procedure TCodeGenQBE.EmitMethodDef(const ATypeName: string;
   AMethod: TMethodDecl);
 var
-  Sig:      string;
-  I:        Integer;
-  Par:      TMethodParam;
-  FuncName: string;
-  IsFunc:   Boolean;
-  RetQType: string;
-  RetTemp:  string;
+  Sig:           string;
+  I:             Integer;
+  Par:           TMethodParam;
+  FuncName:      string;
+  IsFunc:        Boolean;
+  RetQType:      string;
+  RetTemp:       string;
+  SavedExitLbl:  string;
 begin
   FuncName := '$' + ATypeName + '_' + AMethod.Name;
   IsFunc   := AMethod.ResolvedReturnType <> nil;
@@ -904,7 +1024,13 @@ begin
     end;
   end;
 
-  EmitBlock(AMethod.Body);
+  SavedExitLbl := FExitLabel;
+  FExitLabel   := AllocLabel('method_exit');
+  try
+    EmitBlock(AMethod.Body);
+  finally
+    FExitLabel := SavedExitLbl;
+  end;
 
   if IsFunc then
   begin
@@ -1139,15 +1265,16 @@ end;
 
 procedure TCodeGenQBE.EmitFuncDef(ADecl: TMethodDecl; AExported: Boolean);
 var
-  Sig:      string;
-  I:        Integer;
-  Par:      TMethodParam;
-  FuncName: string;
-  IsFunc:   Boolean;
-  RetQType: string;
-  RetTemp:  string;
-  ValTemp:  string;
-  Prefix:   string;
+  Sig:          string;
+  I:            Integer;
+  Par:          TMethodParam;
+  FuncName:     string;
+  IsFunc:       Boolean;
+  RetQType:     string;
+  RetTemp:      string;
+  ValTemp:      string;
+  Prefix:       string;
+  SavedExitLbl: string;
 begin
   FuncName := '$' + QBEMangle(ADecl.Name);
   IsFunc   := ADecl.ResolvedReturnType <> nil;
@@ -1227,7 +1354,13 @@ begin
     end;
   end;
 
-  EmitBlock(ADecl.Body);
+  SavedExitLbl := FExitLabel;
+  FExitLabel   := AllocLabel('func_exit');
+  try
+    EmitBlock(ADecl.Body);
+  finally
+    FExitLabel := SavedExitLbl;
+  end;
 
   { ARC: release string value params on exit }
   for I := 0 to ADecl.Params.Count - 1 do
@@ -1350,8 +1483,8 @@ var
   ArgExpr:  TASTExpr;
   ArgTemp:  string;
   CharPtr:  string;
-  FmtLabel: string;
   IsString: Boolean;
+  I:        Integer;
 begin
   if ACall.Args.Count = 0 then
   begin
@@ -1360,28 +1493,27 @@ begin
     Exit;
   end;
 
-  if ACall.Args.Count > 1 then
-    raise ECodeGenError.CreateFmt(
-      'Write/WriteLn takes at most 1 argument (line %d)', [ACall.Line]);
-
-  ArgExpr  := TASTExpr(ACall.Args[0]);
-  IsString := (ArgExpr.ResolvedType <> nil) and ArgExpr.ResolvedType.IsString;
-  ArgTemp  := EmitExpr(ArgExpr);
-
-  if IsString then
-    FmtLabel := IfThen(ANewline, '$__fmt_s_nl', '$__fmt_s')
-  else
-    FmtLabel := IfThen(ANewline, '$__fmt_d_nl', '$__fmt_d');
-
-  if IsString then
+  { Emit one printf call per argument.  All formatting is plain ("%d" or "%s")
+    with no trailing newline; a final "\n" is emitted after the last arg when
+    ANewline is set (i.e. WriteLn rather than Write). }
+  for I := 0 to ACall.Args.Count - 1 do
   begin
-    { String pointer is the header pointer; char data starts at ptr+12. }
-    CharPtr := AllocTemp;
-    EmitLine(Format('  %s =l add %s, 12', [CharPtr, ArgTemp]));
-    EmitLine(Format('  call $printf(l %s, ..., l %s)', [FmtLabel, CharPtr]));
-  end
-  else
-    EmitLine(Format('  call $printf(l %s, ..., w %s)', [FmtLabel, ArgTemp]));
+    ArgExpr  := TASTExpr(ACall.Args[I]);
+    IsString := (ArgExpr.ResolvedType <> nil) and ArgExpr.ResolvedType.IsString;
+    ArgTemp  := EmitExpr(ArgExpr);
+    if IsString then
+    begin
+      { String pointer is the header pointer; char data starts at ptr+12. }
+      CharPtr := AllocTemp;
+      EmitLine(Format('  %s =l add %s, 12', [CharPtr, ArgTemp]));
+      EmitLine(Format('  call $printf(l $__fmt_s, ..., l %s)', [CharPtr]));
+    end
+    else
+      EmitLine(Format('  call $printf(l $__fmt_d, ..., w %s)', [ArgTemp]));
+  end;
+
+  if ANewline then
+    EmitLine('  call $printf(l $__fmt_nl)');
 end;
 
 function TCodeGenQBE.EmitExpr(AExpr: TASTExpr): string;
@@ -1586,6 +1718,30 @@ begin
   else if AExpr is TFieldAccessExpr then
   begin
     FldAccess := TFieldAccessExpr(AExpr);
+    { Chained access: compute base storage pointer, then load the field from
+      (base_ptr + offset) using the field's QBE type. }
+    if FldAccess.Base <> nil then
+    begin
+      L := EmitInstancePtr(FldAccess.Base);
+      if FldAccess.FieldInfo = nil then
+        raise ECodeGenError.CreateFmt(
+          'Chained field ''%s'' has no resolved field info', [FldAccess.FieldName]);
+      if FldAccess.FieldInfo.Offset > 0 then
+      begin
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d',
+          [Ptr, L, FldAccess.FieldInfo.Offset]));
+      end
+      else
+        Ptr := L;
+      QType := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
+      T     := AllocTemp;
+      if QType = 'w' then LoadInstr := 'loadw'
+                     else LoadInstr := 'loadl';
+      EmitLine(Format('  %s =%s %s %s', [T, QType, LoadInstr, Ptr]));
+      Result := T;
+      Exit;
+    end;
     if FldAccess.IsConstructorCall then
     begin
       { TypeName.Create — allocate zeroed instance on heap (calloc zeros all fields) }
@@ -1743,11 +1899,21 @@ begin
         boGT:  Op := 'csgtw';
         boLE:  Op := 'cslew';
         boGE:  Op := 'csgew';
+        boAnd: Op := 'and';
+        boOr:  Op := 'or';
       else
         Op := 'add';
       end;
       EmitLine(Format('  %s =w %s %s, %s', [T, Op, L, R]));
     end;
+    Result := T;
+  end
+  else if AExpr is TNotExpr then
+  begin
+    { Logical not on Boolean (0/1): xor with 1 flips the low bit. }
+    L := EmitExpr(TNotExpr(AExpr).Expr);
+    T := AllocTemp;
+    EmitLine(Format('  %s =w xor %s, 1', [T, L]));
     Result := T;
   end
   else if AExpr is TDerefExpr then
@@ -1880,9 +2046,11 @@ begin
     try
       EmitMethodDefs(AProg);
       EmitStandaloneDefs(AProg);
+      FExitLabel := 'main_exit';
       EmitMainHeader;
       EmitBlock(AProg.Block);
       EmitMainFooter;
+      FExitLabel := '';
     finally
       FOutput := SavedOutput;
     end;

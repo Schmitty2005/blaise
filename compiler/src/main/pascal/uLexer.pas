@@ -55,6 +55,11 @@ type
     tkOverride,
     tkIs,
     tkAs,
+    tkAnd,
+    tkOr,
+    tkNot,
+    tkExit,
+    tkBreak,
     { Identifier }
     tkIdent,
     { Arithmetic operators }
@@ -147,6 +152,11 @@ begin
   else if AUpper = 'OVERRIDE'       then Result := tkOverride
   else if AUpper = 'IS'             then Result := tkIs
   else if AUpper = 'AS'             then Result := tkAs
+  else if AUpper = 'AND'            then Result := tkAnd
+  else if AUpper = 'OR'             then Result := tkOr
+  else if AUpper = 'NOT'            then Result := tkNot
+  else if AUpper = 'EXIT'           then Result := tkExit
+  else if AUpper = 'BREAK'          then Result := tkBreak
   else
     Result := tkIdent;  { keyword outside Phase 1 grammar treated as ident }
 end;
@@ -217,6 +227,8 @@ begin
         text := FTok.TokenTextUpper;
         if      text = 'VIRTUAL'  then Result.Kind := tkVirtual
         else if text = 'OVERRIDE' then Result.Kind := tkOverride
+        else if text = 'EXIT'     then Result.Kind := tkExit
+        else if text = 'BREAK'    then Result.Kind := tkBreak
         else                           Result.Kind := tkIdent;
         Result.Value := FTok.TokenText;
       end;

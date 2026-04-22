@@ -305,11 +305,13 @@ end;
 
 procedure TParser.ParseTypeDecl(ABlock: TBlock);
 var
-  TD:         TTypeDecl;
-  GD:         TGenericTypeDef;
-  GID:        TGenericInterfaceDef;
-  ParamNames: TStringList;
-  IsGeneric:  Boolean;
+  TD:               TTypeDecl;
+  GD:               TGenericTypeDef;
+  GID:              TGenericInterfaceDef;
+  ParamNames:       TStringList;
+  ParamConstraints: TStringList;
+  IsGeneric:        Boolean;
+  Constraint:       string;
 begin
   TD := TTypeDecl.Create;
   TD.Line := FCurrent.Line;
@@ -325,7 +327,8 @@ begin
     if IsGeneric then
     begin
       Advance;  { consume '<' }
-      ParamNames := TStringList.Create;
+      ParamNames       := TStringList.Create;
+      ParamConstraints := TStringList.Create;
       try
         if not Check(tkIdent) then
           raise EParseError.CreateFmt(
@@ -333,6 +336,20 @@ begin
             [FCurrent.Line, FCurrent.Col]);
         ParamNames.Add(FCurrent.Value);
         Advance;
+        { Optional constraint: T : (class | record | TypeName) }
+        Constraint := '';
+        if Check(tkColon) then
+        begin
+          Advance;
+          if      Check(tkClass)  then begin Constraint := 'class';  Advance; end
+          else if Check(tkRecord) then begin Constraint := 'record'; Advance; end
+          else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
+          else
+            raise EParseError.CreateFmt(
+              'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d',
+              [FCurrent.Line, FCurrent.Col]);
+        end;
+        ParamConstraints.Add(Constraint);
         while Check(tkComma) do
         begin
           Advance;
@@ -342,6 +359,19 @@ begin
               [FCurrent.Line, FCurrent.Col]);
           ParamNames.Add(FCurrent.Value);
           Advance;
+          Constraint := '';
+          if Check(tkColon) then
+          begin
+            Advance;
+            if      Check(tkClass)  then begin Constraint := 'class';  Advance; end
+            else if Check(tkRecord) then begin Constraint := 'record'; Advance; end
+            else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
+            else
+              raise EParseError.CreateFmt(
+                'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d',
+                [FCurrent.Line, FCurrent.Col]);
+          end;
+          ParamConstraints.Add(Constraint);
         end;
         Expect(tkGreaterThan);
         Expect(tkEquals);
@@ -351,6 +381,7 @@ begin
           GID.Line       := TD.Line;
           GID.Col        := TD.Col;
           GID.ParamNames.AddStrings(ParamNames);
+          GID.ParamConstraints.AddStrings(ParamConstraints);
           GID.IntfDef.Free;
           GID.IntfDef := ParseInterfaceDef;
           TD.Def := GID;
@@ -365,11 +396,13 @@ begin
           GD.Line       := TD.Line;
           GD.Col        := TD.Col;
           GD.ParamNames.AddStrings(ParamNames);
+          GD.ParamConstraints.AddStrings(ParamConstraints);
           GD.ClassDef.Free;
           GD.ClassDef := ParseClassDef;
           TD.Def := GD;
         end;
       finally
+        ParamConstraints.Free;
         ParamNames.Free;
       end;
     end
@@ -509,9 +542,12 @@ end;
 
 function TParser.ParseMethodDecl(IsFunction: Boolean): TMethodDecl;
 var
-  TempParams: TStringList;
+  TempParams:       TStringList;
+  TempConstraints:  TStringList;
+  Constraint:       string;
 begin
-  TempParams := nil;
+  TempParams      := nil;
+  TempConstraints := nil;
   Result := TMethodDecl.Create;
   try
     Result.Line := FCurrent.Line;
@@ -529,9 +565,10 @@ begin
       or the generic owner class ('procedure TList<T>.Add').  Parse tentatively;
       DOT after '>' decides which case it is. }
     if Check(tkLessThan) and (PeekKind = tkIdent) and
-       (PeekKind2 in [tkGreaterThan, tkComma]) then
+       (PeekKind2 in [tkGreaterThan, tkComma, tkColon]) then
     begin
-      TempParams := TStringList.Create;
+      TempParams      := TStringList.Create;
+      TempConstraints := TStringList.Create;
       try
         Advance;  { consume '<' }
         if not Check(tkIdent) then
@@ -539,6 +576,19 @@ begin
             [FCurrent.Line, FCurrent.Col]);
         TempParams.Add(FCurrent.Value);
         Advance;
+        Constraint := '';
+        if Check(tkColon) then
+        begin
+          Advance;
+          if      Check(tkClass)  then begin Constraint := 'class';  Advance; end
+          else if Check(tkRecord) then begin Constraint := 'record'; Advance; end
+          else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
+          else
+            raise EParseError.CreateFmt(
+              'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d',
+              [FCurrent.Line, FCurrent.Col]);
+        end;
+        TempConstraints.Add(Constraint);
         while Check(tkComma) do
         begin
           Advance;
@@ -547,22 +597,40 @@ begin
               [FCurrent.Line, FCurrent.Col]);
           TempParams.Add(FCurrent.Value);
           Advance;
+          Constraint := '';
+          if Check(tkColon) then
+          begin
+            Advance;
+            if      Check(tkClass)  then begin Constraint := 'class';  Advance; end
+            else if Check(tkRecord) then begin Constraint := 'record'; Advance; end
+            else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
+            else
+              raise EParseError.CreateFmt(
+                'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d',
+                [FCurrent.Line, FCurrent.Col]);
+          end;
+          TempConstraints.Add(Constraint);
         end;
         Expect(tkGreaterThan);
         if Check(tkDot) then
         begin
-          { Generic owner: procedure TList<T>.Add(...) }
+          { Generic owner: procedure TList<T>.Add(...) — constraints are
+            carried on the type decl, not repeated on method impls. }
           Result.OwnerTypeParams := TempParams;
           TempParams := nil;
+          FreeAndNil(TempConstraints);
         end
         else
         begin
           { Method's own type params: function Identity<T>(...) }
-          Result.TypeParams := TempParams;
-          TempParams := nil;
+          Result.TypeParams           := TempParams;
+          Result.TypeParamConstraints := TempConstraints;
+          TempParams      := nil;
+          TempConstraints := nil;
         end;
       finally
         TempParams.Free;
+        TempConstraints.Free;
       end;
     end;
     { Qualified name: TypeName.MethodName or TypeName<T>.MethodName }
@@ -851,6 +919,24 @@ begin
   if Check(tkRaise) then
   begin
     Result := ParseRaiseStmt;
+    Exit;
+  end;
+
+  if Check(tkExit) then
+  begin
+    Result      := TExitStmt.Create;
+    Result.Line := FCurrent.Line;
+    Result.Col  := FCurrent.Col;
+    Advance;
+    Exit;
+  end;
+
+  if Check(tkBreak) then
+  begin
+    Result      := TBreakStmt.Create;
+    Result.Line := FCurrent.Line;
+    Result.Col  := FCurrent.Col;
+    Advance;
     Exit;
   end;
 
@@ -1328,9 +1414,11 @@ var
   Node:  TBinaryExpr;
 begin
   Result := ParseTerm;
-  while Check(tkPlus) or Check(tkMinus) do
+  while Check(tkPlus) or Check(tkMinus) or Check(tkOr) do
   begin
-    if Check(tkPlus) then Op := boAdd else Op := boSub;
+    if      Check(tkPlus)  then Op := boAdd
+    else if Check(tkMinus) then Op := boSub
+    else                        Op := boOr;
     Advance;
     Right := ParseTerm;
     Node := TBinaryExpr.Create;
@@ -1348,9 +1436,11 @@ var
   Node:  TBinaryExpr;
 begin
   Result := ParseFactor;
-  while Check(tkStar) or Check(tkSlash) or Check(tkDiv) do
+  while Check(tkStar) or Check(tkSlash) or Check(tkDiv) or Check(tkAnd) do
   begin
-    if Check(tkStar) then Op := boMul else Op := boDiv;
+    if      Check(tkStar) then Op := boMul
+    else if Check(tkAnd)  then Op := boAnd
+    else                       Op := boDiv;
     Advance;
     Right := ParseFactor;
     Node := TBinaryExpr.Create;
@@ -1371,6 +1461,7 @@ var
   MCallNode:  TMethodCallExpr;
   FCallNode:  TFuncCallExpr;
   DerefNode:  TDerefExpr;
+  NotNode:    TNotExpr;
   Inner:      TASTExpr;
   Name:       string;
   SecondName: string;
@@ -1379,6 +1470,15 @@ var
   NegNode:    TBinaryExpr;
 begin
   case FCurrent.Kind of
+    tkNot:
+      begin
+        NotNode      := TNotExpr.Create;
+        NotNode.Line := FCurrent.Line;
+        NotNode.Col  := FCurrent.Col;
+        Advance;  { consume 'not' }
+        NotNode.Expr := Self.ParseFactor;  { Self. forces recursive call }
+        Result := NotNode;
+      end;
     tkMinus:
       begin
         { Unary minus: synthesise as 0 - Factor }
@@ -1489,6 +1589,18 @@ begin
             FldNode.RecordName := Name;
             FldNode.FieldName  := SecondName;
             Result := FldNode;
+            { Chained access: A.B.C.D ... — wrap each subsequent '.IDENT' }
+            while Check(tkDot) and (PeekKind = tkIdent) do
+            begin
+              Advance;  { consume '.' }
+              FldNode            := TFieldAccessExpr.Create;
+              FldNode.Line       := FCurrent.Line;
+              FldNode.Col        := FCurrent.Col;
+              FldNode.Base       := Result;
+              FldNode.FieldName  := FCurrent.Value;
+              Advance;  { consume field name }
+              Result := FldNode;
+            end;
           end;
         end
         else if Check(tkLParen) then

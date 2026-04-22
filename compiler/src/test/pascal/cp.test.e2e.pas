@@ -75,6 +75,14 @@ type
     { Valgrind-clean: no leaks and no errors on the milestone program.
       Skipped (not failed) when valgrind is absent. }
     procedure TestRun_Phase2Milestone_Valgrind;
+
+    { Smoke tests for the features added alongside this suite:
+      AND/OR/NOT, Exit/Break, multi-arg WriteLn, chained field access. }
+    procedure TestRun_BooleanOps_AllExpressions;
+    procedure TestRun_MultiArgWriteLn_PrintsAllArgs;
+    procedure TestRun_ForBreak_StopsAtFiveHalt;
+    procedure TestRun_ExitFromFunction_ReturnsImmediately;
+    procedure TestRun_ChainedRecordField_LoadsInner;
   end;
 
 implementation
@@ -562,6 +570,140 @@ begin
     if Found = '' then Found := '(valgrind produced no output — exit nonzero)';
     Fail('valgrind reported errors or leaks:' + LE + Found);
   end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ New-feature smoke tests (AND/OR/NOT, Exit/Break, multi-arg WriteLn,
+  chained field access).  Kept here rather than a dedicated unit so
+  all compile+run coverage lives together. }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcBoolOps =
+    'program P;'                              + LE +
+    'var A, B: Boolean;'                      + LE +
+    'begin'                                   + LE +
+    '  A := True;'                            + LE +
+    '  B := False;'                           + LE +
+    '  if A and not B then WriteLn(''t1'');'  + LE +
+    '  if A or B then WriteLn(''t2'');'       + LE +
+    '  if not (A and B) then WriteLn(''t3'')' + LE +
+    'end.';
+
+  SrcMultiArg =
+    'program P;'                              + LE +
+    'var I, J, K: Integer;'                   + LE +
+    'begin'                                   + LE +
+    '  I := 1; J := 2; K := 3;'               + LE +
+    '  WriteLn(I, J, K)'                      + LE +
+    'end.';
+
+  SrcForBreak =
+    'program P;'                              + LE +
+    'var I, Last: Integer;'                   + LE +
+    'begin'                                   + LE +
+    '  Last := 0;'                            + LE +
+    '  for I := 1 to 100 do'                  + LE +
+    '  begin'                                 + LE +
+    '    Last := I;'                          + LE +
+    '    if I = 5 then break'                 + LE +
+    '  end;'                                  + LE +
+    '  WriteLn(Last)'                         + LE +
+    'end.';
+
+  SrcExitFunc =
+    'program P;'                              + LE +
+    'function FirstPositive(X: Integer): Integer;' + LE +
+    'begin'                                   + LE +
+    '  if X > 0 then'                         + LE +
+    '  begin Result := X; exit end;'          + LE +
+    '  Result := 0 - X'                       + LE +
+    'end;'                                    + LE +
+    'begin'                                   + LE +
+    '  WriteLn(FirstPositive(7));'            + LE +
+    '  WriteLn(FirstPositive(0 - 9))'         + LE +
+    'end.';
+
+  { Chained READ: Pascal zero-initialises records, so O.I.Value defaults
+    to 0 without any write.  Exercising the read path is enough for this
+    smoke test; chained-WRITE support is tracked separately. }
+  SrcChainedRecord =
+    'program P;'                              + LE +
+    'type'                                    + LE +
+    '  TInner = record Value: Integer; end;'  + LE +
+    '  TOuter = record I: TInner; end;'       + LE +
+    'var O: TOuter; N: Integer;'              + LE +
+    'begin'                                   + LE +
+    '  N := O.I.Value;'                       + LE +
+    '  WriteLn(N)'                            + LE +
+    'end.';
+
+procedure TE2ETests.TestRun_BooleanOps_AllExpressions;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  AssertTrue(CompileAndRun(SrcBoolOps, Output, RCode, []));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('all three branches fire',
+    't1' + LE + 't2' + LE + 't3' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_MultiArgWriteLn_PrintsAllArgs;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  AssertTrue(CompileAndRun(SrcMultiArg, Output, RCode, []));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('three values concatenated with trailing newline',
+    '123' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_ForBreak_StopsAtFiveHalt;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  AssertTrue(CompileAndRun(SrcForBreak, Output, RCode, []));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('loop broke at I=5', '5' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_ExitFromFunction_ReturnsImmediately;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  AssertTrue(CompileAndRun(SrcExitFunc, Output, RCode, []));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('exit early for positive, compute for negative',
+    '7' + LE + '9' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_ChainedRecordField_LoadsInner;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  AssertTrue(CompileAndRun(SrcChainedRecord, Output, RCode, []));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('chained read of zero-initialised field', '0' + LE, Output);
 end;
 
 initialization

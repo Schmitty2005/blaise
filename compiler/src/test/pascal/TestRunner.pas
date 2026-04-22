@@ -46,6 +46,11 @@ uses
   cp.test.genericdefaults,
   cp.test.genericmethodimpls,
   cp.test.tdictionary,
+  cp.test.booleanops,
+  cp.test.flowjumps,
+  cp.test.multiwrite,
+  cp.test.chainedfields,
+  cp.test.genericconstraints,
   cp.test.e2e;
 
 var

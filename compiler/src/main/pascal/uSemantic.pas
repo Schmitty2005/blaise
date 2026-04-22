@@ -34,6 +34,7 @@ type
     FMethodIndex:          TStringList;  { 'TypeName.MethodName' → TMethodDecl (not owned) }
     FProcIndex:            TStringList;  { 'ProcName' → TMethodDecl (not owned) }
     FGenericFuncTemplates: TStringList;  { base name → TMethodDecl template (not owned) }
+    FLoopDepth:            Integer;      { depth of enclosing while/for — Break only legal if > 0 }
 
     { Generic type instantiation: resolves 'TBox<Integer>' on demand. }
     function  FindTypeOrInstantiate(const AName: string): TTypeDesc;
@@ -79,6 +80,11 @@ type
       const AContext: string; ALine, ACol: Integer);
     { Returns True if AActual is AExpected or a subclass of AExpected. }
     function  IsSubtypeOf(AActual, AExpected: TTypeDesc): Boolean;
+    { Validates a generic type parameter's constraint against a concrete type
+      argument name.  Raises ESemanticError on constraint violation.
+      AConstraint: '' (no constraint), 'class', 'record', or a type name. }
+    procedure CheckTypeParamConstraint(const AParamName, AArgName, AConstraint,
+      AContext: string);
   public
     constructor Create;
     destructor Destroy; override;
@@ -98,6 +104,7 @@ begin
   FProcIndex.CaseSensitive := False;
   FGenericFuncTemplates := TStringList.Create;
   FGenericFuncTemplates.CaseSensitive := False;
+  FLoopDepth            := 0;
 end;
 
 destructor TSemanticAnalyser.Destroy;
@@ -112,6 +119,82 @@ end;
 procedure TSemanticAnalyser.SemanticError(const AMsg: string; ALine, ACol: Integer);
 begin
   raise ESemanticError.CreateFmt('%s at line %d col %d', [AMsg, ALine, ACol]);
+end;
+
+procedure TSemanticAnalyser.CheckTypeParamConstraint(
+  const AParamName, AArgName, AConstraint, AContext: string);
+var
+  ArgType:     TTypeDesc;
+  ConstrType:  TTypeDesc;
+  RT:          TRecordTypeDesc;
+  I:           Integer;
+  Implements:  Boolean;
+begin
+  if AConstraint = '' then Exit;
+
+  ArgType := FTable.FindType(AArgName);
+  if ArgType = nil then
+    raise ESemanticError.CreateFmt(
+      'Unknown type ''%s'' for type parameter ''%s'' in %s',
+      [AArgName, AParamName, AContext]);
+
+  if SameText(AConstraint, 'class') then
+  begin
+    if ArgType.Kind <> tyClass then
+      raise ESemanticError.CreateFmt(
+        'Type ''%s'' does not satisfy constraint ''%s: class'' in %s',
+        [AArgName, AParamName, AContext]);
+    Exit;
+  end;
+
+  if SameText(AConstraint, 'record') then
+  begin
+    if not (ArgType.Kind in [tyRecord, tyInteger, tyInt64, tyUInt32, tyByte,
+                             tyBoolean, tyString, tyPointer]) then
+      raise ESemanticError.CreateFmt(
+        'Type ''%s'' does not satisfy constraint ''%s: record'' in %s',
+        [AArgName, AParamName, AContext]);
+    Exit;
+  end;
+
+  { Named constraint: T : SomeType.  Concrete type must BE that type or —
+    for classes/interfaces — inherit from / implement it. }
+  ConstrType := FTable.FindType(AConstraint);
+  if ConstrType = nil then
+    raise ESemanticError.CreateFmt(
+      'Unknown constraint type ''%s'' for type parameter ''%s'' in %s',
+      [AConstraint, AParamName, AContext]);
+
+  if ArgType = ConstrType then Exit;
+
+  if (ConstrType.Kind = tyClass) and (ArgType.Kind = tyClass) then
+  begin
+    if IsSubtypeOf(ArgType, ConstrType) then Exit;
+    raise ESemanticError.CreateFmt(
+      'Type ''%s'' does not inherit from ''%s'' (constraint ''%s: %s'') in %s',
+      [AArgName, AConstraint, AParamName, AConstraint, AContext]);
+  end;
+
+  if (ConstrType.Kind = tyInterface) and (ArgType.Kind = tyClass) then
+  begin
+    RT := TRecordTypeDesc(ArgType);
+    Implements := False;
+    for I := 0 to RT.ImplementsCount - 1 do
+      if RT.ImplementsIntfAt(I) = ConstrType then
+      begin
+        Implements := True;
+        Break;
+      end;
+    if not Implements then
+      raise ESemanticError.CreateFmt(
+        'Type ''%s'' does not implement ''%s'' (constraint ''%s: %s'') in %s',
+        [AArgName, AConstraint, AParamName, AConstraint, AContext]);
+    Exit;
+  end;
+
+  raise ESemanticError.CreateFmt(
+    'Type ''%s'' does not satisfy constraint ''%s: %s'' in %s',
+    [AArgName, AParamName, AConstraint, AContext]);
 end;
 
 function TSemanticAnalyser.IsSubtypeOf(AActual, AExpected: TTypeDesc): Boolean;
@@ -508,6 +591,13 @@ begin
     if Templ = nil then Exit;
     if Args.Count <> Templ.ParamNames.Count then Exit;
 
+    { Validate each type argument against its declared constraint. }
+    for I := 0 to Args.Count - 1 do
+      if (Templ.ParamConstraints <> nil) and (I < Templ.ParamConstraints.Count) then
+        CheckTypeParamConstraint(Templ.ParamNames[I], Args[I],
+          Templ.ParamConstraints[I],
+          Format('instantiation ''%s''', [ATypeName]));
+
     { Create the concrete class type descriptor — defined globally so the
       symbol survives scope pops and is visible after analysis completes. }
     RT  := FTable.NewClassType(ATypeName);
@@ -702,6 +792,12 @@ begin
     Templ := TGenericInterfaceDef(TemplObj);
     if Args.Count <> Templ.ParamNames.Count then Exit;
 
+    for I := 0 to Args.Count - 1 do
+      if (Templ.ParamConstraints <> nil) and (I < Templ.ParamConstraints.Count) then
+        CheckTypeParamConstraint(Templ.ParamNames[I], Args[I],
+          Templ.ParamConstraints[I],
+          Format('interface instantiation ''%s''', [ATypeName]));
+
     { Check if already instantiated }
     Sym := FTable.Lookup(ATypeName);
     if (Sym <> nil) and (Sym.TypeDesc is TInterfaceTypeDesc) then
@@ -785,6 +881,14 @@ begin
         Format('Generic function ''%s'' expects %d type parameter(s) but got %d',
           [BaseName, Templ.TypeParams.Count, Args.Count]),
         0, 0);
+
+    { Validate each type argument against the template's declared constraints. }
+    for I := 0 to Args.Count - 1 do
+      if (Templ.TypeParamConstraints <> nil) and
+         (I < Templ.TypeParamConstraints.Count) then
+        CheckTypeParamConstraint(Templ.TypeParams[I], Args[I],
+          Templ.TypeParamConstraints[I],
+          Format('generic function ''%s''', [AInstName]));
 
     NewMDecl         := TMethodDecl.Create;
     NewMDecl.Name    := AInstName;
@@ -1499,7 +1603,12 @@ begin
     EndType := AnalyseExpr(ForS.EndExpr);
     CheckTypesMatch(VarSym.TypeDesc, EndType,
       'for-loop end expression', ForS.Line, ForS.Col);
-    AnalyseStmt(ForS.Body);
+    Inc(FLoopDepth);
+    try
+      AnalyseStmt(ForS.Body);
+    finally
+      Dec(FLoopDepth);
+    end;
   end
   else if AStmt is TWhileStmt then
   begin
@@ -1510,8 +1619,23 @@ begin
         SemanticError(
           Format('while condition must be Boolean, got ''%s''', [CondType.Name]),
           AStmt.Line, AStmt.Col);
-      AnalyseStmt(Body);
+      Inc(FLoopDepth);
+      try
+        AnalyseStmt(Body);
+      finally
+        Dec(FLoopDepth);
+      end;
     end;
+  end
+  else if AStmt is TExitStmt then
+  begin
+    { No semantic checks needed — a bare 'exit' is valid in any method or
+      the main program block. }
+  end
+  else if AStmt is TBreakStmt then
+  begin
+    if FLoopDepth = 0 then
+      SemanticError('''break'' is not inside a loop', AStmt.Line, AStmt.Col);
   end
   else if AStmt is TIfStmt then
   begin
@@ -2007,6 +2131,15 @@ begin
     Result := AnalyseAsExpr(TAsExpr(AExpr))
   else if AExpr is TDerefExpr then
     Result := AnalyseDerefExpr(TDerefExpr(AExpr))
+  else if AExpr is TNotExpr then
+  begin
+    Result := AnalyseExpr(TNotExpr(AExpr).Expr);
+    if Result.Kind <> tyBoolean then
+      SemanticError(
+        Format('''not'' requires a Boolean operand, got ''%s''', [Result.Name]),
+        AExpr.Line, AExpr.Col);
+    Result := FTable.TypeBoolean;
+  end
   else
     SemanticError('Unknown expression node', AExpr.Line, AExpr.Col);
 
@@ -2019,7 +2152,42 @@ var
   RT:       TRecordTypeDesc;
   FldInfo:  TFieldInfo;
   PropInfo: TPropertyInfo;
+  BaseType: TTypeDesc;
 begin
+  { Chained access: A.B.C — base is another expression whose type must be
+    a record or class.  Leaf lookup uses Base.ResolvedType; RecordName path
+    (no Base) is used only for the simple IDENT.IDENT form. }
+  if AAccess.Base <> nil then
+  begin
+    BaseType := AnalyseExpr(AAccess.Base);
+    if not (BaseType.Kind in [tyRecord, tyClass]) then
+      SemanticError(
+        Format('Field access ''.%s'' requires a record or class base, got ''%s''',
+          [AAccess.FieldName, BaseType.Name]),
+        AAccess.Line, AAccess.Col);
+    AAccess.IsClassAccess := BaseType.Kind = tyClass;
+    RT      := TRecordTypeDesc(BaseType);
+    FldInfo := RT.FindField(AAccess.FieldName);
+    if FldInfo = nil then
+    begin
+      PropInfo := RT.FindProperty(AAccess.FieldName);
+      if (PropInfo <> nil) and (PropInfo.ReadField <> '') then
+      begin
+        AAccess.FieldName := PropInfo.ReadField;
+        AAccess.FieldInfo := RT.FindField(PropInfo.ReadField);
+        Result := PropInfo.TypeDesc;
+        Exit;
+      end;
+      SemanticError(
+        Format('Type ''%s'' has no field ''%s''',
+          [BaseType.Name, AAccess.FieldName]),
+        AAccess.Line, AAccess.Col);
+    end;
+    AAccess.FieldInfo := FldInfo;
+    Result := FldInfo.TypeDesc;
+    Exit;
+  end;
+
   RecSym := FTable.Lookup(AAccess.RecordName);
   if RecSym = nil then
     SemanticError(
@@ -2100,6 +2268,23 @@ var
 begin
   LType := AnalyseExpr(ABin.Left);
   RType := AnalyseExpr(ABin.Right);
+
+  { Logical AND / OR — both operands must be Boolean. }
+  if ABin.Op in [boAnd, boOr] then
+  begin
+    if LType.Kind <> tyBoolean then
+      SemanticError(
+        Format('Left operand of ''%s'' must be Boolean, got ''%s''',
+          [BinaryOpName(ABin.Op), LType.Name]),
+        ABin.Line, ABin.Col);
+    if RType.Kind <> tyBoolean then
+      SemanticError(
+        Format('Right operand of ''%s'' must be Boolean, got ''%s''',
+          [BinaryOpName(ABin.Op), RType.Name]),
+        ABin.Line, ABin.Col);
+    Result := FTable.TypeBoolean;
+    Exit;
+  end;
 
   if IsComparisonOp(ABin.Op) then
   begin

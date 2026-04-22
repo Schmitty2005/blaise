@@ -54,13 +54,15 @@ type
 
   TFieldAccessExpr = class(TASTExpr)
   public
-    RecordName:        string;
+    RecordName:        string;         { used when Base = nil (leaf access) }
     FieldName:         string;
+    Base:              TASTExpr;       { owned — when non-nil, chained access (e.g. A.B.C) }
     FieldInfo:         TFieldInfo;    { set by uSemantic — nil for constructor calls }
     IsConstructorCall: Boolean;       { set by uSemantic — TypeName.Create }
     IsClassAccess:     Boolean;       { set by uSemantic — pointer deref needed }
     PropRead:          TPropertyInfo; { non-nil if this is a method-backed property read }
     PropOwnerType:     string;        { class type name for method-backed property calls }
+    destructor Destroy; override;
   end;
 
   TIsExpr = class(TASTExpr)
@@ -78,13 +80,20 @@ type
     destructor Destroy; override;
   end;
 
-  TBinaryOp = (boAdd, boSub, boMul, boDiv, boEQ, boNE, boLT, boGT, boLE, boGE);
+  TBinaryOp = (boAdd, boSub, boMul, boDiv, boEQ, boNE, boLT, boGT, boLE, boGE,
+               boAnd, boOr);
 
   TBinaryExpr = class(TASTExpr)
   public
     Op:    TBinaryOp;
     Left:  TASTExpr;  { owned }
     Right: TASTExpr;  { owned }
+    destructor Destroy; override;
+  end;
+
+  TNotExpr = class(TASTExpr)
+  public
+    Expr: TASTExpr;  { owned — must be Boolean }
     destructor Destroy; override;
   end;
 
@@ -154,6 +163,12 @@ type
     Expr: TASTExpr;  { owned; nil = bare re-raise }
     destructor Destroy; override;
   end;
+
+  { 'exit' statement — returns from the current procedure/function. }
+  TExitStmt = class(TASTStmt);
+
+  { 'break' statement — exits the innermost loop. }
+  TBreakStmt = class(TASTStmt);
 
   TFieldAssignment = class(TASTStmt)
   public
@@ -270,6 +285,8 @@ type
     IsOverride:         Boolean;     { declared with 'override' directive }
     VTableSlot:         Integer;     { -1 = static; >=0 = vtable index (set by uSemantic) }
     TypeParams:         TStringList; { non-nil = generic function template; owns param names }
+    TypeParamConstraints: TStringList; { parallel to TypeParams; '' = unconstrained,
+                                         'class', 'record', or a concrete type name }
     OwnerTypeParams:    TStringList; { non-nil = generic owner: 'T' in TList<T>.Add }
     constructor Create;
     destructor Destroy; override;
@@ -309,8 +326,9 @@ type
   { Generic type template: type TBox<T> = class ... end }
   TGenericTypeDef = class(TASTTypeDef)
   public
-    ParamNames: TStringList;   { owned — type parameter names, e.g. ['T'] or ['K','V'] }
-    ClassDef:   TClassTypeDef; { owned — template class body with unresolved param types }
+    ParamNames:       TStringList;   { owned — type parameter names, e.g. ['T'] or ['K','V'] }
+    ParamConstraints: TStringList;   { owned — parallel to ParamNames; '' = unconstrained }
+    ClassDef:         TClassTypeDef; { owned — template class body with unresolved param types }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -347,8 +365,9 @@ type
   { Generic interface template: type IFoo<T> = interface ... end }
   TGenericInterfaceDef = class(TASTTypeDef)
   public
-    ParamNames: TStringList;      { owned — type parameter names, e.g. ['T'] }
-    IntfDef:    TInterfaceTypeDef; { owned — template interface body with unresolved param types }
+    ParamNames:       TStringList;      { owned — type parameter names, e.g. ['T'] }
+    ParamConstraints: TStringList;      { owned — parallel to ParamNames; '' = unconstrained }
+    IntfDef:          TInterfaceTypeDef; { owned — template interface body with unresolved param types }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -425,6 +444,8 @@ begin
     boGT:  Result := '>';
     boLE:  Result := '<=';
     boGE:  Result := '>=';
+    boAnd: Result := 'and';
+    boOr:  Result := 'or';
   else
     Result := '?';
   end;
@@ -504,6 +525,14 @@ begin
   inherited Destroy;
 end;
 
+{ TFieldAccessExpr }
+
+destructor TFieldAccessExpr.Destroy;
+begin
+  Base.Free;
+  inherited Destroy;
+end;
+
 { TIsExpr }
 
 destructor TIsExpr.Destroy;
@@ -526,6 +555,14 @@ destructor TBinaryExpr.Destroy;
 begin
   Left.Free;
   Right.Free;
+  inherited Destroy;
+end;
+
+{ TNotExpr }
+
+destructor TNotExpr.Destroy;
+begin
+  Expr.Free;
   inherited Destroy;
 end;
 
@@ -660,6 +697,7 @@ destructor TMethodDecl.Destroy;
 begin
   Params.Free;
   TypeParams.Free;
+  TypeParamConstraints.Free;
   OwnerTypeParams.Free;
   if OwnBody then Body.Free;
   inherited Destroy;
@@ -718,13 +756,15 @@ end;
 constructor TGenericTypeDef.Create;
 begin
   inherited Create;
-  ParamNames := TStringList.Create;
-  ClassDef   := TClassTypeDef.Create;
+  ParamNames       := TStringList.Create;
+  ParamConstraints := TStringList.Create;
+  ClassDef         := TClassTypeDef.Create;
 end;
 
 destructor TGenericTypeDef.Destroy;
 begin
   ClassDef.Free;
+  ParamConstraints.Free;
   ParamNames.Free;
   inherited Destroy;
 end;
@@ -749,13 +789,15 @@ end;
 constructor TGenericInterfaceDef.Create;
 begin
   inherited Create;
-  ParamNames := TStringList.Create;
-  IntfDef    := TInterfaceTypeDef.Create;
+  ParamNames       := TStringList.Create;
+  ParamConstraints := TStringList.Create;
+  IntfDef          := TInterfaceTypeDef.Create;
 end;
 
 destructor TGenericInterfaceDef.Destroy;
 begin
   IntfDef.Free;
+  ParamConstraints.Free;
   ParamNames.Free;
   inherited Destroy;
 end;
