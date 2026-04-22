@@ -108,6 +108,26 @@ void _ClassFree(void* user_ptr) {
     free((char*)user_ptr - CLASS_HDR_SIZE);
 }
 
+void _ClassAddRef(void* user_ptr) {
+    if (!user_ptr) return;
+    obj_hdr(user_ptr)->refcnt++;
+}
+
+/*
+ * Decrement the refcount; free the instance when it reaches zero.
+ *
+ * A user-invoked destructor is not called here: Blaise does not yet expose a
+ * user-defined Destroy mechanism.  When that lands the dispatch will happen
+ * via the vptr's destructor slot before the free() below.
+ */
+void _ClassRelease(void* user_ptr) {
+    if (!user_ptr) return;
+    BlaiseObjHdr* h = obj_hdr(user_ptr);
+    if (--h->refcnt == 0) {
+        free((char*)user_ptr - CLASS_HDR_SIZE);
+    }
+}
+
 /*
  * Concatenate two Blaise strings.  Either or both may be nil.
  * Returns a new header with RefCount = 0 (caller takes ownership via AddRef).
