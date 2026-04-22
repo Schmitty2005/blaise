@@ -36,7 +36,8 @@ uses
   cp.test.pointers,
   cp.test.tlist,
   cp.test.genericintfs,
-  cp.test.genericdefaults;
+  cp.test.genericdefaults,
+  cp.test.genericmethodimpls;
 
 var
   Application: TTestRunner;

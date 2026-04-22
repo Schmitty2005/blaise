@@ -261,6 +261,7 @@ type
     IsOverride:         Boolean;     { declared with 'override' directive }
     VTableSlot:         Integer;     { -1 = static; >=0 = vtable index (set by uSemantic) }
     TypeParams:         TStringList; { non-nil = generic function template; owns param names }
+    OwnerTypeParams:    TStringList; { non-nil = generic owner: 'T' in TList<T>.Add }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -650,6 +651,7 @@ destructor TMethodDecl.Destroy;
 begin
   Params.Free;
   TypeParams.Free;
+  OwnerTypeParams.Free;
   if OwnBody then Body.Free;
   inherited Destroy;
 end;

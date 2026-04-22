@@ -251,13 +251,25 @@ MethodDecl
 (* Standalone procedure/function — top-level or within a block. *)
 StandaloneDecl
     = ( PROCEDURE | FUNCTION ) IDENT
-      [ DOT IDENT ]                       (* TTypeName.MethodName implementation form *)
-      [ LESS TypeParamList GREATER ]      (* optional generic type params *)
+      [ DOT IDENT ]                                          (* TTypeName.MethodName — non-generic class impl *)
+      [ LESS TypeParamList GREATER DOT IDENT ]               (* TName<T>.MethodName  — generic class impl    *)
+      [ LESS TypeParamList GREATER ]                         (* function Identity<T> — generic standalone    *)
       [ LPAREN ParamList RPAREN ]
       [ COLON TypeName ]
       SEMICOLON
       Block SEMICOLON
     ;
+
+(* Disambiguation of the three IDENT forms above:
+ *
+ *   IDENT DOT IDENT                       — non-generic class method impl (TFoo.Bar)
+ *   IDENT LESS TypeParamList GREATER DOT IDENT  — generic class method impl (TList<T>.Add)
+ *   IDENT LESS TypeParamList GREATER            — generic standalone function (Identity<T>)
+ *
+ * The parser reads the IDENT, then checks LESS IDENT (GT|COMMA) to enter the
+ * type-param list.  After consuming the closing GREATER it inspects the next
+ * token: DOT → generic class method impl; anything else → generic standalone.
+ * For the non-generic DOT form, DOT is checked before any LESS test. *)
 
 ProcSignature
     = ( PROCEDURE | FUNCTION ) IDENT
@@ -505,9 +517,10 @@ Factor
  *   - Otherwise → MethodCall
  *
  * Generic instantiation vs. comparison:
- *   IDENT LESS ... is disambiguated by one-token lookahead.  If IDENT is a
- *   known generic type/function AND the token after LESS is an IDENT, it is
- *   treated as a type argument list.  Otherwise LESS is a comparison operator.
+ *   IDENT LESS ... is disambiguated by two-token lookahead.  LESS is treated
+ *   as opening a type-arg list only when both: (a) the token after LESS is an
+ *   IDENT, and (b) the token after that is GREATER or COMMA.  Otherwise LESS
+ *   is a comparison operator (e.g. "if A < B then").
  *
  * Virtual dispatch vs. static call:
  *   Determined at semantic time from the VTableSlot field on the resolved

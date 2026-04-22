@@ -501,7 +501,10 @@ begin
 end;
 
 function TParser.ParseMethodDecl(IsFunction: Boolean): TMethodDecl;
+var
+  TempParams: TStringList;
 begin
+  TempParams := nil;
   Result := TMethodDecl.Create;
   try
     Result.Line := FCurrent.Line;
@@ -515,28 +518,47 @@ begin
         [FCurrent.Line, FCurrent.Col]);
     Result.Name := FCurrent.Value;
     Advance;
-    { Generic function: 'function Identity<T>(...)' — parse type param list }
-    if Check(tkLessThan) and (PeekKind = tkIdent) then
+    { Type parameter list: applies to the method itself ('function Identity<T>')
+      or the generic owner class ('procedure TList<T>.Add').  Parse tentatively;
+      DOT after '>' decides which case it is. }
+    if Check(tkLessThan) and (PeekKind = tkIdent) and
+       (PeekKind2 in [tkGreaterThan, tkComma]) then
     begin
-      Result.TypeParams := TStringList.Create;
-      Advance;  { consume '<' }
-      if not Check(tkIdent) then
-        raise EParseError.CreateFmt('Expected type parameter name at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]);
-      Result.TypeParams.Add(FCurrent.Value);
-      Advance;
-      while Check(tkComma) do
-      begin
-        Advance;
+      TempParams := TStringList.Create;
+      try
+        Advance;  { consume '<' }
         if not Check(tkIdent) then
           raise EParseError.CreateFmt('Expected type parameter name at line %d col %d',
             [FCurrent.Line, FCurrent.Col]);
-        Result.TypeParams.Add(FCurrent.Value);
+        TempParams.Add(FCurrent.Value);
         Advance;
+        while Check(tkComma) do
+        begin
+          Advance;
+          if not Check(tkIdent) then
+            raise EParseError.CreateFmt('Expected type parameter name at line %d col %d',
+              [FCurrent.Line, FCurrent.Col]);
+          TempParams.Add(FCurrent.Value);
+          Advance;
+        end;
+        Expect(tkGreaterThan);
+        if Check(tkDot) then
+        begin
+          { Generic owner: procedure TList<T>.Add(...) }
+          Result.OwnerTypeParams := TempParams;
+          TempParams := nil;
+        end
+        else
+        begin
+          { Method's own type params: function Identity<T>(...) }
+          Result.TypeParams := TempParams;
+          TempParams := nil;
+        end;
+      finally
+        TempParams.Free;
       end;
-      Expect(tkGreaterThan);
     end;
-    { Qualified name: TypeName.MethodName (standalone class method implementation) }
+    { Qualified name: TypeName.MethodName or TypeName<T>.MethodName }
     if Check(tkDot) then
     begin
       Advance;

@@ -5,7 +5,6 @@ unit Generics.Defaults;
 // source-level compatibility.
 //
 // NOTE: This file is compiled by the Blaise compiler, not FPC.
-// It uses Blaise syntax and semantics.
 
 interface
 
@@ -26,28 +25,34 @@ type
   { Concrete equality comparer for Integer }
   TIntegerEqualityComparer = class(IEqualityComparer<Integer>)
     function Equals(A, B: Integer): Boolean;
-    begin
-      Result := A = B
-    end;
     function GetHashCode(Value: Integer): Integer;
-    begin
-      Result := Value
-    end;
   end;
 
   { Concrete ordering comparer for Integer }
   TIntegerComparer = class(IComparer<Integer>)
     function Compare(A, B: Integer): Integer;
-    begin
-      if A < B then
-        Result := -1
-      else if A > B then
-        Result := 1
-      else
-        Result := 0
-    end;
   end;
 
 implementation
+
+function TIntegerEqualityComparer.Equals(A, B: Integer): Boolean;
+begin
+  Result := A = B
+end;
+
+function TIntegerEqualityComparer.GetHashCode(Value: Integer): Integer;
+begin
+  Result := Value
+end;
+
+function TIntegerComparer.Compare(A, B: Integer): Integer;
+begin
+  if A < B then
+    Result := -1
+  else if A > B then
+    Result := 1
+  else
+    Result := 0
+end;
 
 end.

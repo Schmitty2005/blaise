@@ -41,6 +41,7 @@ type
     procedure AnalyseBlock(ABlock: TBlock);
     procedure AnalyseTypeDecls(ABlock: TBlock);
     procedure LinkClassMethodImpls(ABlock: TBlock);
+    procedure LinkGenericClassMethodImpls(ABlock: TBlock);
     procedure AnalyseMethodBodies(ABlock: TBlock);
     procedure AnalyseMethodDecl(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
     procedure AnalyseStandaloneDecls(ABlock: TBlock);
@@ -232,10 +233,13 @@ begin
       end;
     end;
 
-    { Process implementation declarations }
+    { Process implementation declarations — skip generic class method impls
+      (OwnerTypeName + OwnerTypeParams set); they are handled below. }
     for I := 0 to AUnit.ImplBlock.ProcDecls.Count - 1 do
     begin
       ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls[I]);
+      if (ImplDecl.OwnerTypeName <> '') and (ImplDecl.OwnerTypeParams <> nil) then
+        Continue;
 
       for J := 0 to ImplDecl.Params.Count - 1 do
       begin
@@ -290,6 +294,9 @@ begin
       end;
     end;
 
+    { Link generic class method implementations to their template methods }
+    LinkGenericClassMethodImpls(AUnit.ImplBlock);
+
     { Verify every interface declaration has a matching implementation }
     for I := 0 to AUnit.IntfBlock.ProcDecls.Count - 1 do
     begin
@@ -302,9 +309,14 @@ begin
           MDecl.Line, MDecl.Col);
     end;
 
-    { Analyse all implementation bodies }
+    { Analyse standalone implementation bodies (skip generic class method impls) }
     for I := 0 to AUnit.ImplBlock.ProcDecls.Count - 1 do
-      AnalyseStandaloneDecl(TMethodDecl(AUnit.ImplBlock.ProcDecls[I]));
+    begin
+      ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls[I]);
+      if (ImplDecl.OwnerTypeName <> '') and (ImplDecl.OwnerTypeParams <> nil) then
+        Continue;
+      AnalyseStandaloneDecl(ImplDecl);
+    end;
   finally
     FTable.PopScope;
   end;
@@ -322,6 +334,7 @@ begin
   begin
     Decl := TMethodDecl(ABlock.ProcDecls[I]);
     if Decl.OwnerTypeName = '' then Continue;
+    if Decl.OwnerTypeParams <> nil then Continue;  { generic owner — handled by LinkGenericClassMethodImpls }
     Key := Decl.OwnerTypeName + '.' + Decl.Name;
     Idx := FMethodIndex.IndexOf(Key);
     if Idx < 0 then
@@ -338,6 +351,48 @@ begin
     { Transfer the body; after this, AnalyseMethodBodies will find and analyse it }
     CD.Body   := Decl.Body;
     Decl.Body := nil;
+  end;
+end;
+
+procedure TSemanticAnalyser.LinkGenericClassMethodImpls(ABlock: TBlock);
+var
+  I, J: Integer;
+  Decl: TMethodDecl;
+  Templ: TGenericTypeDef;
+  MDecl: TMethodDecl;
+begin
+  for I := 0 to ABlock.ProcDecls.Count - 1 do
+  begin
+    Decl := TMethodDecl(ABlock.ProcDecls[I]);
+    if (Decl.OwnerTypeName = '') or (Decl.OwnerTypeParams = nil) then
+      Continue;
+    { Locate the generic template by base class name }
+    if not (FTable.FindGeneric(Decl.OwnerTypeName) is TGenericTypeDef) then
+      SemanticError(
+        Format('Generic type ''%s'' not found for method ''%s''',
+          [Decl.OwnerTypeName, Decl.Name]),
+        Decl.Line, Decl.Col);
+    Templ := TGenericTypeDef(FTable.FindGeneric(Decl.OwnerTypeName));
+    { Find the matching forward declaration in the template }
+    MDecl := nil;
+    for J := 0 to Templ.ClassDef.Methods.Count - 1 do
+      if SameText(TMethodDecl(Templ.ClassDef.Methods[J]).Name, Decl.Name) then
+      begin
+        MDecl := TMethodDecl(Templ.ClassDef.Methods[J]);
+        Break;
+      end;
+    if MDecl = nil then
+      SemanticError(
+        Format('Method ''%s'' is not declared in generic class ''%s''',
+          [Decl.Name, Decl.OwnerTypeName]),
+        Decl.Line, Decl.Col);
+    if MDecl.Body <> nil then
+      SemanticError(
+        Format('Method ''%s.%s'' already has a body',
+          [Decl.OwnerTypeName, Decl.Name]),
+        Decl.Line, Decl.Col);
+    MDecl.Body := Decl.Body;
+    Decl.Body  := nil;
   end;
 end;
 
@@ -796,6 +851,7 @@ begin
   { Link standalone TTypeName.MethodName implementations to their class method
     declarations, transferring the body so AnalyseMethodBodies can process it. }
   LinkClassMethodImpls(ABlock);
+  LinkGenericClassMethodImpls(ABlock);
   AnalyseMethodBodies(ABlock);
   FTable.PushScope;
   try
