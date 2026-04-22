@@ -1,3 +1,10 @@
+{
+  Blaise - An Object Pascal Compiler
+  Copyright (c) 2026 Graeme Geldenhuys
+  SPDX-License-Identifier: BSD-3-Clause
+  See LICENSE file in the project root for full license terms.
+}
+
 unit Generics.Defaults;
 
 // Blaise RTL — generic comparison and equality interfaces.

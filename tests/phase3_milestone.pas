@@ -1,3 +1,10 @@
+{
+  Blaise - An Object Pascal Compiler
+  Copyright (c) 2026 Graeme Geldenhuys
+  SPDX-License-Identifier: BSD-3-Clause
+  See LICENSE file in the project root for full license terms.
+}
+
 program Phase3Milestone;
 
 { Phase 3 milestone: exercises TList<Integer> and TDictionary<string,Integer>.

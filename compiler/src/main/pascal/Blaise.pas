@@ -1,3 +1,10 @@
+{
+  Blaise - An Object Pascal Compiler
+  Copyright (c) 2026 Graeme Geldenhuys
+  SPDX-License-Identifier: BSD-3-Clause
+  See LICENSE file in the project root for full license terms.
+}
+
 program Blaise;
 
 {$mode objfpc}{$H+}
@@ -25,6 +32,7 @@ const
 procedure PrintUsage;
 begin
   WriteLn('Blaise Compiler v', Version);
+  WriteLn('Copyright (c) 2026 Graeme Geldenhuys');
   WriteLn('');
   WriteLn('Usage:');
   WriteLn('  blaise --source <file.pas> --output <binary>');
