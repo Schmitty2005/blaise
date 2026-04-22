@@ -334,6 +334,26 @@ type
     destructor Destroy; override;
   end;
 
+  { Generic interface template: type IFoo<T> = interface ... end }
+  TGenericInterfaceDef = class(TASTTypeDef)
+  public
+    ParamNames: TStringList;      { owned — type parameter names, e.g. ['T'] }
+    IntfDef:    TInterfaceTypeDef; { owned — template interface body with unresolved param types }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+  { One concrete instantiation of a generic interface — stored on TProgram.
+    Codegen iterates this list to emit typeinfo data. }
+  TGenericInterfaceInstance = class
+  public
+    InstName: string;          { mangled name e.g. 'IEqualityComparer_Integer' }
+    IntfDef:  TInterfaceTypeDef; { owned — cloned with substituted type names }
+    TypeDesc: TTypeDesc;       { non-owned — points to TInterfaceTypeDesc in SymbolTable }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
   TTypeDecl = class(TASTNode)
   public
     Name: string;
@@ -363,6 +383,7 @@ type
     SymbolTable:          TSymbolTable;   { owned after semantic analysis; nil before }
     GenericInstances:     TObjectList;    { owned TGenericInstance — populated by uSemantic }
     GenericFuncInstances: TObjectList;    { owned TGenericFuncInstance — populated by uSemantic }
+    GenericIntfInstances: TObjectList;    { owned TGenericInterfaceInstance — populated by uSemantic }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -712,6 +733,36 @@ begin
   inherited Destroy;
 end;
 
+{ TGenericInterfaceDef }
+
+constructor TGenericInterfaceDef.Create;
+begin
+  inherited Create;
+  ParamNames := TStringList.Create;
+  IntfDef    := TInterfaceTypeDef.Create;
+end;
+
+destructor TGenericInterfaceDef.Destroy;
+begin
+  IntfDef.Free;
+  ParamNames.Free;
+  inherited Destroy;
+end;
+
+{ TGenericInterfaceInstance }
+
+constructor TGenericInterfaceInstance.Create;
+begin
+  inherited Create;
+  IntfDef := TInterfaceTypeDef.Create;
+end;
+
+destructor TGenericInterfaceInstance.Destroy;
+begin
+  IntfDef.Free;
+  inherited Destroy;
+end;
+
 { TGenericInstance }
 
 constructor TGenericInstance.Create;
@@ -762,10 +813,12 @@ begin
   UsedUnits            := TStringList.Create;
   GenericInstances     := TObjectList.Create(True);
   GenericFuncInstances := TObjectList.Create(True);
+  GenericIntfInstances := TObjectList.Create(True);
 end;
 
 destructor TProgram.Destroy;
 begin
+  GenericIntfInstances.Free;
   GenericFuncInstances.Free;
   GenericInstances.Free;
   SymbolTable.Free;

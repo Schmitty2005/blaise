@@ -56,6 +56,7 @@ type
     procedure ParseTypeSection(ABlock: TBlock);
     procedure ParseTypeDecl(ABlock: TBlock);
     function  ParseRecordDef: TRecordTypeDef;
+    function  ParseGenericName: string;  { reads IDENT optionally followed by '<' TypeArgs '>' }
     function  ParseClassDef: TClassTypeDef;
     function  ParseInterfaceDef: TInterfaceTypeDef;
     procedure ParseFieldDecl(AFields: TObjectList);
@@ -290,6 +291,7 @@ procedure TParser.ParseTypeDecl(ABlock: TBlock);
 var
   TD:         TTypeDecl;
   GD:         TGenericTypeDef;
+  GID:        TGenericInterfaceDef;
   ParamNames: TStringList;
   IsGeneric:  Boolean;
 begin
@@ -302,7 +304,7 @@ begin
         [FCurrent.Line, FCurrent.Col]);
     TD.Name := FCurrent.Value;
     Advance;
-    { Check for generic type parameters: TBox<T> or TPair<K, V> }
+    { Check for generic type parameters: TBox<T>, TPair<K,V>, IFoo<T> }
     IsGeneric := Check(tkLessThan);
     if IsGeneric then
     begin
@@ -327,17 +329,30 @@ begin
         end;
         Expect(tkGreaterThan);
         Expect(tkEquals);
-        if not Check(tkClass) then
-          raise EParseError.CreateFmt(
-            'Generic type must be a class at line %d col %d',
-            [FCurrent.Line, FCurrent.Col]);
-        GD            := TGenericTypeDef.Create;
-        GD.Line       := TD.Line;
-        GD.Col        := TD.Col;
-        GD.ParamNames.AddStrings(ParamNames);
-        GD.ClassDef.Free;
-        GD.ClassDef := ParseClassDef;
-        TD.Def := GD;
+        if Check(tkIntf) then
+        begin
+          GID            := TGenericInterfaceDef.Create;
+          GID.Line       := TD.Line;
+          GID.Col        := TD.Col;
+          GID.ParamNames.AddStrings(ParamNames);
+          GID.IntfDef.Free;
+          GID.IntfDef := ParseInterfaceDef;
+          TD.Def := GID;
+        end
+        else
+        begin
+          if not Check(tkClass) then
+            raise EParseError.CreateFmt(
+              'Generic type must be a class or interface at line %d col %d',
+              [FCurrent.Line, FCurrent.Col]);
+          GD            := TGenericTypeDef.Create;
+          GD.Line       := TD.Line;
+          GD.Col        := TD.Col;
+          GD.ParamNames.AddStrings(ParamNames);
+          GD.ClassDef.Free;
+          GD.ClassDef := ParseClassDef;
+          TD.Def := GD;
+        end;
       finally
         ParamNames.Free;
       end;
@@ -380,6 +395,31 @@ begin
   end;
 end;
 
+function TParser.ParseGenericName: string;
+var
+  TypeArgs: string;
+begin
+  if not Check(tkIdent) then
+    raise EParseError.CreateFmt('Expected identifier at line %d col %d',
+      [FCurrent.Line, FCurrent.Col]);
+  Result := FCurrent.Value;
+  Advance;
+  if Check(tkLessThan) then
+  begin
+    Advance;  { consume '<' }
+    TypeArgs := FCurrent.Value;
+    Advance;
+    while Check(tkComma) do
+    begin
+      Advance;
+      TypeArgs := TypeArgs + ',' + FCurrent.Value;
+      Advance;
+    end;
+    Expect(tkGreaterThan);
+    Result := Result + '<' + TypeArgs + '>';
+  end;
+end;
+
 function TParser.ParseClassDef: TClassTypeDef;
 begin
   Result := TClassTypeDef.Create;
@@ -390,20 +430,13 @@ begin
     if Check(tkLParen) then
     begin
       Advance;
-      if not Check(tkIdent) then
-        raise EParseError.CreateFmt('Expected parent class name at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]);
-      Result.ParentName := FCurrent.Value;
-      Advance;
+      { First name may be a plain class name or a generic interface name like IFoo<T> }
+      Result.ParentName := ParseGenericName;
       { Additional names after a comma are implemented interface names }
       while Check(tkComma) do
       begin
         Advance;
-        if not Check(tkIdent) then
-          raise EParseError.CreateFmt('Expected interface name at line %d col %d',
-            [FCurrent.Line, FCurrent.Col]);
-        Result.ImplementsNames.Add(FCurrent.Value);
-        Advance;
+        Result.ImplementsNames.Add(ParseGenericName);
       end;
       Expect(tkRParen);
     end;

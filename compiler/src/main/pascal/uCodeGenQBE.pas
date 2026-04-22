@@ -1008,13 +1008,22 @@ var
   ItabLine:    string;
   ImplLine:    string;
   MethName:    string;
+  IntfMangle:  string;
+  GII:         TGenericInterfaceInstance;
 begin
-  { Typeinfo blocks for every interface }
+  { Typeinfo blocks for every plain interface }
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
     TD := TTypeDecl(AProg.Block.TypeDecls[I]);
     if not (TD.Def is TInterfaceTypeDef) then Continue;
     EmitLine('data $typeinfo_' + TD.Name + ' = { l 0 }');
+  end;
+
+  { Typeinfo blocks for generic interface instantiations }
+  for I := 0 to AProg.GenericIntfInstances.Count - 1 do
+  begin
+    GII := TGenericInterfaceInstance(AProg.GenericIntfInstances[I]);
+    EmitLine('data $typeinfo_' + GII.InstName + ' = { l 0 }');
   end;
 
   { Itab and impllist blocks for each implementing class }
@@ -1030,8 +1039,9 @@ begin
     { One itab per interface }
     for J := 0 to ClassRT.ImplementsCount - 1 do
     begin
-      IntfDesc := ClassRT.ImplementsIntfAt(J);
-      ItabLine := 'data $itab_' + TD.Name + '_' + IntfDesc.Name + ' = {';
+      IntfDesc   := ClassRT.ImplementsIntfAt(J);
+      IntfMangle := QBEMangle(IntfDesc.Name);
+      ItabLine   := 'data $itab_' + TD.Name + '_' + IntfMangle + ' = {';
       for K := 0 to IntfDesc.MethodCount - 1 do
       begin
         MethName := IntfDesc.MethodName(K);
@@ -1048,13 +1058,14 @@ begin
     ImplLine := 'data $impllist_' + TD.Name + ' = {';
     for J := 0 to ClassRT.ImplementsCount - 1 do
     begin
-      IntfDesc := ClassRT.ImplementsIntfAt(J);
+      IntfDesc   := ClassRT.ImplementsIntfAt(J);
+      IntfMangle := QBEMangle(IntfDesc.Name);
       if J = 0 then
-        ImplLine := ImplLine + ' l $typeinfo_' + IntfDesc.Name +
-                               ', l $itab_' + TD.Name + '_' + IntfDesc.Name
+        ImplLine := ImplLine + ' l $typeinfo_' + IntfMangle +
+                               ', l $itab_' + TD.Name + '_' + IntfMangle
       else
-        ImplLine := ImplLine + ', l $typeinfo_' + IntfDesc.Name +
-                               ', l $itab_' + TD.Name + '_' + IntfDesc.Name;
+        ImplLine := ImplLine + ', l $typeinfo_' + IntfMangle +
+                               ', l $itab_' + TD.Name + '_' + IntfMangle;
     end;
     ImplLine := ImplLine + ', l 0 }';
     EmitLine(ImplLine);
@@ -1359,6 +1370,10 @@ var
   RT:         TRecordTypeDesc;
   FuncName:   string;
   I:          Integer;
+  IntfDesc:   TInterfaceTypeDesc;
+  VTblTemp:   string;
+  FPtrTemp:   string;
+  SlotOff:    Integer;
 begin
   if AExpr is TFuncCallExpr then
   begin
@@ -1436,6 +1451,41 @@ begin
   if AExpr is TMethodCallExpr then
   begin
     MCallExpr := TMethodCallExpr(AExpr);
+
+    { Interface method call expression: dispatch through itab }
+    if (MCallExpr.ResolvedClassType <> nil) and
+       (MCallExpr.ResolvedClassType.Kind = tyInterface) then
+    begin
+      IntfDesc := TInterfaceTypeDesc(MCallExpr.ResolvedClassType);
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s_obj',
+        [SelfTemp, MCallExpr.ObjectName]));
+      VTblTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s_itab',
+        [VTblTemp, MCallExpr.ObjectName]));
+      SlotOff := IntfDesc.MethodIndex(MCallExpr.Name) * 8;
+      FPtrTemp := AllocTemp;
+      if SlotOff = 0 then
+        EmitLine(Format('  %s =l loadl %s', [FPtrTemp, VTblTemp]))
+      else
+      begin
+        ArgTemp := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
+        EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
+      end;
+      { Evaluate arguments before the call }
+      ArgLine := Format('l %s', [SelfTemp]);
+      for I := 0 to MCallExpr.Args.Count - 1 do
+      begin
+        ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args[I]));
+        ArgLine := ArgLine + Format(', w %s', [ArgTemp]);
+      end;
+      T := AllocTemp;
+      EmitLine(Format('  %s =w call %%%s(%s)', [T, FPtrTemp, ArgLine]));
+      Result := T;
+      Exit;
+    end;
+
     RT        := TRecordTypeDesc(MCallExpr.ResolvedClassType);
     MDecl     := TMethodDecl(MCallExpr.ResolvedMethod);
     if MDecl.OwnerTypeName <> '' then

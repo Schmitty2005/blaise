@@ -163,13 +163,19 @@ TypeSection
 
 TypeDecl
     = IDENT EQUALS TypeDef SEMICOLON
+    | IDENT LESS TypeParamList GREATER EQUALS TypeDef SEMICOLON
     ;
+
+(* The second form declares a generic type template.  TypeDef must be either
+ * ClassDef (→ TGenericTypeDef) or InterfaceDef (→ TGenericInterfaceDef).
+ * The parser rejects other TypeDef kinds at that position. *)
 
 TypeDef
     = RecordDef
     | ClassDef
     | GenericClassDef
     | InterfaceDef
+    | GenericInterfaceDef
     ;
 
 RecordDef
@@ -177,22 +183,21 @@ RecordDef
     ;
 
 ClassDef
-    = CLASS [ LPAREN IDENT RPAREN ]       (* optional parent class *)
-             [ ImplementsClause ]
+    = CLASS [ LPAREN GenericName { COMMA GenericName } RPAREN ]
              FieldList
              MethodDeclList
              END
     ;
 
-(* ImplementsClause — zero-GUID interface list, Delphi-style *)
-ImplementsClause
-    = IDENT { COMMA IDENT }               (* interface name(s) after class(Parent) *)
+GenericName
+    = IDENT [ LESS TypeArgList GREATER ]   (* plain name or generic specialisation *)
     ;
 
-(* Note: the parser reads "class(Parent, IFoo, IBar)" where Parent is optional.
- * The first non-interface identifier is treated as the parent class; subsequent
- * identifiers that resolve to interface types are treated as the implements list.
- * This is handled by semantic analysis, not the parser. *)
+(* The parser stores the first name in the paren list as ParentName.  During
+ * semantic analysis, if ParentName contains '<' it is resolved as a generic
+ * interface and silently moved to the ImplementsNames list.  Subsequent names
+ * are always treated as implements entries.
+ * Example: class(TObject, IFoo, IBar<Integer>) *)
 
 GenericClassDef
     = CLASS LESS TypeParamList GREATER     (* generic template, e.g. class<T> *)
@@ -208,6 +213,18 @@ InterfaceDef
       MethodSignatureList
       END
     ;
+
+GenericInterfaceDef
+    = INTERFACE
+      [ LPAREN IDENT RPAREN ]             (* optional parent interface *)
+      MethodSignatureList
+      END
+    ;
+
+(* GenericInterfaceDef is syntactically identical to InterfaceDef; the distinction
+ * is that it appears after "IDENT < TypeParamList > =" in a TypeDecl.  The parser
+ * creates a TGenericInterfaceDef AST node wrapping the TInterfaceTypeDef body.
+ * Type parameters are substituted at instantiation time (e.g. IFoo<Integer>). *)
 
 FieldList
     = { FieldDecl }

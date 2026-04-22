@@ -1,0 +1,373 @@
+unit cp.test.genericintfs;
+
+{$mode objfpc}{$H+}
+
+{ Tests for generic interfaces: IFoo<T> = interface ... end, class implements
+  IFoo<Integer>, and codegen for the resulting itab/typeinfo. }
+
+interface
+
+uses
+  Classes, SysUtils, fpcunit, testregistry,
+  uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
+
+type
+  TGenericIntfTests = class(TTestCase)
+  private
+    function ParseSrc(const ASrc: string): TProgram;
+    function AnalyseSrc(const ASrc: string): TProgram;
+    function GenIR(const ASrc: string): string;
+  published
+    { ------------------------------------------------------------------ }
+    { Parser                                                               }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_GenericIntf_IsGenericInterfaceDef;
+    procedure TestParse_GenericIntf_ParamName;
+    procedure TestParse_GenericIntf_TwoParams;
+    procedure TestParse_GenericIntf_MethodUsesTypeParam;
+    procedure TestParse_Class_ImplementsGenericIntf_InParenList;
+
+    { ------------------------------------------------------------------ }
+    { Semantic                                                             }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_GenericIntf_InstantiatesOnVarDecl;
+    procedure TestSemantic_GenericIntf_InstantiatedType_IsInterface;
+    procedure TestSemantic_Class_ImplementsGenericIntf_OK;
+    procedure TestSemantic_GenericIntf_MethodParamsSubstituted;
+
+    { ------------------------------------------------------------------ }
+    { Codegen                                                              }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_GenericIntf_TypeinfoEmitted;
+    procedure TestCodegen_GenericIntf_ItabEmitted;
+    procedure TestCodegen_GenericIntf_ImpllistEmitted;
+    procedure TestCodegen_GenericIntf_MethodDispatch_EmitsIndirectCall;
+  end;
+
+implementation
+
+{ ------------------------------------------------------------------ }
+{ Source constants                                                      }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcGenericIntfOneParam =
+    'program P;'                                              + LineEnding +
+    'type'                                                    + LineEnding +
+    '  IComparer<T> = interface'                              + LineEnding +
+    '    function Compare(A, B: T): Integer;'                 + LineEnding +
+    '  end;'                                                  + LineEnding +
+    'begin end.';
+
+  SrcGenericIntfTwoParams =
+    'program P;'                                              + LineEnding +
+    'type'                                                    + LineEnding +
+    '  IConverter<TIn, TOut> = interface'                     + LineEnding +
+    '    function Convert(Value: TIn): TOut;'                 + LineEnding +
+    '  end;'                                                  + LineEnding +
+    'begin end.';
+
+  SrcEqualityComparer =
+    'program P;'                                              + LineEnding +
+    'type'                                                    + LineEnding +
+    '  IEqualityComparer<T> = interface'                      + LineEnding +
+    '    function Equals(A, B: T): Boolean;'                  + LineEnding +
+    '    function GetHashCode(Value: T): Integer;'            + LineEnding +
+    '  end;'                                                  + LineEnding +
+    'var C: IEqualityComparer<Integer>;'                      + LineEnding +
+    'begin end.';
+
+  SrcClassImplementsGenericIntf =
+    'program P;'                                              + LineEnding +
+    'type'                                                    + LineEnding +
+    '  IEqualityComparer<T> = interface'                      + LineEnding +
+    '    function Equals(A, B: T): Boolean;'                  + LineEnding +
+    '    function GetHashCode(Value: T): Integer;'            + LineEnding +
+    '  end;'                                                  + LineEnding +
+    '  TIntegerComparer = class(IEqualityComparer<Integer>)'  + LineEnding +
+    '    function Equals(A, B: Integer): Boolean;'            + LineEnding +
+    '    begin'                                               + LineEnding +
+    '      Result := A = B'                                   + LineEnding +
+    '    end;'                                                + LineEnding +
+    '    function GetHashCode(Value: Integer): Integer;'      + LineEnding +
+    '    begin'                                               + LineEnding +
+    '      Result := Value'                                   + LineEnding +
+    '    end;'                                                + LineEnding +
+    '  end;'                                                  + LineEnding +
+    'var'                                                     + LineEnding +
+    '  C: IEqualityComparer<Integer>;'                        + LineEnding +
+    'begin'                                                   + LineEnding +
+    '  C := TIntegerComparer.Create'                          + LineEnding +
+    'end.';
+
+  SrcGenericIntfDispatch =
+    'program P;'                                              + LineEnding +
+    'type'                                                    + LineEnding +
+    '  IEqualityComparer<T> = interface'                      + LineEnding +
+    '    function Equals(A, B: T): Boolean;'                  + LineEnding +
+    '    function GetHashCode(Value: T): Integer;'            + LineEnding +
+    '  end;'                                                  + LineEnding +
+    '  TIntegerComparer = class(IEqualityComparer<Integer>)'  + LineEnding +
+    '    function Equals(A, B: Integer): Boolean;'            + LineEnding +
+    '    begin'                                               + LineEnding +
+    '      Result := A = B'                                   + LineEnding +
+    '    end;'                                                + LineEnding +
+    '    function GetHashCode(Value: Integer): Integer;'      + LineEnding +
+    '    begin'                                               + LineEnding +
+    '      Result := Value'                                   + LineEnding +
+    '    end;'                                                + LineEnding +
+    '  end;'                                                  + LineEnding +
+    'var'                                                     + LineEnding +
+    '  C: IEqualityComparer<Integer>;'                        + LineEnding +
+    '  OK: Boolean;'                                          + LineEnding +
+    'begin'                                                   + LineEnding +
+    '  C  := TIntegerComparer.Create;'                        + LineEnding +
+    '  OK := C.Equals(1, 1)'                                  + LineEnding +
+    'end.';
+
+{ ------------------------------------------------------------------ }
+{ Helpers                                                              }
+{ ------------------------------------------------------------------ }
+
+function TGenericIntfTests.ParseSrc(const ASrc: string): TProgram;
+var
+  L: TLexer;
+  P: TParser;
+begin
+  L := TLexer.Create(ASrc);
+  P := TParser.Create(L);
+  try
+    Result := P.Parse;
+  finally
+    P.Free;
+    L.Free;
+  end;
+end;
+
+function TGenericIntfTests.AnalyseSrc(const ASrc: string): TProgram;
+var
+  SA: TSemanticAnalyser;
+begin
+  Result := ParseSrc(ASrc);
+  SA     := TSemanticAnalyser.Create;
+  try
+    SA.Analyse(Result);
+  finally
+    SA.Free;
+  end;
+end;
+
+function TGenericIntfTests.GenIR(const ASrc: string): string;
+var
+  CG:   TCodeGenQBE;
+  Prog: TProgram;
+begin
+  Prog := AnalyseSrc(ASrc);
+  CG   := TCodeGenQBE.Create;
+  try
+    CG.Generate(Prog);
+    Result := CG.GetOutput;
+  finally
+    CG.Free;
+    Prog.Free;
+  end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Parser tests                                                         }
+{ ------------------------------------------------------------------ }
+
+procedure TGenericIntfTests.TestParse_GenericIntf_IsGenericInterfaceDef;
+var
+  Prog: TProgram;
+  TD:   TTypeDecl;
+begin
+  Prog := ParseSrc(SrcGenericIntfOneParam);
+  try
+    AssertEquals('One type decl', 1, Prog.Block.TypeDecls.Count);
+    TD := TTypeDecl(Prog.Block.TypeDecls[0]);
+    AssertTrue('Def is TGenericInterfaceDef', TD.Def is TGenericInterfaceDef);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TGenericIntfTests.TestParse_GenericIntf_ParamName;
+var
+  Prog: TProgram;
+  TD:   TTypeDecl;
+  GID: TGenericInterfaceDef;
+begin
+  Prog := ParseSrc(SrcGenericIntfOneParam);
+  try
+    TD  := TTypeDecl(Prog.Block.TypeDecls[0]);
+    GID := TGenericInterfaceDef(TD.Def);
+    AssertEquals('One type param', 1, GID.ParamNames.Count);
+    AssertEquals('Param name is T', 'T', GID.ParamNames[0]);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TGenericIntfTests.TestParse_GenericIntf_TwoParams;
+var
+  Prog: TProgram;
+  TD:   TTypeDecl;
+  GID: TGenericInterfaceDef;
+begin
+  Prog := ParseSrc(SrcGenericIntfTwoParams);
+  try
+    TD  := TTypeDecl(Prog.Block.TypeDecls[0]);
+    GID := TGenericInterfaceDef(TD.Def);
+    AssertEquals('Two type params', 2, GID.ParamNames.Count);
+    AssertEquals('First param', 'TIn',  GID.ParamNames[0]);
+    AssertEquals('Second param', 'TOut', GID.ParamNames[1]);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TGenericIntfTests.TestParse_GenericIntf_MethodUsesTypeParam;
+var
+  Prog:   TProgram;
+  TD:     TTypeDecl;
+  GID:    TGenericInterfaceDef;
+  MDecl:  TMethodDecl;
+  Par:    TMethodParam;
+begin
+  Prog := ParseSrc(SrcGenericIntfOneParam);
+  try
+    TD    := TTypeDecl(Prog.Block.TypeDecls[0]);
+    GID   := TGenericInterfaceDef(TD.Def);
+    AssertEquals('One method', 1, GID.IntfDef.Methods.Count);
+    MDecl := TMethodDecl(GID.IntfDef.Methods[0]);
+    AssertEquals('Method name', 'Compare', MDecl.Name);
+    AssertEquals('Two params', 2, MDecl.Params.Count);
+    Par := TMethodParam(MDecl.Params[0]);
+    AssertEquals('First param type is T', 'T', Par.TypeName);
+    AssertEquals('Return type is Integer', 'Integer', MDecl.ReturnTypeName);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TGenericIntfTests.TestParse_Class_ImplementsGenericIntf_InParenList;
+var
+  Prog: TProgram;
+  TD:   TTypeDecl;
+  CD:   TClassTypeDef;
+begin
+  Prog := ParseSrc(SrcClassImplementsGenericIntf);
+  try
+    { Second type decl is TIntegerComparer }
+    TD := TTypeDecl(Prog.Block.TypeDecls[1]);
+    AssertTrue('Is class', TD.Def is TClassTypeDef);
+    CD := TClassTypeDef(TD.Def);
+    { The generic interface name should appear in implements or parent }
+    AssertTrue('Has IEqualityComparer<Integer>',
+      (CD.ParentName = 'IEqualityComparer<Integer>') or
+      (CD.ImplementsNames.IndexOf('IEqualityComparer<Integer>') >= 0));
+  finally
+    Prog.Free;
+  end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Semantic tests                                                        }
+{ ------------------------------------------------------------------ }
+
+procedure TGenericIntfTests.TestSemantic_GenericIntf_InstantiatesOnVarDecl;
+var
+  Prog: TProgram;
+begin
+  { 'var C: IEqualityComparer<Integer>' should trigger instantiation }
+  Prog := AnalyseSrc(SrcEqualityComparer);
+  Prog.Free;
+end;
+
+procedure TGenericIntfTests.TestSemantic_GenericIntf_InstantiatedType_IsInterface;
+var
+  Prog: TProgram;
+  VD:   TVarDecl;
+begin
+  Prog := AnalyseSrc(SrcEqualityComparer);
+  try
+    VD := TVarDecl(Prog.Block.Decls[0]);
+    AssertEquals('Variable type is tyInterface',
+      Ord(tyInterface), Ord(VD.ResolvedType.Kind));
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TGenericIntfTests.TestSemantic_Class_ImplementsGenericIntf_OK;
+var
+  Prog: TProgram;
+begin
+  { Should not raise — TIntegerComparer correctly implements IEqualityComparer<Integer> }
+  Prog := AnalyseSrc(SrcClassImplementsGenericIntf);
+  Prog.Free;
+end;
+
+procedure TGenericIntfTests.TestSemantic_GenericIntf_MethodParamsSubstituted;
+var
+  Prog:     TProgram;
+  VD:       TVarDecl;
+  IntfDesc: TInterfaceTypeDesc;
+begin
+  Prog := AnalyseSrc(SrcEqualityComparer);
+  try
+    VD       := TVarDecl(Prog.Block.Decls[0]);
+    IntfDesc := TInterfaceTypeDesc(VD.ResolvedType);
+    AssertEquals('Two methods', 2, IntfDesc.MethodCount);
+    AssertEquals('First method is Equals',     'Equals',      IntfDesc.MethodName(0));
+    AssertEquals('Second method is GetHashCode', 'GetHashCode', IntfDesc.MethodName(1));
+  finally
+    Prog.Free;
+  end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Codegen tests                                                         }
+{ ------------------------------------------------------------------ }
+
+procedure TGenericIntfTests.TestCodegen_GenericIntf_TypeinfoEmitted;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcClassImplementsGenericIntf);
+  AssertTrue('Typeinfo for IEqualityComparer_Integer emitted',
+    Pos('typeinfo_IEqualityComparer_Integer', IR) > 0);
+end;
+
+procedure TGenericIntfTests.TestCodegen_GenericIntf_ItabEmitted;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcClassImplementsGenericIntf);
+  AssertTrue('Itab for TIntegerComparer/IEqualityComparer_Integer emitted',
+    Pos('itab_TIntegerComparer_IEqualityComparer_Integer', IR) > 0);
+end;
+
+procedure TGenericIntfTests.TestCodegen_GenericIntf_ImpllistEmitted;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcClassImplementsGenericIntf);
+  AssertTrue('Impllist for TIntegerComparer emitted',
+    Pos('impllist_TIntegerComparer', IR) > 0);
+end;
+
+procedure TGenericIntfTests.TestCodegen_GenericIntf_MethodDispatch_EmitsIndirectCall;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcGenericIntfDispatch);
+  { Interface method call goes through itab pointer — must be an indirect call }
+  AssertTrue('Interface dispatch emits indirect call', Pos('call %', IR) > 0);
+end;
+
+initialization
+  RegisterTest(TGenericIntfTests);
+
+end.

@@ -119,15 +119,18 @@ type
   { Type descriptor for zero-GUID interface types (Phase 3). }
   TInterfaceTypeDesc = class(TTypeDesc)
   private
-    FMethods: TStringList;  { method names, case-insensitive sorted }
-    FParent:  TInterfaceTypeDesc;  { not owned; nil if no parent }
+    FMethods:     TStringList;  { method names, case-insensitive }
+    FReturnTypes: TStringList;  { parallel: return type name, '' = procedure }
+    FParent:      TInterfaceTypeDesc;  { not owned; nil if no parent }
   public
     constructor Create(const AName: string);
     destructor Destroy; override;
-    procedure AddMethod(const AName: string);
+    procedure AddMethod(const AName: string;
+                const AReturnTypeName: string = '');
     function  HasMethod(const AName: string): Boolean;
     function  MethodCount: Integer;
     function  MethodName(AIndex: Integer): string;
+    function  MethodReturnTypeName(AIndex: Integer): string;
     function  MethodIndex(const AName: string): Integer;
     property  Parent: TInterfaceTypeDesc read FParent write FParent;
   end;
@@ -506,22 +509,26 @@ end;
 constructor TInterfaceTypeDesc.Create(const AName: string);
 begin
   inherited Create;
-  Kind     := tyInterface;
-  Name     := AName;
-  FMethods := TStringList.Create;
-  FMethods.CaseSensitive := False;  { unsorted — preserves declaration order }
-  FParent  := nil;
+  Kind         := tyInterface;
+  Name         := AName;
+  FMethods     := TStringList.Create;
+  FMethods.CaseSensitive := False;
+  FReturnTypes := TStringList.Create;
+  FParent      := nil;
 end;
 
 destructor TInterfaceTypeDesc.Destroy;
 begin
+  FReturnTypes.Free;
   FMethods.Free;
   inherited Destroy;
 end;
 
-procedure TInterfaceTypeDesc.AddMethod(const AName: string);
+procedure TInterfaceTypeDesc.AddMethod(const AName: string;
+  const AReturnTypeName: string);
 begin
   FMethods.Add(AName);
+  FReturnTypes.Add(AReturnTypeName);
 end;
 
 function TInterfaceTypeDesc.HasMethod(const AName: string): Boolean;
@@ -537,6 +544,11 @@ end;
 function TInterfaceTypeDesc.MethodName(AIndex: Integer): string;
 begin
   Result := FMethods[AIndex];
+end;
+
+function TInterfaceTypeDesc.MethodReturnTypeName(AIndex: Integer): string;
+begin
+  Result := FReturnTypes[AIndex];
 end;
 
 function TInterfaceTypeDesc.MethodIndex(const AName: string): Integer;

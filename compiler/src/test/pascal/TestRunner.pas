@@ -34,7 +34,8 @@ uses
   cp.test.properties,
   cp.test.genericfuncs,
   cp.test.pointers,
-  cp.test.tlist;
+  cp.test.tlist,
+  cp.test.genericintfs;
 
 var
   Application: TTestRunner;

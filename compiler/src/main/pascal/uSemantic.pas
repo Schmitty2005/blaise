@@ -31,6 +31,7 @@ type
     { Generic type instantiation: resolves 'TBox<Integer>' on demand. }
     function  FindTypeOrInstantiate(const AName: string): TTypeDesc;
     function  InstantiateGeneric(const ATypeName: string): TRecordTypeDesc;
+    function  InstantiateGenericInterface(const ATypeName: string): TInterfaceTypeDesc;
     function  SubstTypeParam(const ATypeName: string;
                 AParamNames, AArgs: TStringList): string;
 
@@ -364,7 +365,11 @@ begin
     Exit;
   end;
   if Pos('<', AName) > 0 then
+  begin
     Result := InstantiateGeneric(AName);
+    if Result = nil then
+      Result := InstantiateGenericInterface(AName);
+  end;
 end;
 
 function TSemanticAnalyser.SubstTypeParam(const ATypeName: string;
@@ -435,6 +440,8 @@ begin
       end;
     end;
 
+    { Bail if the template exists but is a generic interface, not a class }
+    if not (FTable.FindGeneric(BaseName) is TGenericTypeDef) then Exit;
     Templ := TGenericTypeDef(FTable.FindGeneric(BaseName));
     if Templ = nil then Exit;
     if Args.Count <> Templ.ParamNames.Count then Exit;
@@ -585,6 +592,87 @@ begin
     FProg.GenericInstances.Add(GI);
 
     Result := RT;
+  finally
+    Args.Free;
+  end;
+end;
+
+function TSemanticAnalyser.InstantiateGenericInterface(const ATypeName: string): TInterfaceTypeDesc;
+var
+  BracPos:     Integer;
+  BaseName:    string;
+  ArgsStr:     string;
+  Args:        TStringList;
+  Templ:       TGenericInterfaceDef;
+  TemplObj:    TObject;
+  I:           Integer;
+  MDecl:       TMethodDecl;
+  Sym:         TSymbol;
+  GII:         TGenericInterfaceInstance;
+  MangledName: string;
+begin
+  Result := nil;
+
+  BracPos := Pos('<', ATypeName);
+  if BracPos = 0 then Exit;
+  BaseName := Copy(ATypeName, 1, BracPos - 1);
+  ArgsStr  := Copy(ATypeName, BracPos + 1, Length(ATypeName) - BracPos - 1);
+
+  Args := TStringList.Create;
+  try
+    while ArgsStr <> '' do
+    begin
+      BracPos := Pos(',', ArgsStr);
+      if BracPos > 0 then
+      begin
+        Args.Add(Trim(Copy(ArgsStr, 1, BracPos - 1)));
+        ArgsStr := Trim(Copy(ArgsStr, BracPos + 1, MaxInt));
+      end
+      else
+      begin
+        Args.Add(Trim(ArgsStr));
+        ArgsStr := '';
+      end;
+    end;
+
+    TemplObj := FTable.FindGeneric(BaseName);
+    if (TemplObj = nil) or not (TemplObj is TGenericInterfaceDef) then Exit;
+    Templ := TGenericInterfaceDef(TemplObj);
+    if Args.Count <> Templ.ParamNames.Count then Exit;
+
+    { Check if already instantiated }
+    Sym := FTable.Lookup(ATypeName);
+    if (Sym <> nil) and (Sym.TypeDesc is TInterfaceTypeDesc) then
+    begin
+      Result := TInterfaceTypeDesc(Sym.TypeDesc);
+      Exit;
+    end;
+
+    { Build mangled name: IEqualityComparer<Integer> → IEqualityComparer_Integer }
+    MangledName := BaseName;
+    for I := 0 to Args.Count - 1 do
+      MangledName := MangledName + '_' + Args[I];
+
+    { Create the concrete interface type descriptor }
+    Result := FTable.NewInterfaceType(ATypeName);
+    Sym    := TSymbol.Create(ATypeName, skType, Result);
+    FTable.DefineGlobal(Sym);
+
+    { Register interface method names with substituted return types }
+    for I := 0 to Templ.IntfDef.Methods.Count - 1 do
+    begin
+      MDecl := TMethodDecl(Templ.IntfDef.Methods[I]);
+      Result.AddMethod(MDecl.Name,
+        SubstTypeParam(MDecl.ReturnTypeName, Templ.ParamNames, Args));
+    end;
+
+    { Register the instantiation for codegen }
+    GII          := TGenericInterfaceInstance.Create;
+    GII.InstName := MangledName;
+    GII.IntfDef.Free;
+    GII.IntfDef  := nil;
+    GII.TypeDesc := Result;
+    FProg.GenericIntfInstances.Add(GII);
   finally
     Args.Free;
   end;
@@ -764,6 +852,12 @@ begin
       FTable.RegisterGeneric(TD.Name, TD.Def);
       Continue;
     end
+    else if TD.Def is TGenericInterfaceDef then
+    begin
+      { Register as template — instantiated on demand when used as type name }
+      FTable.RegisterGeneric(TD.Name, TD.Def);
+      Continue;
+    end
     else if TD.Def is TInterfaceTypeDef then
     begin
       IntfDesc := FTable.NewInterfaceType(TD.Name);
@@ -796,6 +890,7 @@ begin
 
     { Generic templates have no concrete descriptor — skip }
     if TD.Def is TGenericTypeDef then Continue;
+    if TD.Def is TGenericInterfaceDef then Continue;
 
     { Interface types: register methods and resolve optional parent }
     if TD.Def is TInterfaceTypeDef then
@@ -814,10 +909,12 @@ begin
         IntfDesc.Parent := TInterfaceTypeDesc(Sym.TypeDesc);
         { Inherit parent methods }
         for J := 0 to IntfDesc.Parent.MethodCount - 1 do
-          IntfDesc.AddMethod(IntfDesc.Parent.MethodName(J));
+          IntfDesc.AddMethod(IntfDesc.Parent.MethodName(J),
+            IntfDesc.Parent.MethodReturnTypeName(J));
       end;
       for J := 0 to ITD.Methods.Count - 1 do
-        IntfDesc.AddMethod(TMethodDecl(ITD.Methods[J]).Name);
+        IntfDesc.AddMethod(TMethodDecl(ITD.Methods[J]).Name,
+          TMethodDecl(ITD.Methods[J]).ReturnTypeName);
       Continue;
     end;
 
@@ -834,22 +931,42 @@ begin
       FieldList  := TClassTypeDef(TD.Def).Fields;
       MethodList := TClassTypeDef(TD.Def).Methods;
 
-      { Copy inherited fields and vtable from parent class first }
+      { Copy inherited fields and vtable from parent class first.
+        The parser may store a generic interface name (e.g. IFoo<T>) as ParentName
+        when no explicit class parent was specified — detect this and treat it as
+        an implements entry instead. }
       if TClassTypeDef(TD.Def).ParentName <> '' then
       begin
-        ParentSym := FTable.Lookup(TClassTypeDef(TD.Def).ParentName);
-        if (ParentSym = nil) or not (ParentSym.TypeDesc is TRecordTypeDesc) then
-          SemanticError(
-            Format('Unknown parent class ''%s'' for ''%s''',
-              [TClassTypeDef(TD.Def).ParentName, TD.Name]),
-            TD.Line, TD.Col);
-        ParentRT     := TRecordTypeDesc(ParentSym.TypeDesc);
-        RT.Parent    := ParentRT;
-        RT.CopyVTableFrom(ParentRT);
-        for K := 0 to ParentRT.Fields.Count - 1 do
+        ParentSym := nil;
+        { If name looks generic, try instantiating as interface first }
+        if Pos('<', TClassTypeDef(TD.Def).ParentName) > 0 then
         begin
-          FldInfo := TFieldInfo(ParentRT.Fields[K]);
-          RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
+          IntfDesc := TInterfaceTypeDesc(
+            FindTypeOrInstantiate(TClassTypeDef(TD.Def).ParentName));
+          if IntfDesc <> nil then
+          begin
+            { Treat it as an interface to implement — move to implements list }
+            TClassTypeDef(TD.Def).ImplementsNames.Insert(
+              0, TClassTypeDef(TD.Def).ParentName);
+            TClassTypeDef(TD.Def).ParentName := '';
+          end;
+        end;
+        if TClassTypeDef(TD.Def).ParentName <> '' then
+        begin
+          ParentSym := FTable.Lookup(TClassTypeDef(TD.Def).ParentName);
+          if (ParentSym = nil) or not (ParentSym.TypeDesc is TRecordTypeDesc) then
+            SemanticError(
+              Format('Unknown parent class ''%s'' for ''%s''',
+                [TClassTypeDef(TD.Def).ParentName, TD.Name]),
+              TD.Line, TD.Col);
+          ParentRT     := TRecordTypeDesc(ParentSym.TypeDesc);
+          RT.Parent    := ParentRT;
+          RT.CopyVTableFrom(ParentRT);
+          for K := 0 to ParentRT.Fields.Count - 1 do
+          begin
+            FldInfo := TFieldInfo(ParentRT.Fields[K]);
+            RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
+          end;
         end;
       end;
 
@@ -966,6 +1083,17 @@ begin
       begin
         IntfName := TClassTypeDef(TD.Def).ImplementsNames[L];
         IntfSym  := FTable.Lookup(IntfName);
+        if IntfSym = nil then
+        begin
+          { May be a generic interface — try instantiation }
+          IntfDesc := TInterfaceTypeDesc(FindTypeOrInstantiate(IntfName));
+          if IntfDesc = nil then
+            SemanticError(
+              Format('Unknown interface ''%s'' in implements list of ''%s''',
+                [IntfName, TD.Name]),
+              TD.Line, TD.Col);
+          IntfSym := FTable.Lookup(IntfName);
+        end;
         if (IntfSym = nil) or not (IntfSym.TypeDesc is TInterfaceTypeDesc) then
           SemanticError(
             Format('Unknown interface ''%s'' in implements list of ''%s''',
@@ -1702,12 +1830,13 @@ end;
 
 function TSemanticAnalyser.AnalyseMethodCallExpr(AExpr: TMethodCallExpr): TTypeDesc;
 var
-  ObjSym:  TSymbol;
-  RT:      TRecordTypeDesc;
-  MDecl:   TMethodDecl;
-  Par:     TMethodParam;
-  ArgType: TTypeDesc;
-  I:       Integer;
+  ObjSym:   TSymbol;
+  RT:       TRecordTypeDesc;
+  MDecl:    TMethodDecl;
+  Par:      TMethodParam;
+  ArgType:  TTypeDesc;
+  I:        Integer;
+  IntfDesc: TInterfaceTypeDesc;
 begin
   ObjSym := FTable.Lookup(AExpr.ObjectName);
   if ObjSym = nil then
@@ -1718,10 +1847,31 @@ begin
     SemanticError(
       Format('''%s'' is not a variable', [AExpr.ObjectName]),
       AExpr.Line, AExpr.Col);
-  if ObjSym.TypeDesc.Kind <> tyClass then
+  if not (ObjSym.TypeDesc.Kind in [tyClass, tyInterface]) then
     SemanticError(
-      Format('''%s'' is not a class variable', [AExpr.ObjectName]),
+      Format('''%s'' is not a class or interface variable', [AExpr.ObjectName]),
       AExpr.Line, AExpr.Col);
+
+  { Interface method call expression: dispatch through itab }
+  if ObjSym.TypeDesc.Kind = tyInterface then
+  begin
+    IntfDesc := TInterfaceTypeDesc(ObjSym.TypeDesc);
+    if not IntfDesc.HasMethod(AExpr.Name) then
+      SemanticError(
+        Format('Interface ''%s'' has no method ''%s''',
+          [ObjSym.TypeDesc.Name, AExpr.Name]),
+        AExpr.Line, AExpr.Col);
+    for I := 0 to AExpr.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(AExpr.Args[I]));
+    AExpr.ResolvedClassType := ObjSym.TypeDesc;
+    AExpr.ResolvedMethod    := nil;  { nil = interface dispatch }
+    { Look up return type from interface method descriptor }
+    Result := FindTypeOrInstantiate(
+      IntfDesc.MethodReturnTypeName(IntfDesc.MethodIndex(AExpr.Name)));
+    if Result = nil then
+      Result := FTable.TypeInteger;  { fallback for void/unknown }
+    Exit;
+  end;
 
   RT    := TRecordTypeDesc(ObjSym.TypeDesc);
   MDecl := FindMethodDecl(RT.Name, AExpr.Name);
