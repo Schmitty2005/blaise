@@ -517,8 +517,8 @@ begin
     '  end;'              + LineEnding +
     'var Pt: TPoint;'     + LineEnding +
     'begin end.');
-  AssertTrue('alloc for Pt', Pos('_var_Pt', IR) > 0);
-  AssertTrue('alloc present', Pos('alloc', IR) > 0);
+  { Program-level record var Pt is a data-section global }
+  AssertTrue('data decl for Pt', Pos('$Pt', IR) > 0);
 end;
 
 procedure TRecordTests.TestCodegen_FieldStore_EmitsOffset;
@@ -568,8 +568,8 @@ begin
     '  end;'              + LineEnding +
     'var R: TRect;'       + LineEnding +
     'begin end.');
-  { Two Integer fields = 8 bytes total }
-  AssertTrue('alloc4 8', Pos('alloc4 8', IR) > 0);
+  { Two Integer fields = 8 bytes total; program-level record uses data section }
+  AssertTrue('8-byte record in data section', Pos('z 8', IR) > 0);
 end;
 
 procedure TRecordTests.TestCodegen_StringField_CorrectSize;
@@ -584,8 +584,8 @@ begin
     '  end;'              + LineEnding +
     'var Person: TPerson;' + LineEnding +
     'begin end.');
-  { One string field = 8 bytes, 8-byte aligned }
-  AssertTrue('alloc8 8', Pos('alloc8 8', IR) > 0);
+  { One string field = 8 bytes; program-level record uses data section }
+  AssertTrue('8-byte record in data section', Pos('z 8', IR) > 0);
 end;
 
 initialization

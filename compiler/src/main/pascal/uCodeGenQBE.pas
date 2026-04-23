@@ -29,7 +29,8 @@ type
     FTempCount:    Integer;
     FLabelCount:   Integer;
     FCurrentBlock: TBlock;       { block currently being emitted; set by EmitBlock }
-    FBreakLabels:  TStringList;  { stack of active loop-end labels; top = innermost }
+    FBreakLabels:    TStringList;  { stack of active loop-end labels; top = innermost }
+    FContinueLabels: TStringList;  { stack of active loop-continue labels; top = innermost }
     FExitLabel:    string;       { label to jmp to for 'exit'; '' = main program }
 
     function  AllocTemp: string;
@@ -52,6 +53,7 @@ type
     procedure EmitFuncDef(ADecl: TMethodDecl; AExported: Boolean);
     procedure EmitBlock(ABlock: TBlock);
     procedure EmitVarAllocs(ABlock: TBlock);
+    procedure EmitGlobalVarData(ABlock: TBlock);
     procedure EmitParamAllocs(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
     procedure EmitArcCleanup(ABlock: TBlock);
     procedure EmitExcPathArcCleanup(ABlock: TBlock);
@@ -79,6 +81,25 @@ type
       base nodes without loading record aggregates as scalars. }
     function  EmitInstancePtr(AExpr: TASTExpr): string;
     function  FieldPtr(const ARecordVar: string; AOffset: Integer): string;
+    { Returns the QBE address token for a variable: '$Name' for globals,
+      '%_var_Name' for locals. }
+    function  VarRef(const AName: string; AIsGlobal: Boolean): string;
+    { Emit a record-returning function/method call with an explicit sret address.
+      The callee receives ASretAddr as its first (hidden) parameter and writes
+      the result there instead of returning it.  Handles TFuncCallExpr,
+      TMethodCallExpr, and TFieldAccessExpr.IsMethodCall. }
+    procedure EmitRecordCallSret(AExpr: TASTExpr; const ASretAddr: string);
+    { Emit a field-by-field ARC-aware copy from ASrcAddr to ADestAddr for a
+      record described by ARec.  String fields use AddRef/Release; class fields
+      use ClassAddRef/ClassRelease; other fields are copied with a plain store. }
+    procedure EmitRecordCopy(ARec: TRecordTypeDesc;
+                             const ADestAddr, ASrcAddr: string);
+    { Returns True if AExpr is a function or method call that returns a record.
+      Used in EmitAssignment to choose the sret path over a storel. }
+    function  IsRecordCall(AExpr: TASTExpr): Boolean;
+    { Release every ARC-managed field of a record at AAddr in-line (no copy).
+      Used before overwriting a record slot to prevent reference leaks. }
+    procedure EmitRecordReleaseFields(ARec: TRecordTypeDesc; const AAddr: string);
     function  QbeTypeOf(AType: TTypeDesc): string;
     function  QbeEscapeString(const AStr: string): string;
     { Mangle a type name for use in QBE symbols: '<' → '_', '>' → '', ',' → '_' }
@@ -98,13 +119,16 @@ begin
   inherited Create;
   FOutput       := TStringList.Create;
   FStrLits      := TStringList.Create;
-  FBreakLabels  := TStringList.Create;
-  FTempCount    := 0;
+  FStrLits.CaseSensitive := True;
+  FBreakLabels    := TStringList.Create;
+  FContinueLabels := TStringList.Create;
+  FTempCount      := 0;
 end;
 
 destructor TCodeGenQBE.Destroy;
 begin
   FBreakLabels.Free;
+  FContinueLabels.Free;
   FOutput.Free;
   FStrLits.Free;
   inherited Destroy;
@@ -209,6 +233,8 @@ begin
       raise ECodeGenError.CreateFmt(
         'Variable ''%s'' has no resolved type — semantic pass required',
         [Decl.Names[0]]);
+    if Decl.IsGlobal then
+      Continue;  { global vars are emitted in the data section, not as stack allocs }
 
     for J := 0 to Decl.Names.Count - 1 do
     begin
@@ -281,6 +307,52 @@ begin
   end;
 end;
 
+procedure TCodeGenQBE.EmitGlobalVarData(ABlock: TBlock);
+{ Emit QBE data-section entries for program-level global variables.
+  These live at $Name (pointer-sized slots, zero-initialised) rather than
+  as per-function stack allocs.  Called once from Generate before the
+  function bodies are written. }
+var
+  I, J:    Integer;
+  Decl:    TVarDecl;
+  VarName: string;
+  RT:      TRecordTypeDesc;
+begin
+  for I := 0 to ABlock.Decls.Count - 1 do
+  begin
+    Decl := TVarDecl(ABlock.Decls[I]);
+    if not Decl.IsGlobal then Continue;
+    if Decl.ResolvedType = nil then Continue;
+    for J := 0 to Decl.Names.Count - 1 do
+    begin
+      VarName := Decl.Names[J];
+      case Decl.ResolvedType.Kind of
+        tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum:
+          EmitLine(Format('data $%s = { w 0 }', [VarName]));
+        tyInt64:
+          EmitLine(Format('data $%s = { l 0 }', [VarName]));
+        tyString, tyClass, tyPointer:
+          EmitLine(Format('data $%s = { l 0 }', [VarName]));
+        tyInterface:
+          begin
+            EmitLine(Format('data $%s_obj  = { l 0 }', [VarName]));
+            EmitLine(Format('data $%s_itab = { l 0 }', [VarName]));
+          end;
+        tyRecord:
+          begin
+            RT := TRecordTypeDesc(Decl.ResolvedType);
+            if RT.TotalSize > 0 then
+              EmitLine(Format('data $%s = { z %d }', [VarName, RT.TotalSize]))
+            else
+              EmitLine(Format('data $%s = { l 0 }', [VarName]));
+          end;
+      else
+        EmitLine(Format('data $%s = { l 0 }', [VarName]));
+      end;
+    end;
+  end;
+end;
+
 procedure TCodeGenQBE.EmitArcCleanup(ABlock: TBlock);
 { Release every ARC-managed local variable (string, class, or interface) at
   block exit.  Mirrors the insertion pattern used at assignment sites: each
@@ -310,9 +382,9 @@ begin
       begin
         VarName := Decl.Names[J];
         if IsIntf then
-          EmitLine(Format('  call $_WeakClear(l %%_var_%s_obj)', [VarName]))
+          EmitLine(Format('  call $_WeakClear(l %s_obj)', [VarRef(VarName, Decl.IsGlobal)]))
         else
-          EmitLine(Format('  call $_WeakClear(l %%_var_%s)', [VarName]));
+          EmitLine(Format('  call $_WeakClear(l %s)', [VarRef(VarName, Decl.IsGlobal)]));
       end;
       Continue;
     end;
@@ -322,6 +394,17 @@ begin
       RelFn := '$_ClassRelease'
     else if IsIntf then
       RelFn := '$_ClassRelease'  { obj slot release; itab is static }
+    else if Decl.ResolvedType.Kind = tyRecord then
+    begin
+      { Record local: release each ARC-managed field at scope exit }
+      for J := 0 to Decl.Names.Count - 1 do
+      begin
+        VarName := Decl.Names[J];
+        EmitRecordReleaseFields(TRecordTypeDesc(Decl.ResolvedType),
+          VarRef(VarName, Decl.IsGlobal));
+      end;
+      Continue;
+    end
     else
       Continue;
     for J := 0 to Decl.Names.Count - 1 do
@@ -329,9 +412,9 @@ begin
       VarName := Decl.Names[J];
       ValTemp := AllocTemp;
       if IsIntf then
-        EmitLine(Format('  %s =l loadl %%_var_%s_obj', [ValTemp, VarName]))
+        EmitLine(Format('  %s =l loadl %s_obj', [ValTemp, VarRef(VarName, Decl.IsGlobal)]))
       else
-        EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
+        EmitLine(Format('  %s =l loadl %s', [ValTemp, VarRef(VarName, Decl.IsGlobal)]));
       EmitLine(Format('  call %s(l %s)', [RelFn, ValTemp]));
     end;
   end;
@@ -377,9 +460,9 @@ begin
       begin
         VarName := Decl.Names[J];
         if IsIntf then
-          EmitLine(Format('  call $_WeakClear(l %%_var_%s_obj)', [VarName]))
+          EmitLine(Format('  call $_WeakClear(l %s_obj)', [VarRef(VarName, Decl.IsGlobal)]))
         else
-          EmitLine(Format('  call $_WeakClear(l %%_var_%s)', [VarName]));
+          EmitLine(Format('  call $_WeakClear(l %s)', [VarRef(VarName, Decl.IsGlobal)]));
       end;
       Continue;
     end;
@@ -389,6 +472,17 @@ begin
       RelFn := '$_ClassRelease'
     else if IsIntf then
       RelFn := '$_ClassRelease'
+    else if Decl.ResolvedType.Kind = tyRecord then
+    begin
+      { Record local on exception path: release ARC fields }
+      for J := 0 to Decl.Names.Count - 1 do
+      begin
+        VarName := Decl.Names[J];
+        EmitRecordReleaseFields(TRecordTypeDesc(Decl.ResolvedType),
+          VarRef(VarName, Decl.IsGlobal));
+      end;
+      Continue;
+    end
     else
       Continue;
     for J := 0 to Decl.Names.Count - 1 do
@@ -397,18 +491,15 @@ begin
       ValTemp := AllocTemp;
       if IsIntf then
       begin
-        EmitLine(Format('  %s =l loadl %%_var_%s_obj', [ValTemp, VarName]));
+        EmitLine(Format('  %s =l loadl %s_obj', [ValTemp, VarRef(VarName, Decl.IsGlobal)]));
         EmitLine(Format('  call %s(l %s)', [RelFn, ValTemp]));
-        { Zero only the obj slot; the itab slot holds a static pointer
-          and nilling it would break a subsequent method call on this
-          variable if it survives the unwind. }
-        EmitLine(Format('  storel 0, %%_var_%s_obj', [VarName]));
+        EmitLine(Format('  storel 0, %s_obj', [VarRef(VarName, Decl.IsGlobal)]));
       end
       else
       begin
-        EmitLine(Format('  %s =l loadl %%_var_%s', [ValTemp, VarName]));
+        EmitLine(Format('  %s =l loadl %s', [ValTemp, VarRef(VarName, Decl.IsGlobal)]));
         EmitLine(Format('  call %s(l %s)', [RelFn, ValTemp]));
-        EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
+        EmitLine(Format('  storel 0, %s', [VarRef(VarName, Decl.IsGlobal)]));
       end;
     end;
   end;
@@ -418,6 +509,8 @@ procedure TCodeGenQBE.EmitStmt(AStmt: TASTStmt);
 var
   DeadLbl: string;
 begin
+  if AStmt = nil then
+    raise ECodeGenError.Create('EmitStmt called with nil statement');
   if AStmt is TTryFinallyStmt then
     EmitTryFinallyStmt(TTryFinallyStmt(AStmt))
   else if AStmt is TTryExceptStmt then
@@ -465,8 +558,17 @@ begin
     DeadLbl := AllocLabel('after_break');
     EmitLine('@' + DeadLbl);
   end
+  else if AStmt is TContinueStmt then
+  begin
+    if FContinueLabels.Count = 0 then
+      raise ECodeGenError.Create('continue outside loop');
+    EmitLine(Format('  jmp @%s',
+      [FContinueLabels[FContinueLabels.Count - 1]]));
+    DeadLbl := AllocLabel('after_continue');
+    EmitLine('@' + DeadLbl);
+  end
   else
-    raise ECodeGenError.Create('Unknown statement node type');
+    raise ECodeGenError.CreateFmt('Unknown statement node type at line %d', [AStmt.Line]);
 end;
 
 procedure TCodeGenQBE.EmitIfStmt(AStmt: TIfStmt);
@@ -611,6 +713,7 @@ procedure TCodeGenQBE.EmitForStmt(AStmt: TForStmt);
 var
   LblCond:  string;
   LblBody:  string;
+  LblNext:  string;  { continue target — increment step }
   LblEnd:   string;
   StartT:   string;
   EndT:     string;
@@ -622,11 +725,12 @@ var
 begin
   LblCond := AllocLabel('for_cond');
   LblBody := AllocLabel('for_body');
+  LblNext := AllocLabel('for_next');
   LblEnd  := AllocLabel('for_end');
 
   { Evaluate start and store into loop variable }
   StartT := EmitExpr(AStmt.StartExpr);
-  EmitLine(Format('  storew %s, %%_var_%s', [StartT, AStmt.VarName]));
+  EmitLine(Format('  storew %s, %s', [StartT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
 
   { Evaluate end value once into a temp }
   EndT := EmitExpr(AStmt.EndExpr);
@@ -637,7 +741,7 @@ begin
   { Condition block: test loop variable against end value }
   EmitLine('@' + LblCond);
   CurT := AllocTemp;
-  EmitLine(Format('  %s =w loadw %%_var_%s', [CurT, AStmt.VarName]));
+  EmitLine(Format('  %s =w loadw %s', [CurT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
   CmpT := AllocTemp;
   if AStmt.IsDownTo then
     CmpOp := 'csgew'   { I >= End }
@@ -649,22 +753,26 @@ begin
   { Body block }
   EmitLine('@' + LblBody);
   FBreakLabels.Add(LblEnd);
+  FContinueLabels.Add(LblNext);
   try
     EmitStmt(AStmt.Body);
   finally
     FBreakLabels.Delete(FBreakLabels.Count - 1);
+    FContinueLabels.Delete(FContinueLabels.Count - 1);
   end;
+  EmitLine(Format('  jmp @%s', [LblNext]));
 
-  { Increment or decrement loop variable }
+  { Increment or decrement loop variable (continue target) }
+  EmitLine('@' + LblNext);
   CurT  := AllocTemp;
   StepT := AllocTemp;
-  EmitLine(Format('  %s =w loadw %%_var_%s', [CurT, AStmt.VarName]));
+  EmitLine(Format('  %s =w loadw %s', [CurT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
   if AStmt.IsDownTo then
     StepOp := 'sub'
   else
     StepOp := 'add';
   EmitLine(Format('  %s =w %s %s, 1', [StepT, StepOp, CurT]));
-  EmitLine(Format('  storew %s, %%_var_%s', [StepT, AStmt.VarName]));
+  EmitLine(Format('  storew %s, %s', [StepT, VarRef(AStmt.VarName, AStmt.IsGlobal)]));
   EmitLine(Format('  jmp @%s', [LblCond]));
 
   { Continuation block }
@@ -693,10 +801,12 @@ begin
   { Loop body block }
   EmitLine('@' + LblBody);
   FBreakLabels.Add(LblEnd);
+  FContinueLabels.Add(LblCond);
   try
     EmitStmt(AStmt.Body);
   finally
     FBreakLabels.Delete(FBreakLabels.Count - 1);
+    FContinueLabels.Delete(FContinueLabels.Count - 1);
   end;
   EmitLine(Format('  jmp @%s', [LblCond]));
 
@@ -727,6 +837,7 @@ var
   LblEnd:    string;
   ISFld:     TFieldInfo;
   ISAddrT:   string;
+  ExtTemp:   string;
 begin
   if AAssign.Expr.ResolvedType = nil then
     raise ECodeGenError.CreateFmt(
@@ -736,7 +847,7 @@ begin
   if AAssign.ImplicitSelfField <> nil then
   begin
     ISFld   := TFieldInfo(AAssign.ImplicitSelfField);
-    ValTemp := EmitExpr(AAssign.Expr);
+    { Compute destination address = Self + field offset }
     ObjTemp := AllocTemp;
     EmitLine(Format('  %s =l loadl %%_var_Self', [ObjTemp]));
     if ISFld.Offset > 0 then
@@ -745,11 +856,52 @@ begin
       EmitLine(Format('  %s =l add %s, %d', [ISAddrT, ObjTemp, ISFld.Offset]));
       ObjTemp := ISAddrT;
     end;
+    { Record field: ARC-correct copy or direct sret }
+    if ISFld.TypeDesc.Kind = tyRecord then
+    begin
+      ClassRT := TRecordTypeDesc(ISFld.TypeDesc);
+      if IsRecordCall(AAssign.Expr) then
+      begin
+        EmitRecordReleaseFields(ClassRT, ObjTemp);
+        EmitLine(Format('  call $memset(l %s, w 0, l %d)', [ObjTemp, ClassRT.TotalSize]));
+        EmitRecordCallSret(AAssign.Expr, ObjTemp);
+      end
+      else
+      begin
+        ValTemp := EmitExpr(AAssign.Expr);
+        EmitRecordCopy(ClassRT, ObjTemp, ValTemp);
+      end;
+      Exit;
+    end;
+    ValTemp := EmitExpr(AAssign.Expr);
     QType := QbeTypeOf(ISFld.TypeDesc);
     if QType = 'w' then
       EmitLine(Format('  storew %s, %s', [ValTemp, ObjTemp]))
     else
+    begin
+      if QbeTypeOf(AAssign.Expr.ResolvedType) = 'w' then
+      begin
+        ExtTemp := AllocTemp;
+        EmitLine(Format('  %s =l extsw %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end;
+      { ARC for class/string field stored via implicit Self.Field }
+      if ISFld.TypeDesc.IsString then
+      begin
+        OldTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [OldTemp, ObjTemp]));
+        EmitLine(Format('  call $_StringAddRef(l %s)',  [ValTemp]));
+        EmitLine(Format('  call $_StringRelease(l %s)', [OldTemp]));
+      end
+      else if ISFld.TypeDesc.Kind = tyClass then
+      begin
+        OldTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [OldTemp, ObjTemp]));
+        EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
+        EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
+      end;
       EmitLine(Format('  storel %s, %s', [ValTemp, ObjTemp]));
+    end;
     Exit;
   end;
 
@@ -780,17 +932,17 @@ begin
     EmitLine(Format('  jmp @%s', [LblEnd]));
     EmitLine('@' + LblOk);
     if AAssign.IsWeakLhs then
-      EmitLine(Format('  call $_WeakAssign(l %%_var_%s_obj, l %s)',
-        [AAssign.Name, ObjTemp]))
+      EmitLine(Format('  call $_WeakAssign(l %s_obj, l %s)',
+        [VarRef(AAssign.Name, AAssign.IsGlobal), ObjTemp]))
     else
     begin
       OldTemp := AllocTemp;
-      EmitLine(Format('  %s =l loadl %%_var_%s_obj', [OldTemp, AAssign.Name]));
+      EmitLine(Format('  %s =l loadl %s_obj', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
       EmitLine(Format('  call $_ClassAddRef(l %s)',  [ObjTemp]));
       EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
-      EmitLine(Format('  storel %s, %%_var_%s_obj',  [ObjTemp, AAssign.Name]));
+      EmitLine(Format('  storel %s, %s_obj',  [ObjTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     end;
-    EmitLine(Format('  storel %s, %%_var_%s_itab', [ItabTemp, AAssign.Name]));
+    EmitLine(Format('  storel %s, %s_itab', [ItabTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     EmitLine('@' + LblEnd);
     Exit;
   end;
@@ -808,17 +960,17 @@ begin
     ItabName := '$itab_' + ClassRT.Name + '_' + IntfDesc.Name;
     ValTemp  := EmitExpr(AAssign.Expr);
     if AAssign.IsWeakLhs then
-      EmitLine(Format('  call $_WeakAssign(l %%_var_%s_obj, l %s)',
-        [AAssign.Name, ValTemp]))
+      EmitLine(Format('  call $_WeakAssign(l %s_obj, l %s)',
+        [VarRef(AAssign.Name, AAssign.IsGlobal), ValTemp]))
     else
     begin
       OldTemp := AllocTemp;
-      EmitLine(Format('  %s =l loadl %%_var_%s_obj', [OldTemp, AAssign.Name]));
+      EmitLine(Format('  %s =l loadl %s_obj', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
       EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
       EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
-      EmitLine(Format('  storel %s, %%_var_%s_obj',  [ValTemp, AAssign.Name]));
+      EmitLine(Format('  storel %s, %s_obj',  [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     end;
-    EmitLine(Format('  storel %s, %%_var_%s_itab', [ItabName, AAssign.Name]));
+    EmitLine(Format('  storel %s, %s_itab', [ItabName, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     Exit;
   end;
 
@@ -833,23 +985,23 @@ begin
   begin
     ObjTemp  := AllocTemp;
     ItabTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %%_var_%s_obj',
-      [ObjTemp, TIdentExpr(AAssign.Expr).Name]));
-    EmitLine(Format('  %s =l loadl %%_var_%s_itab',
-      [ItabTemp, TIdentExpr(AAssign.Expr).Name]));
+    EmitLine(Format('  %s =l loadl %s_obj',
+      [ObjTemp, VarRef(TIdentExpr(AAssign.Expr).Name, TIdentExpr(AAssign.Expr).IsGlobal)]));
+    EmitLine(Format('  %s =l loadl %s_itab',
+      [ItabTemp, VarRef(TIdentExpr(AAssign.Expr).Name, TIdentExpr(AAssign.Expr).IsGlobal)]));
     if AAssign.IsWeakLhs then
     begin
-      EmitLine(Format('  call $_WeakAssign(l %%_var_%s_obj, l %s)',
-        [AAssign.Name, ObjTemp]));
-      EmitLine(Format('  storel %s, %%_var_%s_itab', [ItabTemp, AAssign.Name]));
+      EmitLine(Format('  call $_WeakAssign(l %s_obj, l %s)',
+        [VarRef(AAssign.Name, AAssign.IsGlobal), ObjTemp]));
+      EmitLine(Format('  storel %s, %s_itab', [ItabTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
       Exit;
     end;
     OldTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %%_var_%s_obj', [OldTemp, AAssign.Name]));
+    EmitLine(Format('  %s =l loadl %s_obj', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     EmitLine(Format('  call $_ClassAddRef(l %s)',  [ObjTemp]));
     EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
-    EmitLine(Format('  storel %s, %%_var_%s_obj',  [ObjTemp, AAssign.Name]));
-    EmitLine(Format('  storel %s, %%_var_%s_itab', [ItabTemp, AAssign.Name]));
+    EmitLine(Format('  storel %s, %s_obj',  [ObjTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    EmitLine(Format('  storel %s, %s_itab', [ItabTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     Exit;
   end;
 
@@ -864,15 +1016,35 @@ begin
                    else StoreInstr := 'storel';
     EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, PtrTemp]));
   end
+  else if (AAssign.ResolvedLhsType <> nil) and
+          (AAssign.ResolvedLhsType.Kind = tyRecord) then
+  begin
+    { Record assignment: use sret (directly into dest) or field-by-field copy }
+    ClassRT := TRecordTypeDesc(AAssign.ResolvedLhsType);
+    if IsRecordCall(AAssign.Expr) then
+    begin
+      { Release old ARC fields, zero the slot, then call function with dest as sret }
+      EmitRecordReleaseFields(ClassRT, VarRef(AAssign.Name, AAssign.IsGlobal));
+      EmitLine(Format('  call $memset(l %s, w 0, l %d)',
+        [VarRef(AAssign.Name, AAssign.IsGlobal), ClassRT.TotalSize]));
+      EmitRecordCallSret(AAssign.Expr, VarRef(AAssign.Name, AAssign.IsGlobal));
+    end
+    else
+    begin
+      { RHS is a record variable: get its address then ARC-copy field-by-field }
+      ValTemp := EmitExpr(AAssign.Expr);
+      EmitRecordCopy(ClassRT, VarRef(AAssign.Name, AAssign.IsGlobal), ValTemp);
+    end;
+  end
   else if AAssign.Expr.ResolvedType.IsString then
   begin
     { ARC: load old, compute new, retain new, release old, store new }
     OldTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %%_var_%s', [OldTemp, AAssign.Name]));
+    EmitLine(Format('  %s =l loadl %s', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     ValTemp := EmitExpr(AAssign.Expr);
     EmitLine(Format('  call $_StringAddRef(l %s)', [ValTemp]));
     EmitLine(Format('  call $_StringRelease(l %s)', [OldTemp]));
-    EmitLine(Format('  storel %s, %%_var_%s', [ValTemp, AAssign.Name]));
+    EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
   end
   else if AAssign.IsWeakLhs and (AAssign.Expr.ResolvedType.Kind = tyClass) then
   begin
@@ -881,27 +1053,44 @@ begin
       the target is released) and the new value; it handles unregistering
       any prior registration for this slot. }
     ValTemp := EmitExpr(AAssign.Expr);
-    EmitLine(Format('  call $_WeakAssign(l %%_var_%s, l %s)',
-      [AAssign.Name, ValTemp]));
+    EmitLine(Format('  call $_WeakAssign(l %s, l %s)',
+      [VarRef(AAssign.Name, AAssign.IsGlobal), ValTemp]));
   end
   else if AAssign.Expr.ResolvedType.Kind = tyClass then
   begin
     { ARC: load old class reference, evaluate new, retain new, release old,
       store new.  Matches the string ARC idiom one-for-one. }
     OldTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %%_var_%s', [OldTemp, AAssign.Name]));
+    EmitLine(Format('  %s =l loadl %s', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     ValTemp := EmitExpr(AAssign.Expr);
     EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
     EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
-    EmitLine(Format('  storel %s, %%_var_%s', [ValTemp, AAssign.Name]));
+    EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
   end
   else
   begin
-    QType   := QbeTypeOf(AAssign.Expr.ResolvedType);
-    ValTemp := EmitExpr(AAssign.Expr);
-    if QType = 'w' then StoreInstr := 'storew'
-                   else StoreInstr := 'storel';
-    EmitLine(Format('  %s %s, %%_var_%s', [StoreInstr, ValTemp, AAssign.Name]));
+    { Use LHS type (if known) for the store instruction, so that assigning a
+      small int to an Int64 variable uses storel rather than storew. }
+    if (AAssign.ResolvedLhsType <> nil) and
+       (QbeTypeOf(AAssign.ResolvedLhsType) = 'l') then
+    begin
+      ValTemp := EmitExpr(AAssign.Expr);
+      if QbeTypeOf(AAssign.Expr.ResolvedType) = 'w' then
+      begin
+        ExtTemp := AllocTemp;
+        EmitLine(Format('  %s =l extsw %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end;
+      EmitLine(Format('  storel %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    end
+    else
+    begin
+      QType   := QbeTypeOf(AAssign.Expr.ResolvedType);
+      ValTemp := EmitExpr(AAssign.Expr);
+      if QType = 'w' then StoreInstr := 'storew'
+                     else StoreInstr := 'storel';
+      EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    end;
   end;
 end;
 
@@ -912,18 +1101,37 @@ var
   Base:   string;
   Ptr:    string;
   Loaded: string;
+  SelfT:  string;
+  ImplFld: TFieldInfo;
 begin
   if AExpr is TIdentExpr then
   begin
     Id := TIdentExpr(AExpr);
+    { Implicit Self field used as a chain base: load value through Self }
+    if Id.IsImplicitSelf then
+    begin
+      ImplFld := TFieldInfo(Id.ImplicitFieldInfo);
+      SelfT   := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_Self', [SelfT]));
+      if ImplFld.Offset > 0 then
+      begin
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d', [Ptr, SelfT, ImplFld.Offset]));
+        SelfT := Ptr;
+      end;
+      Loaded := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [Loaded, SelfT]));
+      Result := Loaded;
+      Exit;
+    end;
     if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyClass) then
     begin
       Loaded := AllocTemp;
-      EmitLine(Format('  %s =l loadl %%_var_%s', [Loaded, Id.Name]));
+      EmitLine(Format('  %s =l loadl %s', [Loaded, VarRef(Id.Name, Id.IsGlobal)]));
       Result := Loaded;
     end
     else
-      Result := Format('%%_var_%s', [Id.Name]);  { inline record }
+      Result := VarRef(Id.Name, Id.IsGlobal);  { inline record }
     Exit;
   end;
 
@@ -940,11 +1148,11 @@ begin
       if Fld.IsClassAccess then
       begin
         Loaded := AllocTemp;
-        EmitLine(Format('  %s =l loadl %%_var_%s', [Loaded, Fld.RecordName]));
+        EmitLine(Format('  %s =l loadl %s', [Loaded, VarRef(Fld.RecordName, Fld.IsGlobal)]));
         Base := Loaded;
       end
       else
-        Base := Format('%%_var_%s', [Fld.RecordName]);
+        Base := VarRef(Fld.RecordName, Fld.IsGlobal);
     end;
     if Fld.FieldInfo = nil then
       raise ECodeGenError.Create(
@@ -970,6 +1178,14 @@ begin
     Exit;
   end;
 
+  { Other expression shapes (method calls, typecasts, etc.) — evaluate the
+    expression and use the resulting value as the pointer. }
+  if (AExpr.ResolvedType <> nil) and
+     (AExpr.ResolvedType.Kind in [tyClass, tyInterface, tyPointer, tyRecord]) then
+  begin
+    Result := EmitExpr(AExpr);
+    Exit;
+  end;
   raise ECodeGenError.Create('EmitInstancePtr: unsupported base expression');
 end;
 
@@ -989,9 +1205,245 @@ begin
   end;
 end;
 
+function TCodeGenQBE.VarRef(const AName: string; AIsGlobal: Boolean): string;
+begin
+  if AIsGlobal then
+    Result := '$' + AName
+  else
+    Result := '%_var_' + AName;
+end;
+
+function TCodeGenQBE.IsRecordCall(AExpr: TASTExpr): Boolean;
+var
+  MDecl: TMethodDecl;
+  FldA:  TFieldAccessExpr;
+begin
+  Result := False;
+  if AExpr is TFuncCallExpr then
+  begin
+    if TFuncCallExpr(AExpr).ResolvedDecl = nil then Exit;
+    MDecl := TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl);
+    Result := (MDecl.ResolvedReturnType <> nil) and
+              (MDecl.ResolvedReturnType.Kind = tyRecord);
+  end
+  else if AExpr is TMethodCallExpr then
+  begin
+    if TMethodCallExpr(AExpr).ResolvedMethod = nil then Exit;
+    MDecl := TMethodDecl(TMethodCallExpr(AExpr).ResolvedMethod);
+    Result := (MDecl.ResolvedReturnType <> nil) and
+              (MDecl.ResolvedReturnType.Kind = tyRecord);
+  end
+  else if AExpr is TFieldAccessExpr then
+  begin
+    FldA := TFieldAccessExpr(AExpr);
+    if not FldA.IsMethodCall then Exit;
+    if FldA.ResolvedMethod = nil then Exit;
+    MDecl := TMethodDecl(FldA.ResolvedMethod);
+    Result := (MDecl.ResolvedReturnType <> nil) and
+              (MDecl.ResolvedReturnType.Kind = tyRecord);
+  end;
+end;
+
+procedure TCodeGenQBE.EmitRecordCopy(ARec: TRecordTypeDesc;
+  const ADestAddr, ASrcAddr: string);
+var
+  I:        Integer;
+  F:        TFieldInfo;
+  SrcField: string;
+  DstField: string;
+  ValTemp:  string;
+  OldTemp:  string;
+begin
+  for I := 0 to ARec.Fields.Count - 1 do
+  begin
+    F := TFieldInfo(ARec.Fields[I]);
+    if F.TypeDesc = nil then Continue;
+    if F.Offset > 0 then
+    begin
+      SrcField := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d', [SrcField, ASrcAddr, F.Offset]));
+      DstField := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d', [DstField, ADestAddr, F.Offset]));
+    end
+    else
+    begin
+      SrcField := ASrcAddr;
+      DstField := ADestAddr;
+    end;
+    if F.TypeDesc.IsString then
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [ValTemp, SrcField]));
+      OldTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [OldTemp, DstField]));
+      EmitLine(Format('  call $_StringAddRef(l %s)', [ValTemp]));
+      EmitLine(Format('  call $_StringRelease(l %s)', [OldTemp]));
+      EmitLine(Format('  storel %s, %s', [ValTemp, DstField]));
+    end
+    else if F.TypeDesc.Kind = tyClass then
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [ValTemp, SrcField]));
+      OldTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [OldTemp, DstField]));
+      EmitLine(Format('  call $_ClassAddRef(l %s)', [ValTemp]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
+      EmitLine(Format('  storel %s, %s', [ValTemp, DstField]));
+    end
+    else if QbeTypeOf(F.TypeDesc) = 'w' then
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =w loadw %s', [ValTemp, SrcField]));
+      EmitLine(Format('  storew %s, %s', [ValTemp, DstField]));
+    end
+    else
+    begin
+      ValTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [ValTemp, SrcField]));
+      EmitLine(Format('  storel %s, %s', [ValTemp, DstField]));
+    end;
+  end;
+end;
+
+procedure TCodeGenQBE.EmitRecordCallSret(AExpr: TASTExpr;
+  const ASretAddr: string);
+var
+  FCallExpr: TFuncCallExpr;
+  MCallExpr: TMethodCallExpr;
+  FldAccess: TFieldAccessExpr;
+  MDecl:     TMethodDecl;
+  ArgLine:   string;
+  ArgTemp:   string;
+  SelfTemp:  string;
+  Par:       TMethodParam;
+  I:         Integer;
+  FuncName:  string;
+  Ptr:       string;
+begin
+  if AExpr is TFuncCallExpr then
+  begin
+    FCallExpr := TFuncCallExpr(AExpr);
+    MDecl := TMethodDecl(FCallExpr.ResolvedDecl);
+    if FCallExpr.IsImplicitSelfMethod then
+    begin
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_Self', [SelfTemp]));
+      FuncName := '$' + QBEMangle(MDecl.OwnerTypeName + '_' + FCallExpr.Name);
+      ArgLine  := Format('l %s, l %s', [ASretAddr, SelfTemp]);
+    end
+    else
+    begin
+      FuncName := '$' + QBEMangle(FCallExpr.Name);
+      ArgLine  := Format('l %s', [ASretAddr]);
+    end;
+    for I := 0 to FCallExpr.Args.Count - 1 do
+    begin
+      Par := TMethodParam(MDecl.Params[I]);
+      if Par.IsVarParam then
+        ArgLine := ArgLine + Format(', l %s',
+          [VarRef(TIdentExpr(TASTExpr(FCallExpr.Args[I])).Name,
+                  TIdentExpr(TASTExpr(FCallExpr.Args[I])).IsGlobal)])
+      else
+      begin
+        ArgTemp := EmitExpr(TASTExpr(FCallExpr.Args[I]));
+        ArgLine := ArgLine + Format(', %s %s',
+          [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+      end;
+    end;
+    EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+  end
+  else if AExpr is TMethodCallExpr then
+  begin
+    MCallExpr := TMethodCallExpr(AExpr);
+    MDecl := TMethodDecl(MCallExpr.ResolvedMethod);
+    SelfTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %s',
+      [SelfTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
+    FuncName := '$' + QBEMangle(MDecl.OwnerTypeName + '_' + MCallExpr.Name);
+    ArgLine  := Format('l %s, l %s', [ASretAddr, SelfTemp]);
+    for I := 0 to MCallExpr.Args.Count - 1 do
+    begin
+      Par := TMethodParam(MDecl.Params[I]);
+      if Par.IsVarParam then
+        ArgLine := ArgLine + Format(', l %s',
+          [VarRef(TIdentExpr(TASTExpr(MCallExpr.Args[I])).Name,
+                  TIdentExpr(TASTExpr(MCallExpr.Args[I])).IsGlobal)])
+      else
+      begin
+        ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args[I]));
+        ArgLine := ArgLine + Format(', %s %s',
+          [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+      end;
+    end;
+    EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+  end
+  else if AExpr is TFieldAccessExpr then
+  begin
+    FldAccess := TFieldAccessExpr(AExpr);
+    MDecl := TMethodDecl(FldAccess.ResolvedMethod);
+    if FldAccess.IsImplicitSelf then
+    begin
+      { FLexer.Next from inside a TParser method: load Self, add offset, load class ptr }
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_Self', [SelfTemp]));
+      if FldAccess.ImplicitBaseInfo.Offset > 0 then
+      begin
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d',
+          [Ptr, SelfTemp, FldAccess.ImplicitBaseInfo.Offset]));
+        SelfTemp := Ptr;
+      end;
+      if FldAccess.IsClassAccess then
+      begin
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [Ptr, SelfTemp]));
+        SelfTemp := Ptr;
+      end;
+    end
+    else
+    begin
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s',
+        [SelfTemp, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+    end;
+    FuncName := '$' + QBEMangle(MDecl.OwnerTypeName + '_' + FldAccess.FieldName);
+    ArgLine  := Format('l %s, l %s', [ASretAddr, SelfTemp]);
+    EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+  end;
+end;
+
+procedure TCodeGenQBE.EmitRecordReleaseFields(ARec: TRecordTypeDesc;
+  const AAddr: string);
+var
+  I:       Integer;
+  F:       TFieldInfo;
+  FldAddr: string;
+  ValT:    string;
+begin
+  for I := 0 to ARec.Fields.Count - 1 do
+  begin
+    F := TFieldInfo(ARec.Fields[I]);
+    if F.TypeDesc = nil then Continue;
+    if not (F.TypeDesc.IsString or (F.TypeDesc.Kind = tyClass)) then Continue;
+    if F.Offset > 0 then
+    begin
+      FldAddr := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d', [FldAddr, AAddr, F.Offset]));
+    end
+    else
+      FldAddr := AAddr;
+    ValT := AllocTemp;
+    EmitLine(Format('  %s =l loadl %s', [ValT, FldAddr]));
+    if F.TypeDesc.IsString then
+      EmitLine(Format('  call $_StringRelease(l %s)', [ValT]))
+    else
+      EmitLine(Format('  call $_ClassRelease(l %s)', [ValT]));
+  end;
+end;
+
 procedure TCodeGenQBE.EmitFieldAssignment(AAssign: TFieldAssignment);
 var
-  Ptr, PtrTemp, ValTemp, OldTemp, QType, StoreInstr: string;
+  Ptr, PtrTemp, ValTemp, OldTemp, QType, StoreInstr, ExtTemp: string;
   IsArc: Boolean;
   IsStr: Boolean;
 begin
@@ -1002,11 +1454,57 @@ begin
 
   ValTemp := EmitExpr(AAssign.Expr);
 
-  if AAssign.IsClassAccess then
+  if AAssign.ObjExpr <> nil then
+  begin
+    { Receiver is an arbitrary expression — emit it, then offset to the field }
+    PtrTemp := EmitExpr(AAssign.ObjExpr);
+    if AAssign.IsClassAccess then
+    begin
+      Ptr := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [Ptr, PtrTemp]));
+      PtrTemp := Ptr;
+    end;
+    if AAssign.FieldInfo.Offset > 0 then
+    begin
+      Ptr := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d', [Ptr, PtrTemp, AAssign.FieldInfo.Offset]));
+    end
+    else
+      Ptr := PtrTemp;
+  end
+  else if AAssign.IsImplicitSelf then
+  begin
+    { Implicit Self.Base.Field — Base is a field of Self }
+    PtrTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %%_var_Self', [PtrTemp]));
+    if AAssign.ImplicitBaseInfo.Offset > 0 then
+    begin
+      Ptr := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d',
+        [Ptr, PtrTemp, AAssign.ImplicitBaseInfo.Offset]));
+      PtrTemp := Ptr;
+    end;
+    if AAssign.IsClassAccess then
+    begin
+      { Base field holds a class pointer; load it }
+      Ptr := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [Ptr, PtrTemp]));
+      PtrTemp := Ptr;
+    end;
+    if AAssign.FieldInfo.Offset > 0 then
+    begin
+      Ptr := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d',
+        [Ptr, PtrTemp, AAssign.FieldInfo.Offset]));
+    end
+    else
+      Ptr := PtrTemp;
+  end
+  else if AAssign.IsClassAccess then
   begin
     { Load the heap pointer stored in the class variable }
     PtrTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %%_var_%s', [PtrTemp, AAssign.RecordName]));
+    EmitLine(Format('  %s =l loadl %s', [PtrTemp, VarRef(AAssign.RecordName, AAssign.IsGlobal)]));
     if AAssign.FieldInfo.Offset > 0 then
     begin
       Ptr := AllocTemp;
@@ -1048,7 +1546,17 @@ begin
   begin
     QType := QbeTypeOf(AAssign.FieldInfo.TypeDesc);
     if QType = 'w' then StoreInstr := 'storew'
-                   else StoreInstr := 'storel';
+                   else
+                   begin
+                     StoreInstr := 'storel';
+                     { Sign-extend if the value is word-typed but the field needs l }
+                     if QbeTypeOf(AAssign.Expr.ResolvedType) = 'w' then
+                     begin
+                       ExtTemp := AllocTemp;
+                       EmitLine(Format('  %s =l extsw %s', [ExtTemp, ValTemp]));
+                       ValTemp := ExtTemp;
+                     end;
+                   end;
     EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, Ptr]));
   end;
 end;
@@ -1075,9 +1583,9 @@ begin
   begin
     IntfDesc := TInterfaceTypeDesc(ACall.ResolvedClassType);
     SelfTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %%_var_%s_obj', [SelfTemp, ACall.ObjectName]));
+    EmitLine(Format('  %s =l loadl %s_obj', [SelfTemp, VarRef(ACall.ObjectName, ACall.IsGlobal)]));
     VTblTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %%_var_%s_itab', [VTblTemp, ACall.ObjectName]));
+    EmitLine(Format('  %s =l loadl %s_itab', [VTblTemp, VarRef(ACall.ObjectName, ACall.IsGlobal)]));
     SlotOff  := IntfDesc.MethodIndex(ACall.Name) * 8;
     FPtrTemp := AllocTemp;
     if SlotOff = 0 then
@@ -1092,6 +1600,40 @@ begin
     Exit;
   end;
 
+  { Call on an arbitrary receiver expression: evaluate and use as Self }
+  if ACall.ObjExpr <> nil then
+  begin
+    SelfTemp := EmitExpr(ACall.ObjExpr);
+    RT    := TRecordTypeDesc(ACall.ResolvedClassType);
+    MDecl := TMethodDecl(ACall.ResolvedMethod);
+    if (MDecl = nil) and SameText(ACall.Name, 'Free') then
+    begin
+      EmitLine(Format('  call $_ClassRelease(l %s)', [SelfTemp]));
+      Exit;
+    end;
+    ArgLine := Format('l %s', [SelfTemp]);
+    for I := 0 to ACall.Args.Count - 1 do
+    begin
+      Par := TMethodParam(MDecl.Params[I]);
+      if Par.IsVarParam then
+        ArgLine := ArgLine + Format(', l %s',
+          [VarRef(TIdentExpr(TASTExpr(ACall.Args[I])).Name,
+                  TIdentExpr(TASTExpr(ACall.Args[I])).IsGlobal)])
+      else
+      begin
+        ArgTemp := EmitExpr(TASTExpr(ACall.Args[I]));
+        QType   := QbeTypeOf(Par.ResolvedType);
+        ArgLine := ArgLine + Format(', %s %s', [QType, ArgTemp]);
+      end;
+    end;
+    if MDecl.OwnerTypeName <> '' then
+      FuncName := '$' + MDecl.OwnerTypeName + '_' + ACall.Name
+    else
+      FuncName := '$' + RT.Name + '_' + ACall.Name;
+    EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
+    Exit;
+  end;
+
   { Built-in Free: release the instance (decrement refcount; free at zero)
     and nil out the slot.  Under universal ARC, Free is a sanctioned synonym
     for immediate release — if other references remain, the block survives
@@ -1100,9 +1642,28 @@ begin
   if (ACall.ResolvedMethod = nil) and SameText(ACall.Name, 'Free') then
   begin
     SelfTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %%_var_%s', [SelfTemp, ACall.ObjectName]));
+    if ACall.IsImplicitSelf then
+    begin
+      { Free called on Self.Field: load Self, get field slot address, load value,
+        release, then zero the slot. }
+      EmitLine(Format('  %s =l loadl %%_var_Self', [SelfTemp]));
+      if ACall.ImplicitBaseInfo.Offset > 0 then
+      begin
+        FPtrTemp := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d',
+          [FPtrTemp, SelfTemp, ACall.ImplicitBaseInfo.Offset]));
+      end
+      else
+        FPtrTemp := SelfTemp;
+      ArgTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [ArgTemp, FPtrTemp]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [ArgTemp]));
+      EmitLine(Format('  storel 0, %s', [FPtrTemp]));
+      Exit;
+    end;
+    EmitLine(Format('  %s =l loadl %s', [SelfTemp, VarRef(ACall.ObjectName, ACall.IsGlobal)]));
     EmitLine(Format('  call $_ClassRelease(l %s)', [SelfTemp]));
-    EmitLine(Format('  storel 0, %%_var_%s', [ACall.ObjectName]));
+    EmitLine(Format('  storel 0, %s', [VarRef(ACall.ObjectName, ACall.IsGlobal)]));
     Exit;
   end;
 
@@ -1111,16 +1672,39 @@ begin
 
   { Load the object pointer (Self) from the caller's variable slot }
   SelfTemp := AllocTemp;
-  EmitLine(Format('  %s =l loadl %%_var_%s', [SelfTemp, ACall.ObjectName]));
+  if ACall.IsImplicitSelf then
+  begin
+    { Load Self, add field offset, load the class pointer from there }
+    EmitLine(Format('  %s =l loadl %%_var_Self', [SelfTemp]));
+    if ACall.ImplicitBaseInfo.Offset > 0 then
+    begin
+      FPtrTemp := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d',
+        [FPtrTemp, SelfTemp, ACall.ImplicitBaseInfo.Offset]));
+      SelfTemp := FPtrTemp;
+    end;
+    FPtrTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %s', [FPtrTemp, SelfTemp]));
+    SelfTemp := FPtrTemp;
+  end
+  else
+    EmitLine(Format('  %s =l loadl %s', [SelfTemp, VarRef(ACall.ObjectName, ACall.IsGlobal)]));
 
   { Build argument string: l Self, then each explicit arg }
   ArgLine := Format('l %s', [SelfTemp]);
   for I := 0 to ACall.Args.Count - 1 do
   begin
-    Par     := TMethodParam(MDecl.Params[I]);
-    ArgTemp := EmitExpr(TASTExpr(ACall.Args[I]));
-    QType   := QbeTypeOf(Par.ResolvedType);
-    ArgLine := ArgLine + Format(', %s %s', [QType, ArgTemp]);
+    Par := TMethodParam(MDecl.Params[I]);
+    if Par.IsVarParam then
+      ArgLine := ArgLine + Format(', l %s',
+        [VarRef(TIdentExpr(TASTExpr(ACall.Args[I])).Name,
+                TIdentExpr(TASTExpr(ACall.Args[I])).IsGlobal)])
+    else
+    begin
+      ArgTemp := EmitExpr(TASTExpr(ACall.Args[I]));
+      QType   := QbeTypeOf(Par.ResolvedType);
+      ArgLine := ArgLine + Format(', %s %s', [QType, ArgTemp]);
+    end;
   end;
 
   if MDecl.VTableSlot >= 0 then
@@ -1298,8 +1882,13 @@ begin
   FuncName := '$' + ATypeName + '_' + AMethod.Name;
   IsFunc   := AMethod.ResolvedReturnType <> nil;
 
-  { Build parameter signature: l %_par_Self [, qtype %_par_Name ...] }
-  Sig := 'l %_par_Self';
+  { Build parameter signature.
+    sret functions: l %_par__sret comes first, then l %_par_Self.
+    Regular methods: just l %_par_Self first. }
+  if IsFunc and (AMethod.ResolvedReturnType.Kind = tyRecord) then
+    Sig := 'l %_par__sret, l %_par_Self'
+  else
+    Sig := 'l %_par_Self';
   for I := 0 to AMethod.Params.Count - 1 do
   begin
     Par := TMethodParam(AMethod.Params[I]);
@@ -1313,7 +1902,11 @@ begin
   if IsFunc then
   begin
     RetQType := QbeTypeOf(AMethod.ResolvedReturnType);
-    EmitLine(Format('function %s %s(%s) {', [RetQType, FuncName, Sig]));
+    if AMethod.ResolvedReturnType.Kind = tyRecord then
+      { sret: function becomes void }
+      EmitLine(Format('function %s(%s) {', [FuncName, Sig]))
+    else
+      EmitLine(Format('function %s %s(%s) {', [RetQType, FuncName, Sig]));
   end
   else
     EmitLine(Format('function %s(%s) {', [FuncName, Sig]));
@@ -1337,10 +1930,13 @@ begin
     end;
   end;
 
-  { For function methods, allocate a zero-initialised Result slot }
+  { For function methods, allocate/alias a zero-initialised Result slot }
   if IsFunc then
   begin
-    if RetQType = 'w' then
+    if AMethod.ResolvedReturnType.Kind = tyRecord then
+      { sret: Result IS the caller's buffer — no allocation needed }
+      EmitLine('  %_var_Result =l copy %_par__sret')
+    else if RetQType = 'w' then
     begin
       EmitLine('  %_var_Result =l alloc4 1');
       EmitLine('  storew 0, %_var_Result');
@@ -1375,12 +1971,17 @@ begin
 
   if IsFunc then
   begin
-    RetTemp := AllocTemp;
-    if RetQType = 'w' then
-      EmitLine(Format('  %s =w loadw %%_var_Result', [RetTemp]))
+    if AMethod.ResolvedReturnType.Kind = tyRecord then
+      EmitLine('  ret')  { sret: caller's buffer already holds result }
     else
-      EmitLine(Format('  %s =l loadl %%_var_Result', [RetTemp]));
-    EmitLine(Format('  ret %s', [RetTemp]));
+    begin
+      RetTemp := AllocTemp;
+      if RetQType = 'w' then
+        EmitLine(Format('  %s =w loadw %%_var_Result', [RetTemp]))
+      else
+        EmitLine(Format('  %s =l loadl %%_var_Result', [RetTemp]));
+      EmitLine(Format('  ret %s', [RetTemp]));
+    end;
   end
   else
     EmitLine('  ret');
@@ -1731,7 +2332,15 @@ begin
   if IsFunc then
   begin
     RetQType := QbeTypeOf(ADecl.ResolvedReturnType);
-    EmitLine(Format('%sfunction %s %s(%s) {', [Prefix, RetQType, FuncName, Sig]));
+    if ADecl.ResolvedReturnType.Kind = tyRecord then
+    begin
+      { sret: prepend hidden result-buffer pointer; function becomes void }
+      if Sig <> '' then Sig := 'l %_par__sret, ' + Sig
+      else Sig := 'l %_par__sret';
+      EmitLine(Format('%sfunction %s(%s) {', [Prefix, FuncName, Sig]));
+    end
+    else
+      EmitLine(Format('%sfunction %s %s(%s) {', [Prefix, RetQType, FuncName, Sig]));
   end
   else
     EmitLine(Format('%sfunction %s(%s) {', [Prefix, FuncName, Sig]));
@@ -1787,7 +2396,10 @@ begin
 
   if IsFunc then
   begin
-    if RetQType = 'w' then
+    if ADecl.ResolvedReturnType.Kind = tyRecord then
+      { sret: Result IS the caller's buffer — no allocation needed }
+      EmitLine('  %_var_Result =l copy %_par__sret')
+    else if RetQType = 'w' then
     begin
       EmitLine('  %_var_Result =l alloc4 1');
       EmitLine('  storew 0, %_var_Result');
@@ -1829,12 +2441,17 @@ begin
 
   if IsFunc then
   begin
-    RetTemp := AllocTemp;
-    if RetQType = 'w' then
-      EmitLine(Format('  %s =w loadw %%_var_Result', [RetTemp]))
+    if ADecl.ResolvedReturnType.Kind = tyRecord then
+      EmitLine('  ret')  { sret: caller's buffer already holds result }
     else
-      EmitLine(Format('  %s =l loadl %%_var_Result', [RetTemp]));
-    EmitLine(Format('  ret %s', [RetTemp]));
+    begin
+      RetTemp := AllocTemp;
+      if RetQType = 'w' then
+        EmitLine(Format('  %s =w loadw %%_var_Result', [RetTemp]))
+      else
+        EmitLine(Format('  %s =l loadl %%_var_Result', [RetTemp]));
+      EmitLine(Format('  ret %s', [RetTemp]));
+    end;
   end
   else
     EmitLine('  ret');
@@ -1860,6 +2477,8 @@ begin
     if Decl.OwnerTypeName <> '' then Continue;
     { Generic templates — concrete instances are emitted via GenericFuncInstances. }
     if Decl.TypeParams <> nil then Continue;
+    { Forward declarations — impl appears later in ProcDecls }
+    if Decl.Body = nil then Continue;
     EmitStandaloneDef(Decl);
   end;
   { Emit each concrete generic function instance }
@@ -1882,16 +2501,35 @@ begin
   { User-defined procedure }
   if ACall.ResolvedDecl <> nil then
   begin
-    MDecl   := TMethodDecl(ACall.ResolvedDecl);
+    MDecl := TMethodDecl(ACall.ResolvedDecl);
+    if ACall.IsImplicitSelfMethod then
+    begin
+      { Implicit Self.Method — load Self pointer and pass as first arg }
+      ArgTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_Self', [ArgTemp]));
+      ArgLine := Format('l %s', [ArgTemp]);
+      for I := 0 to ACall.Args.Count - 1 do
+      begin
+        Par     := TMethodParam(MDecl.Params[I]);
+        ArgTemp := EmitExpr(TASTExpr(ACall.Args[I]));
+        ArgLine := ArgLine + Format(', %s %s',
+          [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+      end;
+      EmitLine(Format('  call $%s_%s(%s)',
+        [MDecl.OwnerTypeName, ACall.Name, ArgLine]));
+      Exit;
+    end;
     ArgLine := '';
     for I := 0 to ACall.Args.Count - 1 do
     begin
       Par := TMethodParam(MDecl.Params[I]);
       if ArgLine <> '' then ArgLine := ArgLine + ', ';
       if Par.IsVarParam then
-        { Pass address of the variable — skip the load }
-        ArgLine := ArgLine + Format('l %%_var_%s',
-          [TIdentExpr(TASTExpr(ACall.Args[I])).Name])
+        { Pass address of the variable — global vars: $Name is the address;
+          local vars: %_var_Name is the alloc'd slot address }
+        ArgLine := ArgLine + Format('l %s',
+          [VarRef(TIdentExpr(TASTExpr(ACall.Args[I])).Name,
+                  TIdentExpr(TASTExpr(ACall.Args[I])).IsGlobal)])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(ACall.Args[I]));
@@ -1947,6 +2585,11 @@ begin
   begin
     ArgTemp := EmitExpr(TASTExpr(ACall.Args[0]));
     EmitLine(Format('  call $exit(w %s)', [ArgTemp]));
+  end
+  else if UCaseName = 'DELETEFILE' then
+  begin
+    ArgTemp := EmitExpr(TASTExpr(ACall.Args[0]));
+    EmitLine(Format('  call $_DeleteFile(l %s)', [ArgTemp]));
   end
   else
     raise ECodeGenError.CreateFmt(
@@ -2044,6 +2687,8 @@ var
   ImplFld:      TFieldInfo;
   SelfT:        string;
   PtrT:         string;
+  StrLabel:     string;
+  SretBuf:      string;
 begin
   if AExpr is TFuncCallExpr then
   begin
@@ -2136,6 +2781,15 @@ begin
         Exit;
       end;
 
+      if SameText(Name, 'Trim') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_StringTrim(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
       if SameText(Name, 'SameText') then
       begin
         L := EmitExpr(TASTExpr(Args[0]));
@@ -2193,6 +2847,15 @@ begin
         R := EmitExpr(TASTExpr(Args[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_OrdAt(l %s, w %s)', [T, L, R]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'Chr') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_Chr(w %s)', [T, L]));
         Result := T;
         Exit;
       end;
@@ -2264,6 +2927,14 @@ begin
         Exit;
       end;
 
+      if SameText(Name, 'CurrentExceptionMessage') then
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_CurrentExceptionMessage()', [T]));
+        Result := T;
+        Exit;
+      end;
+
       if SameText(Name, 'Exec') then
       begin
         L := EmitExpr(TASTExpr(Args[0]));
@@ -2289,14 +2960,55 @@ begin
 
       MDecl    := TMethodDecl(ResolvedDecl);
       QType    := QbeTypeOf(MDecl.ResolvedReturnType);
+      { sret: record-returning function — caller allocates a zero-init buffer
+        and passes its address as the first (hidden) parameter. }
+      if MDecl.ResolvedReturnType.Kind = tyRecord then
+      begin
+        RT      := TRecordTypeDesc(MDecl.ResolvedReturnType);
+        SretBuf := AllocTemp;
+        if RT.MaxAlign >= 8 then
+          EmitLine(Format('  %s =l alloc8 %d', [SretBuf, RT.TotalSize]))
+        else
+          EmitLine(Format('  %s =l alloc4 %d', [SretBuf, RT.TotalSize]));
+        if RT.TotalSize > 0 then
+          EmitLine(Format('  call $memset(l %s, w 0, l %d)', [SretBuf, RT.TotalSize]));
+        EmitRecordCallSret(AExpr, SretBuf);
+        Result := SretBuf;
+        Exit;
+      end;
+      if IsImplicitSelfMethod then
+      begin
+        ArgTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %%_var_Self', [ArgTemp]));
+        ArgLine  := Format('l %s', [ArgTemp]);
+        FuncName := '$' + MDecl.OwnerTypeName + '_' + Name;
+        for I := 0 to Args.Count - 1 do
+        begin
+          Par     := TMethodParam(MDecl.Params[I]);
+          ArgTemp := EmitExpr(TASTExpr(Args[I]));
+          ArgLine := ArgLine + Format(', %s %s',
+            [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+        end;
+        T := AllocTemp;
+        EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
+        Result := T;
+        Exit;
+      end;
       FuncName := '$' + QBEMangle(Name);
       ArgLine  := '';
       for I := 0 to Args.Count - 1 do
       begin
-        Par     := TMethodParam(MDecl.Params[I]);
-        ArgTemp := EmitExpr(TASTExpr(Args[I]));
+        Par := TMethodParam(MDecl.Params[I]);
         if ArgLine <> '' then ArgLine := ArgLine + ', ';
-        ArgLine := ArgLine + Format('%s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+        if Par.IsVarParam then
+          ArgLine := ArgLine + Format('l %s',
+            [VarRef(TIdentExpr(TASTExpr(Args[I])).Name,
+                    TIdentExpr(TASTExpr(Args[I])).IsGlobal)])
+        else
+        begin
+          ArgTemp := EmitExpr(TASTExpr(Args[I]));
+          ArgLine := ArgLine + Format('%s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
+        end;
       end;
       T := AllocTemp;
       EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
@@ -2315,11 +3027,11 @@ begin
     begin
       IntfDesc := TInterfaceTypeDesc(MCallExpr.ResolvedClassType);
       SelfTemp := AllocTemp;
-      EmitLine(Format('  %s =l loadl %%_var_%s_obj',
-        [SelfTemp, MCallExpr.ObjectName]));
+      EmitLine(Format('  %s =l loadl %s_obj',
+        [SelfTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
       VTblTemp := AllocTemp;
-      EmitLine(Format('  %s =l loadl %%_var_%s_itab',
-        [VTblTemp, MCallExpr.ObjectName]));
+      EmitLine(Format('  %s =l loadl %s_itab',
+        [VTblTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
       SlotOff := IntfDesc.MethodIndex(MCallExpr.Name) * 8;
       FPtrTemp := AllocTemp;
       if SlotOff = 0 then
@@ -2364,9 +3076,9 @@ begin
           ArgLine := ArgLine + Format(', %s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
         end;
         if MDecl.OwnerTypeName <> '' then
-          FuncName := '$' + MDecl.OwnerTypeName + '_Create'
+          FuncName := '$' + MDecl.OwnerTypeName + '_' + MCallExpr.Name
         else
-          FuncName := '$' + RT.Name + '_Create';
+          FuncName := '$' + RT.Name + '_' + MCallExpr.Name;
         EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
       end;
       Result := SelfTemp;
@@ -2379,10 +3091,31 @@ begin
     else
       FuncName := '$' + RT.Name + '_' + MCallExpr.Name;
     QType     := QbeTypeOf(MDecl.ResolvedReturnType);
+    { sret: record-returning method }
+    if MDecl.ResolvedReturnType.Kind = tyRecord then
+    begin
+      RT      := TRecordTypeDesc(MDecl.ResolvedReturnType);
+      SretBuf := AllocTemp;
+      if RT.MaxAlign >= 8 then
+        EmitLine(Format('  %s =l alloc8 %d', [SretBuf, RT.TotalSize]))
+      else
+        EmitLine(Format('  %s =l alloc4 %d', [SretBuf, RT.TotalSize]));
+      if RT.TotalSize > 0 then
+        EmitLine(Format('  call $memset(l %s, w 0, l %d)', [SretBuf, RT.TotalSize]));
+      EmitRecordCallSret(AExpr, SretBuf);
+      Result := SretBuf;
+      Exit;
+    end;
 
-    { Load the object pointer (Self) }
-    SelfTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %%_var_%s', [SelfTemp, MCallExpr.ObjectName]));
+    { Load the object pointer (Self): either from a named variable or from
+      evaluating the receiver expression (e.g. a typecast). }
+    if MCallExpr.ObjExpr <> nil then
+      SelfTemp := EmitExpr(MCallExpr.ObjExpr)
+    else
+    begin
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [SelfTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
+    end;
 
     { Build argument string }
     ArgLine := Format('l %s', [SelfTemp]);
@@ -2391,8 +3124,9 @@ begin
       Par := TMethodParam(MDecl.Params[I]);
       if Par.IsVarParam then
         { Pass address of the variable directly — do not load through it }
-        ArgLine := ArgLine + Format(', l %%_var_%s',
-          [TIdentExpr(TASTExpr(MCallExpr.Args[I])).Name])
+        ArgLine := ArgLine + Format(', l %s',
+          [VarRef(TIdentExpr(TASTExpr(MCallExpr.Args[I])).Name,
+                  TIdentExpr(TASTExpr(MCallExpr.Args[I])).IsGlobal)])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args[I]));
@@ -2444,6 +3178,35 @@ begin
       (base_ptr + offset) using the field's QBE type. }
     if FldAccess.Base <> nil then
     begin
+      if FldAccess.IsMethodCall then
+      begin
+        { Zero-arg method on chained base }
+        L     := EmitInstancePtr(FldAccess.Base);
+        MDecl := TMethodDecl(FldAccess.ResolvedMethod);
+        if MDecl.ResolvedReturnType.Kind = tyRecord then
+        begin
+          RT      := TRecordTypeDesc(MDecl.ResolvedReturnType);
+          SretBuf := AllocTemp;
+          if RT.MaxAlign >= 8 then
+            EmitLine(Format('  %s =l alloc8 %d', [SretBuf, RT.TotalSize]))
+          else
+            EmitLine(Format('  %s =l alloc4 %d', [SretBuf, RT.TotalSize]));
+          if RT.TotalSize > 0 then
+            EmitLine(Format('  call $memset(l %s, w 0, l %d)', [SretBuf, RT.TotalSize]));
+          EmitLine(Format('  call $%s_%s(l %s, l %s)',
+            [MDecl.OwnerTypeName, FldAccess.FieldName, SretBuf, L]));
+          Result := SretBuf;
+        end
+        else
+        begin
+          QType := QbeTypeOf(MDecl.ResolvedReturnType);
+          T := AllocTemp;
+          EmitLine(Format('  %s =%s call $%s_%s(l %s)',
+            [T, QType, MDecl.OwnerTypeName, FldAccess.FieldName, L]));
+          Result := T;
+        end;
+        Exit;
+      end;
       L := EmitInstancePtr(FldAccess.Base);
       if FldAccess.FieldInfo = nil then
         raise ECodeGenError.CreateFmt(
@@ -2464,7 +3227,97 @@ begin
       Result := T;
       Exit;
     end;
-    if FldAccess.IsConstructorCall then
+    if FldAccess.IsImplicitSelf then
+    begin
+      { Implicit Self.Base.Field — Base is a field of Self }
+      L := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_Self', [L]));
+      if FldAccess.ImplicitBaseInfo.Offset > 0 then
+      begin
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d',
+          [Ptr, L, FldAccess.ImplicitBaseInfo.Offset]));
+        L := Ptr;
+      end;
+      if FldAccess.IsClassAccess then
+      begin
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [Ptr, L]));
+        L := Ptr;
+      end;
+      if FldAccess.IsMethodCall then
+      begin
+        { Zero-arg method on implicit-Self field: emit call(L) }
+        MDecl := TMethodDecl(FldAccess.ResolvedMethod);
+        if MDecl.ResolvedReturnType.Kind = tyRecord then
+        begin
+          RT      := TRecordTypeDesc(MDecl.ResolvedReturnType);
+          SretBuf := AllocTemp;
+          if RT.MaxAlign >= 8 then
+            EmitLine(Format('  %s =l alloc8 %d', [SretBuf, RT.TotalSize]))
+          else
+            EmitLine(Format('  %s =l alloc4 %d', [SretBuf, RT.TotalSize]));
+          if RT.TotalSize > 0 then
+            EmitLine(Format('  call $memset(l %s, w 0, l %d)', [SretBuf, RT.TotalSize]));
+          EmitLine(Format('  call $%s_%s(l %s, l %s)',
+            [MDecl.OwnerTypeName, FldAccess.FieldName, SretBuf, L]));
+          Result := SretBuf;
+        end
+        else
+        begin
+          QType := QbeTypeOf(MDecl.ResolvedReturnType);
+          T := AllocTemp;
+          EmitLine(Format('  %s =%s call $%s_%s(l %s)',
+            [T, QType, MDecl.OwnerTypeName, FldAccess.FieldName, L]));
+          Result := T;
+        end;
+        Exit;
+      end;
+      if FldAccess.FieldInfo.Offset > 0 then
+      begin
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d',
+          [Ptr, L, FldAccess.FieldInfo.Offset]));
+      end
+      else
+        Ptr := L;
+      QType := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
+      T     := AllocTemp;
+      if QType = 'w' then LoadInstr := 'loadw'
+                     else LoadInstr := 'loadl';
+      EmitLine(Format('  %s =%s %s %s', [T, QType, LoadInstr, Ptr]));
+      Result := T;
+    end
+    else if FldAccess.IsMethodCall then
+    begin
+      { Zero-arg method call on a variable: Obj.Method }
+      MDecl := TMethodDecl(FldAccess.ResolvedMethod);
+      if MDecl.ResolvedReturnType.Kind = tyRecord then
+      begin
+        RT      := TRecordTypeDesc(MDecl.ResolvedReturnType);
+        SretBuf := AllocTemp;
+        if RT.MaxAlign >= 8 then
+          EmitLine(Format('  %s =l alloc8 %d', [SretBuf, RT.TotalSize]))
+        else
+          EmitLine(Format('  %s =l alloc4 %d', [SretBuf, RT.TotalSize]));
+        if RT.TotalSize > 0 then
+          EmitLine(Format('  call $memset(l %s, w 0, l %d)', [SretBuf, RT.TotalSize]));
+        EmitRecordCallSret(AExpr, SretBuf);
+        Result := SretBuf;
+      end
+      else
+      begin
+        L := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s',
+          [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+        QType := QbeTypeOf(MDecl.ResolvedReturnType);
+        T := AllocTemp;
+        EmitLine(Format('  %s =%s call $%s_%s(l %s)',
+          [T, QType, MDecl.OwnerTypeName, FldAccess.FieldName, L]));
+        Result := T;
+      end;
+    end
+    else if FldAccess.IsConstructorCall then
     begin
       { TypeName.Create — allocate zeroed instance on heap.  _ClassAlloc
         prefixes a 16-byte header (refcount + field-cleanup fn pointer)
@@ -2481,13 +3334,23 @@ begin
       if TRecordTypeDesc(FldAccess.ResolvedType).HasVTable then
         EmitLine(Format('  storel $vtable_%s, %s',
           [QBEMangle(FldAccess.ResolvedType.Name), T]));
+      { Call user-defined Create body if one exists }
+      if FldAccess.ResolvedMethod <> nil then
+      begin
+        MDecl := TMethodDecl(FldAccess.ResolvedMethod);
+        if MDecl.OwnerTypeName <> '' then
+          FuncName := '$' + MDecl.OwnerTypeName + '_' + FldAccess.FieldName
+        else
+          FuncName := '$' + QBEMangle(FldAccess.ResolvedType.Name) + '_' + FldAccess.FieldName;
+        EmitLine(Format('  call %s(l %s)', [FuncName, T]));
+      end;
       Result := T;
     end
     else if FldAccess.PropRead <> nil then
     begin
       { Method-backed property read: load Self pointer and call getter }
       L := AllocTemp;
-      EmitLine(Format('  %s =l loadl %%_var_%s', [L, FldAccess.RecordName]));
+      EmitLine(Format('  %s =l loadl %s', [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
       T     := AllocTemp;
       QType := QbeTypeOf(FldAccess.PropRead.TypeDesc);
       EmitLine(Format('  %s =%s call $%s_%s(l %s)',
@@ -2499,7 +3362,7 @@ begin
     begin
       { Load heap pointer, then load field }
       L := AllocTemp;
-      EmitLine(Format('  %s =l loadl %%_var_%s', [L, FldAccess.RecordName]));
+      EmitLine(Format('  %s =l loadl %s', [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
       if FldAccess.FieldInfo.Offset > 0 then
       begin
         Ptr := AllocTemp;
@@ -2539,6 +3402,19 @@ begin
       ImplFld := TFieldInfo(TIdentExpr(AExpr).ImplicitFieldInfo);
       SelfT   := AllocTemp;
       EmitLine(Format('  %s =l loadl %%_var_Self', [SelfT]));
+      { Record-typed field: return the field's storage address, not a loaded value }
+      if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyRecord) then
+      begin
+        if ImplFld.Offset > 0 then
+        begin
+          PtrT := AllocTemp;
+          EmitLine(Format('  %s =l add %s, %d', [PtrT, SelfT, ImplFld.Offset]));
+          Result := PtrT;
+        end
+        else
+          Result := SelfT;
+        Exit;
+      end;
       T := AllocTemp;
       QType := QbeTypeOf(AExpr.ResolvedType);
       if ImplFld.Offset > 0 then
@@ -2561,7 +3437,22 @@ begin
       Exit;
     end;
 
-    if TIdentExpr(AExpr).IsNoArgFuncCall then
+    if TIdentExpr(AExpr).IsImplicitSelfMethod then
+    begin
+      { Bare zero-arg method call on Self — emit direct call }
+      NoArgCall := TFuncCallExpr.Create;
+      try
+        NoArgCall.Name                 := TIdentExpr(AExpr).Name;
+        NoArgCall.ResolvedType         := AExpr.ResolvedType;
+        NoArgCall.ResolvedDecl         := TIdentExpr(AExpr).ImplicitMethodDecl;
+        NoArgCall.IsImplicitSelfMethod := True;
+        Result := EmitExpr(NoArgCall);
+      finally
+        NoArgCall.Free;
+      end;
+      Exit;
+    end
+    else if TIdentExpr(AExpr).IsNoArgFuncCall then
     begin
       { Bare identifier resolving to a zero-arg function (no parens in source).
         Synthesise a temporary TFuncCallExpr so existing builtin dispatch
@@ -2570,6 +3461,7 @@ begin
       try
         NoArgCall.Name         := TIdentExpr(AExpr).Name;
         NoArgCall.ResolvedType := AExpr.ResolvedType;
+        NoArgCall.ResolvedDecl := TIdentExpr(AExpr).NoArgFuncDecl;
         Result := EmitExpr(NoArgCall);
       finally
         NoArgCall.Free;
@@ -2578,7 +3470,14 @@ begin
     end
     else if TIdentExpr(AExpr).IsConstant then
     begin
-      EmitLine(Format('  %s =w copy %d', [T, TIdentExpr(AExpr).ConstValue]));
+      if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyString) then
+      begin
+        { String constant — emit as a string literal data label (l-typed pointer) }
+        StrLabel := EmitStrLit(TIdentExpr(AExpr).ConstString);
+        EmitLine(Format('  %s =l copy %s', [T, StrLabel]));
+      end
+      else
+        EmitLine(Format('  %s =w copy %d', [T, TIdentExpr(AExpr).ConstValue]));
     end
     else if TIdentExpr(AExpr).IsVarParam then
     begin
@@ -2590,6 +3489,20 @@ begin
         EmitLine(Format('  %s =l loadl %s', [T, Ptr]))
       else
         EmitLine(Format('  %s =w loadw %s', [T, Ptr]));
+    end
+    else if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyRecord) then
+    begin
+      { Record variable — return its storage address directly (no load). }
+      Result := VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal);
+      Exit;
+    end
+    else if TIdentExpr(AExpr).IsGlobal then
+    begin
+      { Global program-level variable: address is $Name in data section }
+      if (AExpr.ResolvedType <> nil) and (QbeTypeOf(AExpr.ResolvedType) = 'w') then
+        EmitLine(Format('  %s =w loadw $%s', [T, TIdentExpr(AExpr).Name]))
+      else
+        EmitLine(Format('  %s =l loadl $%s', [T, TIdentExpr(AExpr).Name]));
     end
     else if (AExpr.ResolvedType <> nil) and (QbeTypeOf(AExpr.ResolvedType) = 'l') then
     begin
@@ -2832,6 +3745,7 @@ begin
     EmitLine('# Source: ' + AProg.Name);
     EmitLine('');
     EmitDataSection;
+    EmitGlobalVarData(AProg.Block);
     EmitInterfaceDefs(AProg);
     EmitTypeInfoDefs(AProg);
     EmitVTableDefs(AProg);

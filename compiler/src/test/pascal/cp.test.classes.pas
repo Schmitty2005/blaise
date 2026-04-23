@@ -511,8 +511,8 @@ begin
     '  end;'              + LineEnding +
     'var F: TFoo;'        + LineEnding +
     'begin end.');
-  AssertTrue('alloc8 for F', Pos('_var_F', IR) > 0);
-  AssertTrue('8-byte alloc', Pos('alloc8', IR) > 0);
+  { Program-level class var F is a data-section global pointer slot }
+  AssertTrue('data decl for F', Pos('$F', IR) > 0);
 end;
 
 procedure TClassTests.TestCodegen_ClassVar_ZeroInit;
@@ -527,7 +527,8 @@ begin
     '  end;'              + LineEnding +
     'var F: TFoo;'        + LineEnding +
     'begin end.');
-  AssertTrue('zero init', Pos('storel 0', IR) > 0);
+  { Program-level class var F is zero-initialised via data section entry }
+  AssertTrue('zero init via data section', Pos('data $F = { l 0 }', IR) > 0);
 end;
 
 procedure TClassTests.TestCodegen_Constructor_CallsClassAlloc;
@@ -567,7 +568,8 @@ begin
     'begin'               + LineEnding +
     '  F.X := 42'         + LineEnding +
     'end.');
-  AssertTrue('loads pointer', Pos('loadl %_var_F', IR) > 0);
+  { F is a program-level global — loaded via $F }
+  AssertTrue('loads pointer', Pos('loadl $F', IR) > 0);
   AssertTrue('stores value',  Pos('storew', IR) > 0);
 end;
 
@@ -585,7 +587,8 @@ begin
     'begin'                   + LineEnding +
     '  N := F.X'              + LineEnding +
     'end.');
-  AssertTrue('loads pointer', Pos('loadl %_var_F', IR) > 0);
+  { F is a program-level global — loaded via $F }
+  AssertTrue('loads pointer', Pos('loadl $F', IR) > 0);
   AssertTrue('loads field',   Pos('loadw', IR) > 0);
 end;
 
@@ -689,7 +692,7 @@ begin
     becomes a no-op. }
   IR := GenIR(SrcFree);
   AssertTrue('calls _ClassRelease',     Pos('call $_ClassRelease', IR) > 0);
-  AssertTrue('nil-outs slot after Free', Pos('storel 0, %_var_',   IR) > 0);
+  AssertTrue('nil-outs slot after Free', (Pos('storel 0, %_var_', IR) > 0) or (Pos('storel 0, $', IR) > 0));
   AssertTrue('does not call C free() directly', Pos('call $free(', IR) = 0);
 end;
 

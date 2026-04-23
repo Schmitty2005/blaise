@@ -60,6 +60,7 @@ type
     tkNot,
     tkExit,
     tkBreak,
+    tkContinue,
     tkInherited,
     tkCase,
     tkOf,
@@ -112,6 +113,14 @@ type
 
 implementation
 
+{ Local helper matching the Blaise builtin — lets UnescapeString share one
+  body under FPC and the self-hosted compiler. The migration tool strips
+  this declaration; self-hosted builds resolve OrdAt to the builtin. }
+function OrdAt(const S: string; I: Integer): Integer;
+begin
+  Result := Ord(S[I]);
+end;
+
 constructor TLexer.Create(const ASource: string);
 begin
   inherited Create;
@@ -163,6 +172,7 @@ begin
   else if AUpper = 'NOT'            then Result := tkNot
   else if AUpper = 'EXIT'           then Result := tkExit
   else if AUpper = 'BREAK'          then Result := tkBreak
+  else if AUpper = 'CONTINUE'       then Result := tkContinue
   else if AUpper = 'CASE'           then Result := tkCase
   else if AUpper = 'OF'             then Result := tkOf
   else if AUpper = 'CONST'          then Result := tkConst
@@ -172,36 +182,60 @@ begin
 end;
 
 function TLexer.UnescapeString(const ARaw: string): string;
-{ ARaw is the full source span including surrounding quotes.
-  Handles: 'text' with '' → ' escaping.
-  Phase 1 supports only single-quoted string literals; #nn and ^X forms
-  are not yet part of the Clean Pascal spec. }
+{ ARaw is the full source span. Handles: 'text' with '' → ' escaping,
+  #nn numeric char literals (decimal), and concatenated runs like
+  'abc'#13#10'def'. Uses OrdAt so the body parses under both FPC and
+  the self-hosted Blaise compiler. }
 var
-  I, Len: Integer;
+  I, Len, N, C: Integer;
 begin
   Result := '';
   Len := Length(ARaw);
-  if (Len >= 2) and (ARaw[1] = '''') then
+  I := 1;
+  while I <= Len do
   begin
-    I := 2;
-    while I <= Len do
+    C := OrdAt(ARaw, I);
+    if C = 39 then  { single quote }
     begin
-      if ARaw[I] = '''' then
+      I := I + 1;
+      while I <= Len do
       begin
-        if (I < Len) and (ARaw[I + 1] = '''') then
+        C := OrdAt(ARaw, I);
+        if C = 39 then
         begin
-          Result := Result + '''';
-          Inc(I, 2);
+          if (I < Len) and (OrdAt(ARaw, I + 1) = 39) then
+          begin
+            Result := Result + '''';
+            I := I + 2;
+          end
+          else
+          begin
+            I := I + 1;
+            Break;
+          end;
         end
         else
-          Inc(I);  { closing quote }
-      end
-      else
-      begin
-        Result := Result + ARaw[I];
-        Inc(I);
+        begin
+          Result := Result + Chr(C);
+          I := I + 1;
+        end;
       end;
-    end;
+    end
+    else if C = 35 then  { '#' }
+    begin
+      I := I + 1;
+      N := 0;
+      while I <= Len do
+      begin
+        C := OrdAt(ARaw, I);
+        if (C < 48) or (C > 57) then Break;
+        N := N * 10 + (C - 48);
+        I := I + 1;
+      end;
+      Result := Result + Chr(N);
+    end
+    else
+      I := I + 1;
   end;
 end;
 
@@ -239,6 +273,7 @@ begin
         else if text = 'OVERRIDE' then Result.Kind := tkOverride
         else if text = 'EXIT'     then Result.Kind := tkExit
         else if text = 'BREAK'    then Result.Kind := tkBreak
+        else if text = 'CONTINUE' then Result.Kind := tkContinue
         else if text = 'CASE'     then Result.Kind := tkCase
         else if text = 'OF'       then Result.Kind := tkOf
         else if text = 'CONST'    then Result.Kind := tkConst

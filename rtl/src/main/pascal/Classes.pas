@@ -49,6 +49,7 @@ type
     procedure   Put(AIndex: Integer; AObject: Pointer);
     function    IndexOf(AObject: Pointer): Integer;
     procedure   Delete(AIndex: Integer);
+    function    Extract(AIndex: Integer): Pointer;
     procedure   Clear;
     property Count: Integer read FCount;
   end;
@@ -81,6 +82,7 @@ type
     procedure   Delete(AIndex: Integer);
     procedure   Clear;
     procedure   Insert(AIndex: Integer; S: string);
+    procedure   AddStrings(ASource: TStringList);
     function    GetText: string;
     property Count:         Integer read FCount;
     property CaseSensitive: Boolean read FCaseSensitive write FCaseSensitive;
@@ -88,11 +90,48 @@ type
     property Duplicates:    Integer read FDuplicates    write FDuplicates;
   end;
 
+procedure SplitIntoList(const S: string; ASep: Integer; AList: TStringList);
+
 implementation
 
 { ================================================================== }
 { TObjectList                                                          }
 { ================================================================== }
+
+procedure SplitIntoList(const S: string; ASep: Integer; AList: TStringList);
+var
+  I:     Integer;
+  Start: Integer;
+  SLo:   Integer;
+  SHi:   Integer;
+begin
+  AList.Clear;
+  Start := 1;
+  I     := 1;
+  while I <= Length(S) do
+  begin
+    if OrdAt(S, I) = ASep then
+    begin
+      { Trim surrounding spaces }
+      SLo := Start;
+      SHi := I - 1;
+      while (SLo <= SHi) and (OrdAt(S, SLo) = 32) do SLo := SLo + 1;
+      while (SHi >= SLo) and (OrdAt(S, SHi) = 32) do SHi := SHi - 1;
+      AList.Add(Copy(S, SLo, SHi - SLo + 1));
+      Start := I + 1;
+    end;
+    I := I + 1;
+  end;
+  if Start <= Length(S) then
+  begin
+    SLo := Start;
+    SHi := Length(S);
+    while (SLo <= SHi) and (OrdAt(S, SLo) = 32) do SLo := SLo + 1;
+    while (SHi >= SLo) and (OrdAt(S, SHi) = 32) do SHi := SHi - 1;
+    AList.Add(Copy(S, SLo, SHi - SLo + 1));
+  end;
+end;
+
 
 procedure TObjectList.Grow;
 var
@@ -186,6 +225,25 @@ end;
 procedure TObjectList.Clear;
 begin
   Self.FCount := 0
+end;
+
+function TObjectList.Extract(AIndex: Integer): Pointer;
+var
+  I:   Integer;
+  Src: ^Pointer;
+  Dst: ^Pointer;
+begin
+  Src    := Self.FData + AIndex * SizeOf(Pointer);
+  Result := Src^;
+  I := AIndex;
+  while I < Self.FCount - 1 do
+  begin
+    Dst  := Self.FData + I * SizeOf(Pointer);
+    Src  := Self.FData + (I + 1) * SizeOf(Pointer);
+    Dst^ := Src^;
+    I    := I + 1
+  end;
+  Self.FCount := Self.FCount - 1
 end;
 
 { ================================================================== }
@@ -470,6 +528,18 @@ begin
   Self.FCount := Self.FCount + 1
 end;
 
+procedure TStringList.AddStrings(ASource: TStringList);
+var
+  I: Integer;
+begin
+  I := 0;
+  while I < ASource.FCount do
+  begin
+    Self.Add(ASource.Get(I));
+    I := I + 1
+  end;
+end;
+
 function TStringList.GetText: string;
 var
   I:   Integer;
@@ -483,7 +553,7 @@ begin
   begin
     Ptr    := Self.FStrings + I * SizeOf(string);
     Result := Result + Sep + Ptr^;
-    Sep    := #13#10;
+    Sep    := #10;
     I      := I + 1
   end
 end;

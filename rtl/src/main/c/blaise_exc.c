@@ -15,6 +15,20 @@
 
 #include <setjmp.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+
+/* Forward-declared string helper to build a Blaise string from a C string. */
+static void* exc_str_from_cstr(const char* s) {
+    typedef struct { int32_t refcnt; int32_t length; int32_t capacity; } StrHdr;
+    int32_t len = s ? (int32_t)strlen(s) : 0;
+    StrHdr* h = (StrHdr*)malloc(sizeof(StrHdr) + len + 1);
+    if (!h) return NULL;
+    h->refcnt = 0; h->length = len; h->capacity = len;
+    if (len > 0) memcpy((char*)(h + 1), s, (size_t)len);
+    ((char*)(h + 1))[len] = '\0';
+    return (void*)h;
+}
 
 typedef struct BlaiseExcFrame {
     jmp_buf jbuf;       /* offset 0 — frame ptr passed directly to setjmp   */
@@ -67,6 +81,19 @@ void _Raise(void* obj) {
  */
 void* _CurrentException(void) {
     return g_exc_top ? g_exc_top->exception : NULL;
+}
+
+/*
+ * _CurrentExceptionMessage — return the Message string of the current exception.
+ * Class layout: offset 0 = vptr (8 bytes), offset 8 = FMessage (string pointer).
+ * Returns an empty string if no exception is active.
+ */
+void* _CurrentExceptionMessage(void) {
+    void* exc = g_exc_top ? g_exc_top->exception : NULL;
+    if (!exc) return exc_str_from_cstr("");
+    /* FMessage is the first user field, after the 8-byte vptr */
+    void* msg = *((void**)((char*)exc + 8));
+    return msg ? msg : exc_str_from_cstr("");
 }
 
 /*

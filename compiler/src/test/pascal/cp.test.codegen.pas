@@ -176,8 +176,9 @@ var
   IR: string;
 begin
   IR := GenerateIR('program P; var x: Integer; begin end.');
-  AssertTrue('Has alloc for x',
-    IRContains(IR, '%_var_x =l alloc4 1'));
+  { Program-level var is a data-section global, not a stack alloc }
+  AssertTrue('Has data decl for x',
+    IRContains(IR, 'data $x'));
 end;
 
 procedure TCodeGenTests.TestAssignment_HasStorew;
@@ -187,7 +188,8 @@ begin
   IR := GenerateIR(
     'program P; var n: Integer; begin n := 7 end.');
   AssertTrue('Has storew', IRContains(IR, 'storew'));
-  AssertTrue('Stores to n', IRContains(IR, 'storew %_t0, %_var_n'));
+  { Program-level var n is a global: store goes to $n }
+  AssertTrue('Stores to n', IRContains(IR, 'storew %_t0, $n'));
 end;
 
 procedure TCodeGenTests.TestAssignment_LoadAndStore;
@@ -196,8 +198,9 @@ var
 begin
   IR := GenerateIR(
     'program P; var x, y: Integer; begin x := 1; y := x end.');
-  AssertTrue('Loads x', IRContains(IR, 'loadw %_var_x'));
-  AssertTrue('Stores y', IRContains(IR, '%_var_y'));
+  { Program-level vars x, y are globals: load/store use $name }
+  AssertTrue('Loads x', IRContains(IR, 'loadw $x'));
+  AssertTrue('Stores y', IRContains(IR, '$y'));
 end;
 
 { Arithmetic }

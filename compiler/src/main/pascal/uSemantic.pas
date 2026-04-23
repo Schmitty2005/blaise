@@ -35,6 +35,7 @@ type
     FProcIndex:            TStringList;  { 'ProcName' → TMethodDecl (not owned) }
     FGenericFuncTemplates: TStringList;  { base name → TMethodDecl template (not owned) }
     FLoopDepth:            Integer;      { depth of enclosing while/for — Break only legal if > 0 }
+    FScopeDepth:           Integer;      { mirrors FTable scope depth; used to detect main-level globals }
     FCurrentClass:         TRecordTypeDesc;  { class being analysed (set in AnalyseMethodDecl) }
 
     { Generic type instantiation: resolves 'TBox<Integer>' on demand. }
@@ -277,8 +278,14 @@ begin
     enum ↔ integer: allow assignment between enum and integer types }
   if (AExpected.Kind = tyEnum) and AActual.IsNumeric then Exit;
   if (AActual.Kind  = tyEnum) and AExpected.IsNumeric then Exit;
+  { Numeric widening/narrowing: allow between the integer family members }
+  if AExpected.IsNumeric and AActual.IsNumeric then Exit;
   { subtype assignment: TDerived → TBase is allowed }
   if IsSubtypeOf(AActual, AExpected) then
+    Exit;
+  { TObject accepts any class — universal base class }
+  if (AExpected.Kind = tyClass) and (AExpected.Name = 'TObject') and
+     (AActual.Kind = tyClass) then
     Exit;
   { class → interface: allowed when the class implements that interface }
   if (AExpected.Kind = tyInterface) and (AActual.Kind = tyClass) then
@@ -288,6 +295,15 @@ begin
       if RT.ImplementsIntfAt(I) = AExpected then
         Exit;
   end;
+  { Untyped pointer accepts any class/interface/string reference and vice-versa }
+  if (AExpected.Kind = tyPointer) and
+     (TPointerTypeDesc(AExpected).BaseType = nil) and
+     (AActual.Kind in [tyClass, tyInterface, tyString, tyPointer]) then
+    Exit;
+  if (AActual.Kind = tyPointer) and
+     (TPointerTypeDesc(AActual).BaseType = nil) and
+     (AExpected.Kind in [tyClass, tyInterface, tyString, tyPointer]) then
+    Exit;
   SemanticError(
     Format('Type mismatch in %s: expected ''%s'' but got ''%s''',
       [AContext, AExpected.Name, AActual.Name]),
@@ -1005,16 +1021,18 @@ begin
     declarations, transferring the body so AnalyseMethodBodies can process it. }
   LinkClassMethodImpls(ABlock);
   LinkGenericClassMethodImpls(ABlock);
+  { Register standalone proc/func signatures before class method bodies so that
+    methods can call free functions declared in the same block. }
+  AnalyseStandaloneDecls(ABlock);
   AnalyseMethodBodies(ABlock);
   FTable.PushScope;
+  Inc(FScopeDepth);
   try
     AnalyseVarDecls(ABlock);
-    { Register standalone proc/func signatures before analysing bodies so that
-      mutually-recursive calls resolve correctly. }
-    AnalyseStandaloneDecls(ABlock);
     AnalyseStandaloneBodies(ABlock);
     AnalyseStmts(ABlock);
   finally
+    Dec(FScopeDepth);
     FTable.PopScope;
   end;
 end;
@@ -1033,8 +1051,9 @@ begin
       TD := FTable.TypeString
     else
       TD := FTable.TypeInteger;
-    Sym            := TSymbol.Create(CD.Name, skConstant, TD);
-    Sym.ConstValue := CD.IntVal;
+    Sym              := TSymbol.Create(CD.Name, skConstant, TD);
+    Sym.ConstValue   := CD.IntVal;
+    Sym.ConstString  := CD.StrVal;
     if not FTable.Define(Sym) then
       Sym.Free;  { duplicate const — silently ignore }
   end;
@@ -1434,6 +1453,7 @@ begin
   SavedClass    := FCurrentClass;
   FCurrentClass := AClassType;
   FTable.PushScope;
+  Inc(FScopeDepth);
   try
     { Define Self as a variable of the class type }
     Sym := TSymbol.Create('Self', skVariable, AClassType);
@@ -1468,8 +1488,10 @@ begin
     end;
 
     { Analyse the method body block (pushes its own inner scope) }
-    AnalyseBlock(AMethod.Body);
+    if AMethod.Body <> nil then
+      AnalyseBlock(AMethod.Body);
   finally
+    Dec(FScopeDepth);
     FTable.PopScope;
     FCurrentClass := SavedClass;
   end;
@@ -1556,6 +1578,15 @@ begin
       ADecl.ResolvedReturnType := RetType;
     end;
 
+    { If an earlier forward declaration exists, update the index to point to
+      this implementation and skip re-registering the symbol. }
+    J := FProcIndex.IndexOf(ADecl.Name);
+    if (J >= 0) and (TMethodDecl(FProcIndex.Objects[J]).Body = nil) then
+    begin
+      FProcIndex.Objects[J] := ADecl;
+      Continue;
+    end;
+
     { Index for call resolution }
     FProcIndex.AddObject(ADecl.Name, ADecl);
 
@@ -1582,6 +1613,7 @@ var
   Sym: TSymbol;
 begin
   FTable.PushScope;
+  Inc(FScopeDepth);
   try
     { Define Result for functions }
     if ADecl.ResolvedReturnType <> nil then
@@ -1609,6 +1641,7 @@ begin
 
     AnalyseBlock(ADecl.Body);
   finally
+    Dec(FScopeDepth);
     FTable.PopScope;
   end;
 end;
@@ -1625,6 +1658,8 @@ begin
     if ADecl.OwnerTypeName <> '' then Continue;
     { Generic templates are instantiated on demand — skip until first call }
     if ADecl.TypeParams <> nil then Continue;
+    { Forward declarations have no body; the later impl handles analysis }
+    if ADecl.Body = nil then Continue;
     AnalyseStandaloneDecl(ADecl);
   end;
 end;
@@ -1663,11 +1698,14 @@ begin
       Decl.IsWeak := True;
     end;
 
+    { Depth 2 = inside the top-level program block — these are global variables. }
+    Decl.IsGlobal := (FScopeDepth = 1);  { depth 1 = main program block (global scope) }
     for J := 0 to Decl.Names.Count - 1 do
     begin
       VarName := Decl.Names[J];
       Sym := TSymbol.Create(VarName, skVariable, Typ);
-      Sym.IsWeak := Decl.IsWeak;
+      Sym.IsWeak   := Decl.IsWeak;
+      Sym.IsGlobal := Decl.IsGlobal;
       if not FTable.Define(Sym) then
       begin
         Sym.Free;
@@ -1714,6 +1752,7 @@ begin
       SemanticError(
         Format('Undeclared loop variable ''%s''', [ForS.VarName]),
         ForS.Line, ForS.Col);
+    ForS.IsGlobal := (VarSym <> nil) and VarSym.IsGlobal;
     if VarSym.Kind <> skVariable then
       SemanticError(
         Format('''%s'' is not a variable', [ForS.VarName]),
@@ -1762,6 +1801,11 @@ begin
   begin
     if FLoopDepth = 0 then
       SemanticError('''break'' is not inside a loop', AStmt.Line, AStmt.Col);
+  end
+  else if AStmt is TContinueStmt then
+  begin
+    if FLoopDepth = 0 then
+      SemanticError('''continue'' is not inside a loop', AStmt.Line, AStmt.Col);
   end
   else if AStmt is TIfStmt then
   begin
@@ -1836,13 +1880,93 @@ var
   Par:     TMethodParam;
   ArgType: TTypeDesc;
   I:       Integer;
+  ObjType: TTypeDesc;
 begin
+  { Call on a receiver expression: AProg.UsedUnits.Add(UName) }
+  if ACall.ObjExpr <> nil then
+  begin
+    ObjType := AnalyseExpr(ACall.ObjExpr);
+    if not (ObjType.Kind in [tyClass, tyInterface]) then
+      SemanticError(
+        Format('Receiver of ''.%s'' must be a class or interface', [ACall.Name]),
+        ACall.Line, ACall.Col);
+    RT := TRecordTypeDesc(ObjType);
+    MDecl := FindMethodDecl(RT.Name, ACall.Name);
+    if (MDecl = nil) and SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) then
+    begin
+      ACall.ResolvedClassType := RT;
+      ACall.ResolvedMethod    := nil;
+      Exit;
+    end;
+    if MDecl = nil then
+      SemanticError(
+        Format('Class ''%s'' has no method ''%s''', [RT.Name, ACall.Name]),
+        ACall.Line, ACall.Col);
+    if ACall.Args.Count <> MDecl.Params.Count then
+      SemanticError(
+        Format('Method ''%s.%s'' expects %d argument(s) but got %d',
+          [RT.Name, ACall.Name, MDecl.Params.Count, ACall.Args.Count]),
+        ACall.Line, ACall.Col);
+    for I := 0 to ACall.Args.Count - 1 do
+    begin
+      ArgType := AnalyseExpr(TASTExpr(ACall.Args[I]));
+      Par     := TMethodParam(MDecl.Params[I]);
+      CheckTypesMatch(Par.ResolvedType, ArgType,
+        Format('argument %d of ''%s''', [I + 1, ACall.Name]),
+        ACall.Line, ACall.Col);
+    end;
+    ACall.ResolvedClassType := RT;
+    ACall.ResolvedMethod    := MDecl;
+    Exit;
+  end;
+
   ObjSym := FTable.Lookup(ACall.ObjectName);
   if ObjSym = nil then
+  begin
+    { Implicit Self.Field.Method — ObjectName is a field of current class }
+    if FCurrentClass <> nil then
+    begin
+      ACall.ImplicitBaseInfo :=
+        FCurrentClass.FindField(ACall.ObjectName);
+      if (ACall.ImplicitBaseInfo <> nil) and
+         (ACall.ImplicitBaseInfo.TypeDesc.Kind in [tyClass, tyInterface]) then
+      begin
+        ACall.IsImplicitSelf := True;
+        RT := TRecordTypeDesc(ACall.ImplicitBaseInfo.TypeDesc);
+        MDecl := FindMethodDecl(RT.Name, ACall.Name);
+        if (MDecl = nil) and SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) then
+        begin
+          ACall.ResolvedClassType := RT;
+          ACall.ResolvedMethod    := nil;
+          Exit;
+        end;
+        if MDecl = nil then
+          SemanticError(
+            Format('Class ''%s'' has no method ''%s''', [RT.Name, ACall.Name]),
+            ACall.Line, ACall.Col);
+        if ACall.Args.Count <> MDecl.Params.Count then
+          SemanticError(
+            Format('Method ''%s.%s'' expects %d argument(s) but got %d',
+              [RT.Name, ACall.Name, MDecl.Params.Count, ACall.Args.Count]),
+            ACall.Line, ACall.Col);
+        for I := 0 to ACall.Args.Count - 1 do
+        begin
+          ArgType := AnalyseExpr(TASTExpr(ACall.Args[I]));
+          Par     := TMethodParam(MDecl.Params[I]);
+          CheckTypesMatch(Par.ResolvedType, ArgType,
+            Format('argument %d of ''%s''', [I + 1, ACall.Name]),
+            ACall.Line, ACall.Col);
+        end;
+        ACall.ResolvedClassType := RT;
+        ACall.ResolvedMethod    := MDecl;
+        Exit;
+      end;
+    end;
     SemanticError(
       Format('Undeclared variable ''%s''', [ACall.ObjectName]),
       ACall.Line, ACall.Col);
-  if ObjSym.Kind <> skVariable then
+  end;
+  if not (ObjSym.Kind in [skVariable, skParameter, skVarParameter]) then
     SemanticError(
       Format('''%s'' is not a variable', [ACall.ObjectName]),
       ACall.Line, ACall.Col);
@@ -1862,6 +1986,7 @@ begin
     { Args for interface methods not checked in Phase 3 (no param info stored) }
     ACall.ResolvedClassType := ObjSym.TypeDesc;
     ACall.ResolvedMethod    := nil;  { nil = interface dispatch, not class dispatch }
+    ACall.IsGlobal          := ObjSym.IsGlobal;
     Exit;
   end;
 
@@ -1874,6 +1999,7 @@ begin
     begin
       ACall.ResolvedClassType := RT;
       ACall.ResolvedMethod    := nil;  { nil signals built-in Free to codegen }
+      ACall.IsGlobal          := ObjSym.IsGlobal;
       Exit;
     end;
     SemanticError(
@@ -1898,6 +2024,7 @@ begin
 
   ACall.ResolvedClassType := RT;
   ACall.ResolvedMethod    := MDecl;
+  ACall.IsGlobal          := ObjSym.IsGlobal;
 end;
 
 procedure TSemanticAnalyser.AnalyseAssignment(AAssign: TAssignment);
@@ -1934,6 +2061,7 @@ begin
   AAssign.IsVarParam      := (VarSym.Kind = skVarParameter);
   AAssign.ResolvedLhsType := VarSym.TypeDesc;
   AAssign.IsWeakLhs       := VarSym.IsWeak;
+  AAssign.IsGlobal        := VarSym.IsGlobal;
 
   ExprType := AnalyseExpr(AAssign.Expr);
   CheckTypesMatch(VarSym.TypeDesc, ExprType, 'assignment', AAssign.Line, AAssign.Col);
@@ -1989,15 +2117,85 @@ var
   RecSym:   TSymbol;
   RT:       TRecordTypeDesc;
   FldInfo:  TFieldInfo;
+  BaseInfo: TFieldInfo;
+  BaseType: TTypeDesc;
   PropInfo: TPropertyInfo;
   ExprType: TTypeDesc;
+  ObjType:  TTypeDesc;
 begin
+  { ObjExpr path: receiver is an arbitrary expression (e.g. typecast result) }
+  if AAssign.ObjExpr <> nil then
+  begin
+    ObjType := AnalyseExpr(AAssign.ObjExpr);
+    if not (ObjType.Kind in [tyRecord, tyClass]) then
+      SemanticError(
+        Format('Field assignment: expression is not a record or class (got %s)',
+          [ObjType.Name]),
+        AAssign.Line, AAssign.Col);
+    RT      := TRecordTypeDesc(ObjType);
+    FldInfo := RT.FindField(AAssign.FieldName);
+    if FldInfo = nil then
+    begin
+      PropInfo := RT.FindProperty(AAssign.FieldName);
+      if (PropInfo <> nil) and (PropInfo.WriteField <> '') then
+      begin
+        AAssign.FieldName := PropInfo.WriteField;
+        FldInfo           := RT.FindField(PropInfo.WriteField);
+      end
+      else
+        SemanticError(
+          Format('Type ''%s'' has no field ''%s''', [ObjType.Name, AAssign.FieldName]),
+          AAssign.Line, AAssign.Col);
+    end;
+    AAssign.IsClassAccess := ObjType.Kind = tyClass;
+    AAssign.FieldInfo     := FldInfo;
+    ExprType := AnalyseExpr(AAssign.Expr);
+    CheckTypesMatch(FldInfo.TypeDesc, ExprType, 'field assignment',
+      AAssign.Line, AAssign.Col);
+    Exit;
+  end;
   RecSym := FTable.Lookup(AAssign.RecordName);
   if RecSym = nil then
+  begin
+    { Implicit Self.Field.Subfield — RecordName is a field of current class }
+    if FCurrentClass <> nil then
+    begin
+      BaseInfo := FCurrentClass.FindField(AAssign.RecordName);
+      if (BaseInfo <> nil) and
+         (BaseInfo.TypeDesc.Kind in [tyRecord, tyClass]) then
+      begin
+        AAssign.IsImplicitSelf   := True;
+        AAssign.ImplicitBaseInfo := BaseInfo;
+        AAssign.IsClassAccess    := BaseInfo.TypeDesc.Kind = tyClass;
+        BaseType := BaseInfo.TypeDesc;
+        RT       := TRecordTypeDesc(BaseType);
+        FldInfo  := RT.FindField(AAssign.FieldName);
+        if FldInfo = nil then
+        begin
+          PropInfo := RT.FindProperty(AAssign.FieldName);
+          if (PropInfo <> nil) and (PropInfo.WriteField <> '') then
+          begin
+            AAssign.FieldName := PropInfo.WriteField;
+            FldInfo           := RT.FindField(PropInfo.WriteField);
+          end
+          else
+            SemanticError(
+              Format('Type ''%s'' has no field ''%s''',
+                [AAssign.RecordName, AAssign.FieldName]),
+              AAssign.Line, AAssign.Col);
+        end;
+        AAssign.FieldInfo := FldInfo;
+        ExprType := AnalyseExpr(AAssign.Expr);
+        CheckTypesMatch(FldInfo.TypeDesc, ExprType, 'field assignment',
+          AAssign.Line, AAssign.Col);
+        Exit;
+      end;
+    end;
     SemanticError(
       Format('Undeclared variable ''%s''', [AAssign.RecordName]),
       AAssign.Line, AAssign.Col);
-  if RecSym.Kind <> skVariable then
+  end;
+  if not ((RecSym.Kind = skVariable) or (RecSym.Kind = skParameter)) then
     SemanticError(
       Format('''%s'' is not a variable', [AAssign.RecordName]),
       AAssign.Line, AAssign.Col);
@@ -2007,6 +2205,7 @@ begin
       AAssign.Line, AAssign.Col);
 
   AAssign.IsClassAccess := RecSym.TypeDesc.Kind = tyClass;
+  AAssign.IsGlobal      := RecSym.IsGlobal;
 
   RT      := TRecordTypeDesc(RecSym.TypeDesc);
   FldInfo := RT.FindField(AAssign.FieldName);
@@ -2057,6 +2256,30 @@ begin
   Sym := FTable.Lookup(ACall.Name);
   if Sym = nil then
   begin
+    { Implicit Self.Method() — name is a method of the current class }
+    if FCurrentClass <> nil then
+    begin
+      MDecl := FindMethodDecl(FCurrentClass.Name, ACall.Name);
+      if MDecl <> nil then
+      begin
+        if ACall.Args.Count <> MDecl.Params.Count then
+          SemanticError(
+            Format('Method ''%s.%s'' expects %d argument(s) but got %d',
+              [FCurrentClass.Name, ACall.Name, MDecl.Params.Count, ACall.Args.Count]),
+            ACall.Line, ACall.Col);
+        for I := 0 to ACall.Args.Count - 1 do
+        begin
+          Par     := TMethodParam(MDecl.Params[I]);
+          ArgType := AnalyseExpr(TASTExpr(ACall.Args[I]));
+          CheckTypesMatch(Par.ResolvedType, ArgType,
+            Format('argument %d of ''%s''', [I + 1, ACall.Name]),
+            ACall.Line, ACall.Col);
+        end;
+        ACall.ResolvedDecl         := MDecl;
+        ACall.IsImplicitSelfMethod := True;
+        Exit;
+      end;
+    end;
     { Try on-demand instantiation of a generic function }
     if Pos('<', ACall.Name) > 0 then
       InstantiateGenericFunc(ACall.Name);
@@ -2143,6 +2366,32 @@ begin
   Sym := FTable.Lookup(AExpr.Name);
   if Sym = nil then
   begin
+    { Implicit Self.Method() on a function method of the current class }
+    if FCurrentClass <> nil then
+    begin
+      MDecl := FindMethodDecl(FCurrentClass.Name, AExpr.Name);
+      if MDecl <> nil then
+      begin
+        if AExpr.Args.Count <> MDecl.Params.Count then
+          SemanticError(
+            Format('Method ''%s.%s'' expects %d argument(s) but got %d',
+              [FCurrentClass.Name, AExpr.Name, MDecl.Params.Count, AExpr.Args.Count]),
+            AExpr.Line, AExpr.Col);
+        for I := 0 to AExpr.Args.Count - 1 do
+        begin
+          Par     := TMethodParam(MDecl.Params[I]);
+          ArgType := AnalyseExpr(TASTExpr(AExpr.Args[I]));
+          CheckTypesMatch(Par.ResolvedType, ArgType,
+            Format('argument %d of ''%s''', [I + 1, AExpr.Name]),
+            AExpr.Line, AExpr.Col);
+        end;
+        AExpr.ResolvedDecl         := MDecl;
+        AExpr.IsImplicitSelfMethod := True;
+        Result := MDecl.ResolvedReturnType;
+        AExpr.ResolvedType := Result;
+        Exit;
+      end;
+    end;
     { Try on-demand instantiation of a generic function }
     if Pos('<', AExpr.Name) > 0 then
       InstantiateGenericFunc(AExpr.Name);
@@ -2217,7 +2466,8 @@ begin
     Exit;
   end;
 
-  if SameText(AExpr.Name, 'UpperCase') or SameText(AExpr.Name, 'LowerCase') then
+  if SameText(AExpr.Name, 'UpperCase') or SameText(AExpr.Name, 'LowerCase')
+     or SameText(AExpr.Name, 'Trim') then
   begin
     if AExpr.Args.Count <> 1 then
       SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);
@@ -2276,6 +2526,16 @@ begin
     AnalyseExpr(TASTExpr(AExpr.Args[0]));
     AnalyseExpr(TASTExpr(AExpr.Args[1]));
     Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'Chr') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('Chr requires exactly 1 argument', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    Result := FTable.TypeString;
     AExpr.ResolvedType := Result;
     Exit;
   end;
@@ -2389,15 +2649,147 @@ var
   ArgType:  TTypeDesc;
   I:        Integer;
   IntfDesc: TInterfaceTypeDesc;
+  ObjType:  TTypeDesc;
 begin
+  { Call on an arbitrary expression (e.g. TCast(x).Method(y)) }
+  if AExpr.ObjExpr <> nil then
+  begin
+    ObjType := AnalyseExpr(AExpr.ObjExpr);
+    if not (ObjType.Kind in [tyClass, tyInterface]) then
+      SemanticError(
+        Format('Receiver of ''.%s'' must be a class or interface', [AExpr.Name]),
+        AExpr.Line, AExpr.Col);
+    if ObjType.Kind = tyInterface then
+    begin
+      IntfDesc := TInterfaceTypeDesc(ObjType);
+      if not IntfDesc.HasMethod(AExpr.Name) then
+        SemanticError(
+          Format('Interface ''%s'' has no method ''%s''',
+            [ObjType.Name, AExpr.Name]),
+          AExpr.Line, AExpr.Col);
+      for I := 0 to AExpr.Args.Count - 1 do
+        AnalyseExpr(TASTExpr(AExpr.Args[I]));
+      AExpr.ResolvedClassType := ObjType;
+      AExpr.ResolvedMethod    := nil;
+      Result := FindTypeOrInstantiate(
+        IntfDesc.MethodReturnTypeName(IntfDesc.MethodIndex(AExpr.Name)));
+      if Result = nil then Result := FTable.TypeInteger;
+      AExpr.ResolvedType := Result;
+      Exit;
+    end;
+    RT    := TRecordTypeDesc(ObjType);
+    MDecl := FindMethodDecl(RT.Name, AExpr.Name);
+    if MDecl = nil then
+      SemanticError(
+        Format('Class ''%s'' has no method ''%s''', [RT.Name, AExpr.Name]),
+        AExpr.Line, AExpr.Col);
+    if AExpr.Args.Count <> MDecl.Params.Count then
+      SemanticError(
+        Format('Method ''%s.%s'' expects %d argument(s) but got %d',
+          [RT.Name, AExpr.Name, MDecl.Params.Count, AExpr.Args.Count]),
+        AExpr.Line, AExpr.Col);
+    for I := 0 to AExpr.Args.Count - 1 do
+    begin
+      ArgType := AnalyseExpr(TASTExpr(AExpr.Args[I]));
+      Par     := TMethodParam(MDecl.Params[I]);
+      CheckTypesMatch(Par.ResolvedType, ArgType,
+        Format('argument %d of ''%s''', [I + 1, AExpr.Name]),
+        AExpr.Line, AExpr.Col);
+    end;
+    AExpr.ResolvedClassType := RT;
+    AExpr.ResolvedMethod    := MDecl;
+    Result := MDecl.ResolvedReturnType;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   ObjSym := FTable.Lookup(AExpr.ObjectName);
   if ObjSym = nil then
+  begin
+    { Implicit Self.Field.Method — ObjectName is a field of current class.
+      Synthesise a receiver expression that reads the field. }
+    if FCurrentClass <> nil then
+    begin
+      ObjType := nil;
+      ObjSym  := nil;
+      begin
+        { Attempt field lookup and rewrite AExpr.ObjExpr to read Self.Field }
+        AExpr.ObjExpr := TIdentExpr.Create;
+        TIdentExpr(AExpr.ObjExpr).Name := AExpr.ObjectName;
+        TIdentExpr(AExpr.ObjExpr).Line := AExpr.Line;
+        TIdentExpr(AExpr.ObjExpr).Col  := AExpr.Col;
+        try
+          ObjType := AnalyseExpr(AExpr.ObjExpr);
+        except
+          AExpr.ObjExpr.Free;
+          AExpr.ObjExpr := nil;
+          SemanticError(
+            Format('Undeclared identifier ''%s''', [AExpr.ObjectName]),
+            AExpr.Line, AExpr.Col);
+        end;
+      end;
+      if (ObjType = nil) or not (ObjType.Kind in [tyClass, tyInterface]) then
+      begin
+        AExpr.ObjExpr.Free;
+        AExpr.ObjExpr := nil;
+        SemanticError(
+          Format('Undeclared identifier ''%s''', [AExpr.ObjectName]),
+          AExpr.Line, AExpr.Col);
+      end;
+      AExpr.ObjectName := '';
+      if ObjType.Kind = tyInterface then
+      begin
+        IntfDesc := TInterfaceTypeDesc(ObjType);
+        if not IntfDesc.HasMethod(AExpr.Name) then
+          SemanticError(
+            Format('Interface ''%s'' has no method ''%s''',
+              [ObjType.Name, AExpr.Name]),
+            AExpr.Line, AExpr.Col);
+        for I := 0 to AExpr.Args.Count - 1 do
+          AnalyseExpr(TASTExpr(AExpr.Args[I]));
+        AExpr.ResolvedClassType := ObjType;
+        AExpr.ResolvedMethod    := nil;
+        Result := FindTypeOrInstantiate(
+          IntfDesc.MethodReturnTypeName(IntfDesc.MethodIndex(AExpr.Name)));
+        if Result = nil then Result := FTable.TypeInteger;
+        AExpr.ResolvedType := Result;
+        Exit;
+      end;
+      RT    := TRecordTypeDesc(ObjType);
+      MDecl := FindMethodDecl(RT.Name, AExpr.Name);
+      if MDecl = nil then
+        SemanticError(
+          Format('Class ''%s'' has no method ''%s''', [RT.Name, AExpr.Name]),
+          AExpr.Line, AExpr.Col);
+      if AExpr.Args.Count <> MDecl.Params.Count then
+        SemanticError(
+          Format('Method ''%s.%s'' expects %d argument(s) but got %d',
+            [RT.Name, AExpr.Name, MDecl.Params.Count, AExpr.Args.Count]),
+          AExpr.Line, AExpr.Col);
+      for I := 0 to AExpr.Args.Count - 1 do
+      begin
+        ArgType := AnalyseExpr(TASTExpr(AExpr.Args[I]));
+        Par     := TMethodParam(MDecl.Params[I]);
+        CheckTypesMatch(Par.ResolvedType, ArgType,
+          Format('argument %d of ''%s''', [I + 1, AExpr.Name]),
+          AExpr.Line, AExpr.Col);
+      end;
+      AExpr.ResolvedClassType := RT;
+      AExpr.ResolvedMethod    := MDecl;
+      Result := MDecl.ResolvedReturnType;
+      AExpr.ResolvedType := Result;
+      Exit;
+    end;
     SemanticError(
       Format('Undeclared identifier ''%s''', [AExpr.ObjectName]),
       AExpr.Line, AExpr.Col);
+  end;
 
-  { Constructor call with args: TypeName.Create(arg1, arg2, ...) }
-  if (ObjSym.Kind = skType) and SameText(AExpr.Name, 'Create') then
+  { Constructor call with args: TypeName.Create(arg1, arg2, ...) or any
+    method on a class type starting with Create (e.g. CreateFmt). }
+  if (ObjSym.Kind = skType) and
+     (SameText(AExpr.Name, 'Create') or
+      (Pos('Create', AExpr.Name) = 1)) then
   begin
     if ObjSym.TypeDesc.Kind <> tyClass then
       SemanticError(
@@ -2405,8 +2797,8 @@ begin
         AExpr.Line, AExpr.Col);
     for I := 0 to AExpr.Args.Count - 1 do
       AnalyseExpr(TASTExpr(AExpr.Args[I]));
-    { Try to find a user-defined Create method for type checking }
-    MDecl := FindMethodDecl(AExpr.ObjectName, 'Create');
+    { Try to find a user-defined constructor method for type checking }
+    MDecl := FindMethodDecl(AExpr.ObjectName, AExpr.Name);
     AExpr.ResolvedMethod    := MDecl;
     AExpr.ResolvedClassType := ObjSym.TypeDesc;
     AExpr.IsConstructorCall := True;
@@ -2414,7 +2806,7 @@ begin
     Exit;
   end;
 
-  if ObjSym.Kind <> skVariable then
+  if not (ObjSym.Kind in [skVariable, skParameter, skVarParameter]) then
     SemanticError(
       Format('''%s'' is not a variable', [AExpr.ObjectName]),
       AExpr.Line, AExpr.Col);
@@ -2436,6 +2828,7 @@ begin
       AnalyseExpr(TASTExpr(AExpr.Args[I]));
     AExpr.ResolvedClassType := ObjSym.TypeDesc;
     AExpr.ResolvedMethod    := nil;  { nil = interface dispatch }
+    AExpr.IsGlobal          := ObjSym.IsGlobal;
     { Look up return type from interface method descriptor }
     Result := FindTypeOrInstantiate(
       IntfDesc.MethodReturnTypeName(IntfDesc.MethodIndex(AExpr.Name)));
@@ -2473,13 +2866,16 @@ begin
 
   AExpr.ResolvedClassType := RT;
   AExpr.ResolvedMethod    := MDecl;
+  AExpr.IsGlobal          := ObjSym.IsGlobal;
   Result := MDecl.ResolvedReturnType;
 end;
 
 function TSemanticAnalyser.AnalyseExpr(AExpr: TASTExpr): TTypeDesc;
 var
-  Sym:     TSymbol;
-  FldInfo: TFieldInfo;
+  Sym:       TSymbol;
+  FldInfo:   TFieldInfo;
+  PropInfo:  TPropertyInfo;
+  NoArgIdx:  Integer;
 begin
   if AExpr is TNilLiteral then
     Result := FTable.TypeNil
@@ -2504,21 +2900,73 @@ begin
           AExpr.ResolvedType := Result;
           Exit;
         end;
+        { Bare zero-arg method call: e.g. TokenText inside a method }
+        TIdentExpr(AExpr).ImplicitMethodDecl :=
+          FindMethodDecl(FCurrentClass.Name, TIdentExpr(AExpr).Name);
+        if TIdentExpr(AExpr).ImplicitMethodDecl <> nil then
+        begin
+          TIdentExpr(AExpr).IsImplicitSelfMethod := True;
+          Result :=
+            TMethodDecl(TIdentExpr(AExpr).ImplicitMethodDecl).ResolvedReturnType;
+          AExpr.ResolvedType := Result;
+          Exit;
+        end;
+        { Property of current class, method-backed: rewrite to the read method }
+        FldInfo := nil;  { reuse PropInfo via local }
+        begin
+          PropInfo := FCurrentClass.FindProperty(TIdentExpr(AExpr).Name);
+          if PropInfo <> nil then
+          begin
+            if PropInfo.ReadMethod <> '' then
+            begin
+              TIdentExpr(AExpr).ImplicitMethodDecl :=
+                FindMethodDecl(FCurrentClass.Name, PropInfo.ReadMethod);
+              if TIdentExpr(AExpr).ImplicitMethodDecl <> nil then
+              begin
+                TIdentExpr(AExpr).IsImplicitSelfMethod := True;
+                TIdentExpr(AExpr).Name := PropInfo.ReadMethod;
+                Result := PropInfo.TypeDesc;
+                AExpr.ResolvedType := Result;
+                Exit;
+              end;
+            end
+            else if PropInfo.ReadField <> '' then
+            begin
+              FldInfo := FCurrentClass.FindField(PropInfo.ReadField);
+              if FldInfo <> nil then
+              begin
+                TIdentExpr(AExpr).IsImplicitSelf := True;
+                TIdentExpr(AExpr).ImplicitFieldInfo := FldInfo;
+                Result := FldInfo.TypeDesc;
+                AExpr.ResolvedType := Result;
+                Exit;
+              end;
+            end;
+          end;
+        end;
       end;
       SemanticError(
         Format('Undeclared identifier ''%s''', [TIdentExpr(AExpr).Name]),
         AExpr.Line, AExpr.Col);
     end;
     TIdentExpr(AExpr).IsVarParam := (Sym.Kind = skVarParameter);
+    TIdentExpr(AExpr).IsGlobal  := Sym.IsGlobal;
     if Sym.Kind = skConstant then
     begin
-      TIdentExpr(AExpr).IsConstant := True;
-      TIdentExpr(AExpr).ConstValue := Sym.ConstValue;
+      TIdentExpr(AExpr).IsConstant  := True;
+      TIdentExpr(AExpr).ConstValue  := Sym.ConstValue;
+      TIdentExpr(AExpr).ConstString := Sym.ConstString;
     end;
-    { Bare builtin function used without parens (e.g. ParamCount) — mark for codegen }
-    if (Sym.Kind = skFunction) and (Sym.TypeDesc <> nil) and
-       (FProcIndex.IndexOf(TIdentExpr(AExpr).Name) < 0) then
+    { Bare function reference without parens — mark as no-arg call for codegen.
+      Covers both builtins (not in FProcIndex) and user-defined standalone functions. }
+    if (Sym.Kind = skFunction) and (Sym.TypeDesc <> nil) then
+    begin
       TIdentExpr(AExpr).IsNoArgFuncCall := True;
+      { Propagate TMethodDecl for user-defined functions so codegen can emit the call }
+      NoArgIdx := FProcIndex.IndexOf(TIdentExpr(AExpr).Name);
+      if NoArgIdx >= 0 then
+        TIdentExpr(AExpr).NoArgFuncDecl := FProcIndex.Objects[NoArgIdx];
+    end;
     Result := Sym.TypeDesc;
   end
   else if AExpr is TFuncCallExpr then
@@ -2582,6 +3030,14 @@ begin
         Result := PropInfo.TypeDesc;
         Exit;
       end;
+      { Zero-arg method call via field access: Obj.Method (no parens) }
+      AAccess.ResolvedMethod := FindMethodDecl(RT.Name, AAccess.FieldName);
+      if AAccess.ResolvedMethod <> nil then
+      begin
+        AAccess.IsMethodCall := True;
+        Result := TMethodDecl(AAccess.ResolvedMethod).ResolvedReturnType;
+        Exit;
+      end;
       SemanticError(
         Format('Type ''%s'' has no field ''%s''',
           [BaseType.Name, AAccess.FieldName]),
@@ -2594,9 +3050,53 @@ begin
 
   RecSym := FTable.Lookup(AAccess.RecordName);
   if RecSym = nil then
+  begin
+    { Implicit Self.RecordName.FieldName — RecordName is a field of current class }
+    if FCurrentClass <> nil then
+    begin
+      FldInfo := FCurrentClass.FindField(AAccess.RecordName);
+      if (FldInfo <> nil) and
+         (FldInfo.TypeDesc.Kind in [tyRecord, tyClass]) then
+      begin
+        AAccess.IsImplicitSelf   := True;
+        AAccess.ImplicitBaseInfo := FldInfo;
+        AAccess.IsClassAccess    := FldInfo.TypeDesc.Kind = tyClass;
+        RT := TRecordTypeDesc(FldInfo.TypeDesc);
+        AAccess.FieldInfo := RT.FindField(AAccess.FieldName);
+        if AAccess.FieldInfo = nil then
+        begin
+          { Field-backed property on the implicit-Self field's type }
+          PropInfo := RT.FindProperty(AAccess.FieldName);
+          if (PropInfo <> nil) and (PropInfo.ReadField <> '') then
+          begin
+            AAccess.FieldName := PropInfo.ReadField;
+            AAccess.FieldInfo := RT.FindField(PropInfo.ReadField);
+            Result := PropInfo.TypeDesc;
+            AAccess.ResolvedType := Result;
+            Exit;
+          end;
+          { Zero-arg method on the implicit-Self field: FTok.NextToken }
+          AAccess.ResolvedMethod := FindMethodDecl(RT.Name, AAccess.FieldName);
+          if AAccess.ResolvedMethod <> nil then
+          begin
+            AAccess.IsMethodCall := True;
+            Result := TMethodDecl(AAccess.ResolvedMethod).ResolvedReturnType;
+            AAccess.ResolvedType := Result;
+            Exit;
+          end;
+          SemanticError(
+            Format('Type ''%s'' has no field ''%s''',
+              [AAccess.RecordName, AAccess.FieldName]),
+            AAccess.Line, AAccess.Col);
+        end;
+        Result := AAccess.FieldInfo.TypeDesc;
+        Exit;
+      end;
+    end;
     SemanticError(
       Format('Undeclared identifier ''%s''', [AAccess.RecordName]),
       AAccess.Line, AAccess.Col);
+  end;
 
   { Constructor call: TypeName.Create }
   if RecSym.Kind = skType then
@@ -2612,12 +3112,13 @@ begin
           [AAccess.FieldName, AAccess.RecordName]),
         AAccess.Line, AAccess.Col);
     AAccess.IsConstructorCall := True;
+    AAccess.ResolvedMethod    := FindMethodDecl(TRecordTypeDesc(RecSym.TypeDesc).Name, 'Create');
     Result := RecSym.TypeDesc;
     Exit;
   end;
 
-  { Field access on variable }
-  if RecSym.Kind <> skVariable then
+  { Field access on variable or parameter }
+  if not (RecSym.Kind in [skVariable, skParameter, skVarParameter]) then
     SemanticError(
       Format('''%s'' is not a variable or type', [AAccess.RecordName]),
       AAccess.Line, AAccess.Col);
@@ -2628,11 +3129,21 @@ begin
       AAccess.Line, AAccess.Col);
 
   AAccess.IsClassAccess := RecSym.TypeDesc.Kind = tyClass;
+  AAccess.IsGlobal      := RecSym.IsGlobal;
 
   RT      := TRecordTypeDesc(RecSym.TypeDesc);
   FldInfo := RT.FindField(AAccess.FieldName);
   if FldInfo = nil then
   begin
+    { Zero-arg method call via field access: Obj.Method (no parens) }
+    AAccess.ResolvedMethod := FindMethodDecl(RT.Name, AAccess.FieldName);
+    if AAccess.ResolvedMethod <> nil then
+    begin
+      AAccess.IsMethodCall := True;
+      Result := TMethodDecl(AAccess.ResolvedMethod).ResolvedReturnType;
+      AAccess.ResolvedType := Result;
+      Exit;
+    end;
     { Check if this is a property access }
     PropInfo := RT.FindProperty(AAccess.FieldName);
     if PropInfo <> nil then
@@ -2697,7 +3208,13 @@ begin
       (LType = RType) or
       ((LType.Kind = tyNil) and (RType.Kind in [tyClass, tyInterface, tyPointer])) or
       ((RType.Kind = tyNil) and (LType.Kind in [tyClass, tyInterface, tyPointer])) or
-      ((LType.Kind = tyPointer) and (RType.Kind = tyPointer))
+      ((LType.Kind = tyPointer) and (RType.Kind = tyPointer)) or
+      { Class comparisons: allow subtype on either side }
+      ((LType.Kind = tyClass) and (RType.Kind = tyClass) and
+       (IsSubtypeOf(LType, RType) or IsSubtypeOf(RType, LType))) or
+      { TObject is universal base class }
+      ((LType.Kind = tyClass) and (RType.Kind = tyClass) and
+       ((LType.Name = 'TObject') or (RType.Name = 'TObject')))
     ) then
       CheckTypesMatch(LType, RType,
         Format('comparison ''%s''', [BinaryOpName(ABin.Op)]),
@@ -2746,7 +3263,9 @@ var
   TargetType: TTypeDesc;
 begin
   ObjType := AnalyseExpr(AExpr.Obj);
-  if ObjType.Kind <> tyClass then
+  { Allow untyped Pointer on left — GetObject/Get return Pointer, used with 'is' }
+  if not ((ObjType.Kind = tyClass) or (ObjType.Kind = tyPointer) or
+          (ObjType.Kind = tyInterface)) then
     SemanticError(
       Format('''is'' requires a class instance on the left, got ''%s''',
         [ObjType.Name]),

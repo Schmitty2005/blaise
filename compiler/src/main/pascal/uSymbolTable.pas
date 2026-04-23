@@ -188,10 +188,13 @@ type
     Kind:       TSymbolKind;
     TypeDesc:   TTypeDesc;    { not owned; nil for procedures }
     Params:     TObjectList;  { owned TParamDesc; populated for procedures/functions }
-    ConstValue: Int64;        { valid when Kind = skConstant }
+    ConstValue:  Int64;       { valid when Kind = skConstant; integer/bool/enum value }
+    ConstString: string;      { valid when Kind = skConstant and type is tyString }
     IsWeak:     Boolean;      { true for variables declared [Weak]; codegen
                                 keys off this to emit _WeakAssign instead
                                 of the strong addref/release pattern. }
+    IsGlobal:   Boolean;      { true for program-level variables; codegen uses
+                                QBE data-section storage instead of stack alloc }
     constructor Create(const AName: string; AKind: TSymbolKind; AType: TTypeDesc);
     destructor Destroy; override;
   end;
@@ -320,7 +323,7 @@ begin
   case Kind of
     tyInteger, tyUInt32, tyEnum: Result := 4;
     tyInt64:             Result := 8;
-    tyByte, tyBoolean:   Result := 1;
+    tyByte, tyBoolean:   Result := 4;  { stored as word, same as AllocAlign }
     tyString:            Result := 8;  { pointer size on 64-bit }
     tyRecord:            Result := TRecordTypeDesc(Self).TotalSize;
     tyNil:               Result := 8;
@@ -846,6 +849,8 @@ begin
   Define(Sym);
   Sym := TSymbol.Create('LowerCase', skFunction, FTypeString);
   Define(Sym);
+  Sym := TSymbol.Create('Trim',      skFunction, FTypeString);
+  Define(Sym);
   Sym := TSymbol.Create('SameText',  skFunction, FTypeBoolean);
   Define(Sym);
   Sym := TSymbol.Create('IntToStr',  skFunction, FTypeString);
@@ -858,6 +863,8 @@ begin
   Define(Sym);
   Sym := TSymbol.Create('OrdAt',       skFunction, FTypeInteger);
   Define(Sym);
+  Sym := TSymbol.Create('Chr',         skFunction, FTypeString);
+  Define(Sym);
   { Memory utilities }
   Sym := TSymbol.Create('ZeroMem',      skProcedure, nil); Define(Sym);
   Sym := TSymbol.Create('_ClassAddRef', skProcedure, nil); Define(Sym);
@@ -869,7 +876,9 @@ begin
   Sym := TSymbol.Create('ReadFile',   skFunction,  FTypeString);  Define(Sym);
   Sym := TSymbol.Create('WriteFile',  skProcedure, nil);          Define(Sym);
   Sym := TSymbol.Create('AppendFile', skProcedure, nil);          Define(Sym);
-  Sym := TSymbol.Create('FileExists', skFunction,  FTypeBoolean); Define(Sym);
+  Sym := TSymbol.Create('FileExists',             skFunction,  FTypeBoolean); Define(Sym);
+  Sym := TSymbol.Create('DeleteFile',             skProcedure, nil);          Define(Sym);
+  Sym := TSymbol.Create('CurrentExceptionMessage', skFunction,  FTypeString);  Define(Sym);
   { Environment and process }
   Sym := TSymbol.Create('GetEnvVar',  skFunction,  FTypeString);  Define(Sym);
   Sym := TSymbol.Create('Exec',       skFunction,  FTypeInteger); Define(Sym);

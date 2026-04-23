@@ -253,8 +253,8 @@ procedure TVarParamTests.TestCodegen_VarParam_CallPassesAddress;
 var IR: string;
 begin
   IR := GenIR(SrcVarSet);
-  { SetVal(V) must pass the address of V, not its loaded value }
-  AssertTrue('call passes address of V', Pos('call $SetVal(l %_var_V)', IR) > 0);
+  { SetVal(V) must pass the address of V — V is a global so address is $V }
+  AssertTrue('call passes address of V', Pos('call $SetVal(l $V)', IR) > 0);
 end;
 
 procedure TVarParamTests.TestCodegen_VarParam_WriteStoresThroughPointer;
@@ -278,9 +278,9 @@ procedure TVarParamTests.TestCodegen_VarParam_Swap;
 var IR: string;
 begin
   IR := GenIR(SrcVarSwap);
-  { Both X and Y addresses passed to Swap }
-  AssertTrue('passes address of X', Pos('l %_var_X', IR) > 0);
-  AssertTrue('passes address of Y', Pos('l %_var_Y', IR) > 0);
+  { Both X and Y addresses passed to Swap — X and Y are globals so addresses are $X, $Y }
+  AssertTrue('passes address of X', Pos('l $X', IR) > 0);
+  AssertTrue('passes address of Y', Pos('l $Y', IR) > 0);
 end;
 
 initialization

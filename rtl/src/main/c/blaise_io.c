@@ -156,6 +156,16 @@ int32_t _FileExists(void* filename) {
 }
 
 /* ------------------------------------------------------------------ */
+/* _DeleteFile(FileName) : void                                         */
+/* Deletes a file. Silently ignores failure.                            */
+/* ------------------------------------------------------------------ */
+
+void _DeleteFile(void* filename) {
+    const char* path = io_str_data(filename);
+    remove(path);
+}
+
+/* ------------------------------------------------------------------ */
 /* _GetEnvVar(Name) : string                                            */
 /* Returns the value of environment variable Name, or empty string.    */
 /* ------------------------------------------------------------------ */

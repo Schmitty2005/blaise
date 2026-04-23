@@ -49,10 +49,15 @@ type
     Name:              string;
     IsVarParam:        Boolean;  { set by uSemantic — True if this ident is a var parameter }
     IsConstant:        Boolean;  { set by uSemantic — True if this ident is a skConstant symbol }
-    ConstValue:        Int64;    { valid when IsConstant = True }
+    ConstValue:        Int64;    { valid when IsConstant = True; integer/bool/enum value }
+    ConstString:       string;   { valid when IsConstant = True and type is tyString }
     IsNoArgFuncCall:   Boolean;  { set by uSemantic — bare ident that resolves to a 0-arg function }
+    NoArgFuncDecl:     TObject;  { TMethodDecl — not owned; valid when IsNoArgFuncCall and user-defined }
+    IsGlobal:          Boolean;  { set by uSemantic — this ident is a program-level global var }
     IsImplicitSelf:    Boolean;  { set by uSemantic — bare field name implicitly referencing Self }
     ImplicitFieldInfo: TObject;  { TFieldInfo — not owned; valid when IsImplicitSelf }
+    IsImplicitSelfMethod: Boolean; { set by uSemantic — bare zero-arg method call on Self }
+    ImplicitMethodDecl:   TObject;  { TMethodDecl — not owned; set when IsImplicitSelfMethod }
   end;
 
   TFieldAccessExpr = class(TASTExpr)
@@ -65,6 +70,11 @@ type
     IsClassAccess:     Boolean;       { set by uSemantic — pointer deref needed }
     PropRead:          TPropertyInfo; { non-nil if this is a method-backed property read }
     PropOwnerType:     string;        { class type name for method-backed property calls }
+    IsImplicitSelf:    Boolean;       { set by uSemantic — RecordName is a field of Self }
+    ImplicitBaseInfo:  TFieldInfo;    { non-owned — the field of Self holding the record/class }
+    IsMethodCall:      Boolean;       { set by uSemantic — FieldName is a zero-arg method }
+    ResolvedMethod:    TObject;       { TMethodDecl — not owned; set when IsMethodCall }
+    IsGlobal:          Boolean;       { set by uSemantic — RecordName is a program-level global }
     destructor Destroy; override;
   end;
 
@@ -111,6 +121,7 @@ type
     Name:            string;
     Expr:            TASTExpr;   { owned }
     IsVarParam:      Boolean;    { set by uSemantic — True if target is a var parameter }
+    IsGlobal:        Boolean;    { set by uSemantic — True if target is a program-level global }
     ResolvedLhsType: TTypeDesc;  { set by uSemantic — type of the target variable }
     IsWeakLhs:       Boolean;    { set by uSemantic — True if the LHS symbol
                                    was declared [Weak]; codegen emits a
@@ -145,6 +156,7 @@ type
   TForStmt = class(TASTStmt)
   public
     VarName:   string;
+    IsGlobal:  Boolean;   { set by uSemantic — VarName is a program-level global }
     StartExpr: TASTExpr;  { owned }
     EndExpr:   TASTExpr;  { owned }
     IsDownTo:  Boolean;
@@ -178,6 +190,9 @@ type
   { 'break' statement — exits the innermost loop. }
   TBreakStmt = class(TASTStmt);
 
+  { 'continue' statement — jumps to next iteration of the innermost loop. }
+  TContinueStmt = class(TASTStmt);
+
   { One arm of a case statement: one or more ordinal values → body }
   TCaseBranch = class
   public
@@ -201,8 +216,12 @@ type
     RecordName:    string;
     FieldName:     string;
     Expr:          TASTExpr;   { owned }
+    ObjExpr:       TASTExpr;   { owned — when non-nil, receiver is this expression (e.g. typecast) }
     FieldInfo:     TFieldInfo; { set by uSemantic — carries offset + type }
     IsClassAccess: Boolean;    { set by uSemantic — pointer deref needed }
+    IsImplicitSelf:    Boolean; { set by uSemantic — RecordName is a field of Self }
+    ImplicitBaseInfo:  TFieldInfo; { non-owned — the field of Self that holds the record/class }
+    IsGlobal:          Boolean; { set by uSemantic — RecordName is a program-level global }
     destructor Destroy; override;
   end;
 
@@ -220,6 +239,7 @@ type
     Name:         string;
     Args:         TObjectList;  { owned TASTExpr items }
     ResolvedDecl: TObject;      { TMethodDecl — not owned; set by uSemantic for user-defined procs }
+    IsImplicitSelfMethod: Boolean; { set by uSemantic — call is on Self }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -229,6 +249,7 @@ type
     Name:         string;
     Args:         TObjectList;  { owned TASTExpr items }
     ResolvedDecl: TObject;      { TMethodDecl — not owned; set by uSemantic }
+    IsImplicitSelfMethod: Boolean; { set by uSemantic — call is on Self }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -245,9 +266,13 @@ type
     ObjectName: string;
     Name:       string;   { method name }
     Args:       TObjectList;   { owned TASTExpr items }
+    ObjExpr:    TASTExpr;  { owned — when non-nil, receiver is this expression }
     { Set by uSemantic: }
     ResolvedClassType: TTypeDesc;   { not owned }
     ResolvedMethod:    TObject;     { TMethodDecl — not owned; avoids forward ref }
+    IsImplicitSelf:    Boolean;     { ObjectName is a field of Self }
+    ImplicitBaseInfo:  TFieldInfo;  { not owned — the field of Self }
+    IsGlobal:          Boolean;     { set by uSemantic — ObjectName is a program-level global }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -283,6 +308,7 @@ type
     IsWeak:       Boolean;      { set by uSemantic when [Weak] is resolved
                                   on this declaration.  Codegen keys off
                                   this instead of walking Attributes. }
+    IsGlobal:     Boolean;      { set by uSemantic when this is a program-level global variable }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -355,9 +381,11 @@ type
     ObjectName:        string;
     Name:              string;     { method name }
     Args:              TObjectList; { owned TASTExpr }
+    ObjExpr:           TASTExpr;   { owned — receiver expression when ObjectName = '' }
     ResolvedClassType: TTypeDesc;   { not owned; set by uSemantic }
     ResolvedMethod:    TObject;     { TMethodDecl — not owned }
     IsConstructorCall: Boolean;    { set by uSemantic — TypeName.Create(args) }
+    IsGlobal:          Boolean;    { set by uSemantic — ObjectName is a program-level global }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -648,6 +676,7 @@ end;
 destructor TFieldAssignment.Destroy;
 begin
   Expr.Free;
+  ObjExpr.Free;
   inherited Destroy;
 end;
 
@@ -707,6 +736,7 @@ end;
 destructor TMethodCallStmt.Destroy;
 begin
   Args.Free;
+  ObjExpr.Free;
   inherited Destroy;
 end;
 
@@ -803,6 +833,7 @@ end;
 destructor TMethodCallExpr.Destroy;
 begin
   Args.Free;
+  ObjExpr.Free;
   inherited Destroy;
 end;
 

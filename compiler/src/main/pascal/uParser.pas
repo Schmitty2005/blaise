@@ -1015,9 +1015,13 @@ var
   Assign:      TAssignment;
   FldAssign:   TFieldAssignment;
   MCall:       TMethodCallStmt;
+  MCallExpr:   TMethodCallExpr;
   PtrWrite:    TPointerWriteStmt;
   PtrIdNode:   TIdentExpr;
   SecondIdent: string;
+  FldNode:     TFieldAccessExpr;
+  CastRcv:     TASTExpr;
+  FCallNode:   TFuncCallExpr;
 begin
   Result := nil;
 
@@ -1066,6 +1070,15 @@ begin
   if Check(tkBreak) then
   begin
     Result      := TBreakStmt.Create;
+    Result.Line := FCurrent.Line;
+    Result.Col  := FCurrent.Col;
+    Advance;
+    Exit;
+  end;
+
+  if Check(tkContinue) then
+  begin
+    Result      := TContinueStmt.Create;
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Advance;
@@ -1139,20 +1152,138 @@ begin
     end
     else
     begin
-      { Method call: Ident '.' Ident ['(' [args] ')'] }
-      MCall            := TMethodCallStmt.Create;
-      MCall.Line       := Line;
-      MCall.Col        := Col;
-      MCall.ObjectName := Name;
-      MCall.Name := SecondIdent;
-      if Check(tkLParen) then
+      { Method call: Ident '.' Ident ['(' [args] ')'] — may chain to
+        Ident.Ident.Ident... with further '.' before the final method call. }
+      if Check(tkDot) then
       begin
-        Advance;
-        if not Check(tkRParen) then
-          ParseMethodCallArgList(MCall);
-        Expect(tkRParen);
+        { Chained: AProg.UsedUnits.Add(...) — build a field-access chain as
+          the receiver expression. }
+        MCall            := TMethodCallStmt.Create;
+        MCall.Line       := Line;
+        MCall.Col        := Col;
+        MCall.ObjectName := '';
+        { Build chain: AProg -> AProg.UsedUnits }
+        PtrIdNode        := TIdentExpr.Create;
+        PtrIdNode.Line   := Line;
+        PtrIdNode.Col    := Col;
+        PtrIdNode.Name   := Name;
+        FldNode          := TFieldAccessExpr.Create;
+        FldNode.Line     := Line;
+        FldNode.Col      := Col;
+        FldNode.Base     := PtrIdNode;
+        FldNode.FieldName:= SecondIdent;
+        MCall.ObjExpr    := FldNode;
+        while Check(tkDot) do
+        begin
+          Advance;
+          if not Check(tkIdent) then
+            raise EParseError.CreateFmt('Expected field or method name at line %d col %d',
+              [FCurrent.Line, FCurrent.Col]);
+          SecondIdent := FCurrent.Value;
+          Advance;
+          if Check(tkDot) then
+          begin
+            { Still more chain — extend field access path }
+            FldNode          := TFieldAccessExpr.Create;
+            FldNode.Line     := Line;
+            FldNode.Col      := Col;
+            FldNode.Base     := MCall.ObjExpr;
+            FldNode.FieldName:= SecondIdent;
+            MCall.ObjExpr    := FldNode;
+          end
+          else
+          begin
+            MCall.Name := SecondIdent;
+            if Check(tkLParen) then
+            begin
+              Advance;
+              if not Check(tkRParen) then
+                ParseMethodCallArgList(MCall);
+              Expect(tkRParen);
+            end;
+            Break;
+          end;
+        end;
+        Result := MCall;
+      end
+      else
+      begin
+        MCall            := TMethodCallStmt.Create;
+        MCall.Line       := Line;
+        MCall.Col        := Col;
+        MCall.ObjectName := Name;
+        MCall.Name       := SecondIdent;
+        if Check(tkLParen) then
+        begin
+          Advance;
+          if not Check(tkRParen) then
+            ParseMethodCallArgList(MCall);
+          Expect(tkRParen);
+        end;
+        { Post-method chain: Name.Method(args).Field := value or .Method2(args) }
+        if Check(tkDot) then
+        begin
+          MCallExpr            := TMethodCallExpr.Create;
+          MCallExpr.Line       := Line;
+          MCallExpr.Col        := Col;
+          MCallExpr.ObjectName := MCall.ObjectName;
+          MCallExpr.Name       := MCall.Name;
+          while MCall.Args.Count > 0 do
+            MCallExpr.Args.Add(MCall.Args.Extract(MCall.Args.Items[0]));
+          MCall.Free;
+          MCall   := nil;
+          CastRcv := MCallExpr;
+          while Check(tkDot) do
+          begin
+            Advance;
+            if not Check(tkIdent) then
+              raise EParseError.CreateFmt(
+                'Expected identifier after ''.'' at line %d col %d',
+                [FCurrent.Line, FCurrent.Col]);
+            SecondIdent := FCurrent.Value;
+            Advance;
+            if Check(tkLParen) then
+            begin
+              MCall            := TMethodCallStmt.Create;
+              MCall.Line       := Line;
+              MCall.Col        := Col;
+              MCall.ObjectName := '';
+              MCall.Name       := SecondIdent;
+              MCall.ObjExpr    := CastRcv;
+              Advance;
+              if not Check(tkRParen) then
+                ParseMethodCallArgList(MCall);
+              Expect(tkRParen);
+              Result := MCall;
+              Exit;
+            end;
+            FldNode           := TFieldAccessExpr.Create;
+            FldNode.Line      := Line;
+            FldNode.Col       := Col;
+            FldNode.Base      := CastRcv;
+            FldNode.FieldName := SecondIdent;
+            CastRcv := FldNode;
+          end;
+          if Check(tkAssign) and (CastRcv is TFieldAccessExpr) then
+          begin
+            Advance;
+            FldAssign           := TFieldAssignment.Create;
+            FldAssign.Line      := Line;
+            FldAssign.Col       := Col;
+            FldAssign.FieldName := TFieldAccessExpr(CastRcv).FieldName;
+            FldAssign.ObjExpr   := TFieldAccessExpr(CastRcv).Base;
+            TFieldAccessExpr(CastRcv).Base := nil;
+            CastRcv.Free;
+            FldAssign.Expr := ParseExpr;
+            Result := FldAssign;
+            Exit;
+          end;
+          raise EParseError.CreateFmt(
+            'Expected method call or assignment after chain at line %d col %d',
+            [FCurrent.Line, FCurrent.Col]);
+        end;
+        Result := MCall;
       end;
-      Result := MCall;
     end;
   end
   else if Check(tkAssign) then
@@ -1167,17 +1298,97 @@ begin
   end
   else
   begin
+    { Typecast-then-method-call statement: TCast(expr).Method(args)
+      or chained Ident(arg).Field.Method(args). Detect by peeking for
+      '(' followed by a '.' after the paren closure — parse directly
+      into a TFuncCallExpr receiver so the inner arg lives on. }
+    if Check(tkLParen) then
+    begin
+      FCallNode      := TFuncCallExpr.Create;
+      FCallNode.Line := Line;
+      FCallNode.Col  := Col;
+      FCallNode.Name := Name;
+      Advance;  { '(' }
+      if not Check(tkRParen) then
+      begin
+        FCallNode.Args.Add(ParseExpr);
+        while Check(tkComma) do
+        begin
+          Advance;
+          FCallNode.Args.Add(ParseExpr);
+        end;
+      end;
+      Expect(tkRParen);
+      if Check(tkDot) then
+      begin
+        CastRcv := FCallNode;
+        { Chain parse: each step reads '.Ident', then either '(' (call) or
+          more '.'. The final method call terminates as TMethodCallStmt. }
+        while Check(tkDot) do
+        begin
+          Advance;
+          if not Check(tkIdent) then
+            raise EParseError.CreateFmt('Expected field or method name at line %d col %d',
+              [FCurrent.Line, FCurrent.Col]);
+          SecondIdent := FCurrent.Value;
+          Advance;
+          if Check(tkLParen) then
+          begin
+            MCall            := TMethodCallStmt.Create;
+            MCall.Line       := Line;
+            MCall.Col        := Col;
+            MCall.ObjectName := '';
+            MCall.Name       := SecondIdent;
+            MCall.ObjExpr    := CastRcv;
+            Advance;  { consume '(' }
+            if not Check(tkRParen) then
+              ParseMethodCallArgList(MCall);
+            Expect(tkRParen);
+            Result := MCall;
+            Exit;
+          end;
+          FldNode            := TFieldAccessExpr.Create;
+          FldNode.Line       := Line;
+          FldNode.Col        := Col;
+          FldNode.Base       := CastRcv;
+          FldNode.FieldName  := SecondIdent;
+          CastRcv            := FldNode;
+        end;
+        { Field assignment through typecast/chain: TCast(expr).Field := value }
+        if Check(tkAssign) and (CastRcv is TFieldAccessExpr) then
+        begin
+          Advance; { consume ':=' }
+          FldAssign          := TFieldAssignment.Create;
+          FldAssign.Line     := Line;
+          FldAssign.Col      := Col;
+          FldAssign.FieldName := TFieldAccessExpr(CastRcv).FieldName;
+          FldAssign.ObjExpr  := TFieldAccessExpr(CastRcv).Base;
+          TFieldAccessExpr(CastRcv).Base := nil; { transfer ownership }
+          CastRcv.Free;
+          FldAssign.Expr := ParseExpr;
+          Result := FldAssign;
+          Exit;
+        end;
+        raise EParseError.CreateFmt(
+          'Expected method call after typecast at line %d col %d',
+          [FCurrent.Line, FCurrent.Col]);
+      end;
+      { No '.': it was a plain procedure/function call. Move args to a
+        fresh TProcCall using FPC-style Extract (removes without freeing). }
+      Call      := TProcCall.Create;
+      Call.Line := Line;
+      Call.Col  := Col;
+      Call.Name := Name;
+      while FCallNode.Args.Count > 0 do
+        Call.Args.Add(FCallNode.Args.Extract(FCallNode.Args.Items[0]));
+      FCallNode.Free;
+      Result := Call;
+      Exit;
+    end;
     Call      := TProcCall.Create;
     Call.Line := Line;
     Call.Col  := Col;
     Call.Name := Name;
-    if Check(tkLParen) then
-    begin
-      Advance;
-      if not Check(tkRParen) then
-        ParseArgList(Call);
-      Expect(tkRParen);
-    end;
     Result := Call;
   end;
 end;
@@ -1424,8 +1635,9 @@ end;
 
 function TParser.ParseCaseStmt: TCaseStmt;
 var
-  Branch: TCaseBranch;
-  Stmt:   TASTStmt;
+  Branch:   TCaseBranch;
+  Stmt:     TASTStmt;
+  CmpElse:  TCompoundStmt;
 begin
   Result := TCaseStmt.Create;
   try
@@ -1457,7 +1669,28 @@ begin
     if Check(tkElse) then
     begin
       Advance;  { consume 'else' }
-      Result.ElseStmt := ParseStmt;
+      if Check(tkBegin) then
+        Result.ElseStmt := ParseCompoundStmt
+      else
+      begin
+        { Collect all statements until 'end' — FPC allows multi-stmt else without begin..end }
+        CmpElse := TCompoundStmt.Create;
+        CmpElse.Stmts.Add(ParseStmt);
+        if Check(tkSemicolon) then Advance;
+        while not (Check(tkEnd) or Check(tkEOF)) do
+        begin
+          CmpElse.Stmts.Add(ParseStmt);
+          if Check(tkSemicolon) then Advance;
+        end;
+        if CmpElse.Stmts.Count = 1 then
+        begin
+          { Unwrap single-item compound for simplicity }
+          Result.ElseStmt := TASTStmt(CmpElse.Stmts.Extract(CmpElse.Stmts.Items[0]));
+          CmpElse.Free;
+        end
+        else
+          Result.ElseStmt := CmpElse;
+      end;
       if Check(tkSemicolon) then Advance;
     end;
     Expect(tkEnd);
@@ -1611,8 +1844,10 @@ begin
   end
   else if Check(tkIs) then
   begin
-    Advance;
     IsNode          := TIsExpr.Create;
+    IsNode.Line     := FCurrent.Line;
+    IsNode.Col      := FCurrent.Col;
+    Advance;
     IsNode.Obj      := Result;
     IsNode.TypeName := FCurrent.Value;
     Expect(tkIdent);
@@ -1815,13 +2050,39 @@ begin
             while Check(tkDot) and (PeekKind = tkIdent) do
             begin
               Advance;  { consume '.' }
-              FldNode            := TFieldAccessExpr.Create;
-              FldNode.Line       := FCurrent.Line;
-              FldNode.Col        := FCurrent.Col;
-              FldNode.Base       := Result;
-              FldNode.FieldName  := FCurrent.Value;
-              Advance;  { consume field name }
-              Result := FldNode;
+              SecondName := FCurrent.Value;
+              Advance;  { consume field/method name }
+              if Check(tkLParen) then
+              begin
+                { Chained method call on expression }
+                MCallNode             := TMethodCallExpr.Create;
+                MCallNode.Line        := FCurrent.Line;
+                MCallNode.Col         := FCurrent.Col;
+                MCallNode.ObjectName  := '';
+                MCallNode.Name        := SecondName;
+                MCallNode.ObjExpr     := Result;
+                Advance;  { consume '(' }
+                if not Check(tkRParen) then
+                begin
+                  MCallNode.Args.Add(ParseExpr);
+                  while Check(tkComma) do
+                  begin
+                    Advance;
+                    MCallNode.Args.Add(ParseExpr);
+                  end;
+                end;
+                Expect(tkRParen);
+                Result := MCallNode;
+              end
+              else
+              begin
+                FldNode            := TFieldAccessExpr.Create;
+                FldNode.Line       := FCurrent.Line;
+                FldNode.Col        := FCurrent.Col;
+                FldNode.Base       := Result;
+                FldNode.FieldName  := SecondName;
+                Result := FldNode;
+              end;
             end;
           end;
         end
@@ -1844,6 +2105,52 @@ begin
           end;
           Expect(tkRParen);
           Result := FCallNode;
+          { Postfix chained field/method access: FuncOrCast(...).Member ... }
+          while Check(tkDot) and (PeekKind = tkIdent) do
+          begin
+            Advance;  { consume '.' }
+            SecondName := FCurrent.Value;
+            Advance;  { consume field/method name }
+            FldNode            := TFieldAccessExpr.Create;
+            FldNode.Line       := FCurrent.Line;
+            FldNode.Col        := FCurrent.Col;
+            FldNode.Base       := Result;
+            FldNode.FieldName  := SecondName;
+            Result := FldNode;
+            if Check(tkLParen) then
+            begin
+              { Method call with args on the chained expression — represent
+                by marking the access as a method call and parsing an arg list
+                into a synthesised TMethodCallExpr with Obj=Base. }
+              { We convert the TFieldAccessExpr into an arg-bearing method call. }
+              Advance;  { consume '(' }
+              if not Check(tkRParen) then
+              begin
+                FldNode.ResolvedType := nil; { placeholder to note args }
+              end;
+              { Lift the FldNode to a method call by storing args via a
+                temporary TMethodCallExpr and using Base for the receiver. }
+              MCallNode             := TMethodCallExpr.Create;
+              MCallNode.Line        := FldNode.Line;
+              MCallNode.Col         := FldNode.Col;
+              MCallNode.ObjectName  := '';  { empty — receiver is Base expr }
+              MCallNode.Name        := SecondName;
+              MCallNode.ObjExpr     := FldNode.Base;
+              FldNode.Base          := nil;  { transfer ownership }
+              FldNode.Free;
+              if not Check(tkRParen) then
+              begin
+                MCallNode.Args.Add(ParseExpr);
+                while Check(tkComma) do
+                begin
+                  Advance;
+                  MCallNode.Args.Add(ParseExpr);
+                end;
+              end;
+              Expect(tkRParen);
+              Result := MCallNode;
+            end;
+          end;
         end
         else
         begin

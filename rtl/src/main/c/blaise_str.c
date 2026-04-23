@@ -138,6 +138,25 @@ void* _StringLowerCase(void* s) {
 }
 
 /* ------------------------------------------------------------------ */
+/* _StringTrim(s) : string — strip leading and trailing whitespace     */
+/* ------------------------------------------------------------------ */
+
+void* _StringTrim(void* s) {
+    int32_t     len  = str_len(s);
+    const char* data = str_data(s);
+    int32_t     lo   = 0;
+    int32_t     hi   = len - 1;
+    while (lo <= hi && (unsigned char)data[lo]  <= ' ') lo++;
+    while (hi >= lo && (unsigned char)data[hi]  <= ' ') hi--;
+    int32_t newlen = (hi >= lo) ? (hi - lo + 1) : 0;
+    void*   r      = str_alloc(newlen);
+    if (!r) return NULL;
+    if (newlen > 0)
+        memcpy((char*)r + sizeof(BlaiseStrHdr), data + lo, newlen);
+    return r;
+}
+
+/* ------------------------------------------------------------------ */
 /* _StringSameText(s1, s2) : Boolean (0 or 1)                          */
 /* ------------------------------------------------------------------ */
 
@@ -189,6 +208,18 @@ int32_t _OrdAt(void* s, int32_t i) {
     const char* data = str_data(s);
     if (i < 1 || i > len) return 0;
     return (int32_t)(unsigned char)data[i - 1];
+}
+
+/* ------------------------------------------------------------------ */
+/* _Chr(n) : string  — one-character string holding byte value n.     */
+/* Returns an unowned header (RefCount = 0); caller AddRefs.          */
+/* ------------------------------------------------------------------ */
+
+void* _Chr(int32_t n) {
+    BlaiseStrHdr* h = (BlaiseStrHdr*)str_alloc(1);
+    if (!h) return NULL;
+    ((char*)(h + 1))[0] = (char)(unsigned char)n;
+    return (void*)h;
 }
 
 /* ------------------------------------------------------------------ */

@@ -465,9 +465,9 @@ var
   IR: string;
 begin
   IR := GenIR(SrcGetterClass);
-  { The call result is assigned into a temp and then stored into %_var_N }
+  { N is a program-level global; the call result is stored into $N }
   AssertTrue('result stored into N',
-    Pos('%_var_N', IR) > 0);
+    Pos('$N', IR) > 0);
 end;
 
 procedure TFunctionTests.TestCodegen_Function_ReturnsResult;

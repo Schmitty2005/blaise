@@ -481,8 +481,9 @@ var
   IR: string;
 begin
   IR := GenIR(SrcInterfaceVar);
-  AssertTrue('obj slot for F', Pos('_var_F_obj', IR) > 0);
-  AssertTrue('itab slot for F', Pos('_var_F_itab', IR) > 0);
+  { F is a program-level global — slots are $F_obj and $F_itab }
+  AssertTrue('obj slot for F', Pos('$F_obj', IR) > 0);
+  AssertTrue('itab slot for F', Pos('$F_itab', IR) > 0);
 end;
 
 procedure TInterfaceTests.TestCodegen_InterfaceMethodCall_IndirectDispatch;
@@ -491,7 +492,7 @@ var
 begin
   IR := GenIR(SrcInterfaceVar);
   { Interface dispatch loads the itab pointer and calls indirectly }
-  AssertTrue('loads itab pointer', Pos('_var_F_itab', IR) > 0);
+  AssertTrue('loads itab pointer', Pos('$F_itab', IR) > 0);
   AssertTrue('indirect call via register', Pos('call %', IR) > 0);
 end;
 
@@ -680,10 +681,11 @@ begin
     _F_obj and _F_itab are loaded for the read side and both _G_obj and
     _G_itab are stored on the write side. }
   IR := GenIR(SrcIntfToIntf);
-  AssertTrue('reads F_obj',  Pos('loadl %_var_F_obj',   IR) > 0);
-  AssertTrue('reads F_itab', Pos('loadl %_var_F_itab',  IR) > 0);
+  { F, G are program-level globals — slots accessed via $F_obj, $F_itab etc. }
+  AssertTrue('reads F_obj',  Pos('loadl $F_obj',   IR) > 0);
+  AssertTrue('reads F_itab', Pos('loadl $F_itab',  IR) > 0);
   AssertTrue('writes G_obj', Pos('storel ', IR) > 0);
-  AssertTrue('writes G_itab slot', Pos('%_var_G_itab', IR) > 0);
+  AssertTrue('writes G_itab slot', Pos('$G_itab', IR) > 0);
 end;
 
 procedure TInterfaceTests.TestCodegen_InterfaceVar_ScopeExit_ReleasesObjOnly;
@@ -693,12 +695,12 @@ begin
     have its obj slot released.  itab is a static pointer and is not
     refcounted, so it must NOT be released. }
   IR := GenIR(SrcInterfaceVar);
-  { Look for "loadl %_var_F_obj" followed by _ClassRelease somewhere after
-    main_exit — ensures the scope-exit release pass covered interface vars. }
+  { F is a program-level global — slots accessed via $F_obj, $F_itab.
+    Check that scope-exit cleanup loads the obj slot for release. }
   AssertTrue('scope-exit loads obj slot of interface var',
-    Pos('loadl %_var_F_obj', IR) > 0);
+    Pos('loadl $F_obj', IR) > 0);
   AssertTrue('no StringRelease or direct free on itab slot',
-    Pos('loadl %_var_F_itab', IR) > 0);  { itab is read during the method
+    Pos('loadl $F_itab', IR) > 0);  { itab is read during the method
                                             call path but never released. }
 end;
 
