@@ -715,6 +715,8 @@ begin
       NewMDecl := TMethodDecl(ClonedCD.Methods[J]);
       Key      := ATypeName + '.' + NewMDecl.Name;
       FMethodIndex.AddObject(Key, NewMDecl);
+      if SameText(NewMDecl.Name, 'Destroy') then
+        RT.HasDestroyMethod := True;
 
       if NewMDecl.IsVirtual or NewMDecl.IsOverride then
         NewMDecl.VTableSlot := RT.FindVTableSlot(NewMDecl.Name);
@@ -1223,6 +1225,8 @@ begin
         MDecl.OwnerTypeName := TD.Name;
         Key                 := TD.Name + '.' + MDecl.Name;
         FMethodIndex.AddObject(Key, MDecl);
+        if SameText(MDecl.Name, 'Destroy') then
+          RT.HasDestroyMethod := True;
 
         { Retrieve the vtable slot assigned in the pre-pass above }
         if MDecl.IsVirtual or MDecl.IsOverride then

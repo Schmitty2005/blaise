@@ -95,6 +95,20 @@ type
       scope exit.  This is the functional proof that the weak-ref
       insertion pass does what it says on the tin. }
     procedure TestRun_WeakRef_BreaksCycle_Valgrind;
+
+    { Destroy as ARC destructor hook: a class with a Destroy method that
+      frees an internal malloc buffer goes valgrind-clean when the only
+      release is the scope-exit ARC release (no explicit Free call). }
+    procedure TestRun_ClassDestroy_FreesBuffer_Valgrind;
+
+    { RTL collections under ARC: a TList<Integer> built inline (no RTL
+      unit needed) with a Destroy that frees FData is valgrind-clean. }
+    procedure TestRun_TListARC_Valgrind;
+
+    { Phase 3 milestone program: TList + TDictionary under ARC rules.
+      Asserts expected stdout and valgrind-clean execution. }
+    procedure TestRun_Phase3Milestone_Stdout;
+    procedure TestRun_Phase3Milestone_Valgrind;
   end;
 
 implementation
@@ -721,6 +735,88 @@ const
     '  WriteLn(B.Value)'                                + LE +
     'end.';
 
+  { Destroy as ARC destructor: class allocates an internal buffer via Init,
+    Destroy frees it.  No Free call in main — scope-exit ARC handles the
+    class lifetime; Destroy is invoked via the field cleanup fn.  The
+    program must produce the expected output and pass valgrind. }
+  SrcDestroyFreesBuffer =
+    'program P;'                                        + LE +
+    'type'                                              + LE +
+    '  TBuf = class'                                    + LE +
+    '    FData: ^Integer;'                              + LE +
+    '    procedure Init;'                               + LE +
+    '    procedure Destroy;'                            + LE +
+    '  end;'                                            + LE +
+    'procedure TBuf.Init;'                              + LE +
+    'begin'                                             + LE +
+    '  Self.FData := GetMem(4 * SizeOf(Integer))'      + LE +
+    'end;'                                              + LE +
+    'procedure TBuf.Destroy;'                           + LE +
+    'begin'                                             + LE +
+    '  FreeMem(Self.FData);'                            + LE +
+    '  Self.FData := nil'                               + LE +
+    'end;'                                              + LE +
+    'var B: TBuf;'                                      + LE +
+    'begin'                                             + LE +
+    '  B := TBuf.Create;'                               + LE +
+    '  B.Init;'                                         + LE +
+    '  WriteLn(''ok'')'                                 + LE +
+    'end.';
+
+  { TList<Integer> with Destroy: proves the pattern that the RTL uses.
+    ARC releases the list on scope exit; Destroy frees FData. }
+  SrcTListARCValgrind =
+    'program P;'                                        + LE +
+    'type'                                              + LE +
+    '  TList = class'                                   + LE +
+    '    FData:     ^Integer;'                          + LE +
+    '    FCount:    Integer;'                           + LE +
+    '    FCapacity: Integer;'                           + LE +
+    '    procedure Grow;'                               + LE +
+    '    procedure Add(V: Integer);'                    + LE +
+    '    function  Get(I: Integer): Integer;'           + LE +
+    '    procedure Destroy;'                            + LE +
+    '    property Count: Integer read FCount;'          + LE +
+    '  end;'                                            + LE +
+    'procedure TList.Grow;'                             + LE +
+    'var NewCap: Integer;'                              + LE +
+    'begin'                                             + LE +
+    '  if Self.FCapacity = 0 then NewCap := 4'         + LE +
+    '  else NewCap := Self.FCapacity * 2;'              + LE +
+    '  Self.FData     := ReallocMem(Self.FData, NewCap * SizeOf(Integer));' + LE +
+    '  Self.FCapacity := NewCap'                        + LE +
+    'end;'                                              + LE +
+    'procedure TList.Add(V: Integer);'                  + LE +
+    'var Dest: ^Integer;'                               + LE +
+    'begin'                                             + LE +
+    '  if Self.FCount = Self.FCapacity then Self.Grow;' + LE +
+    '  Dest  := Self.FData + Self.FCount * SizeOf(Integer);' + LE +
+    '  Dest^ := V;'                                     + LE +
+    '  Self.FCount := Self.FCount + 1'                  + LE +
+    'end;'                                              + LE +
+    'function TList.Get(I: Integer): Integer;'          + LE +
+    'var Src: ^Integer;'                                + LE +
+    'begin'                                             + LE +
+    '  Src    := Self.FData + I * SizeOf(Integer);'     + LE +
+    '  Result := Src^'                                  + LE +
+    'end;'                                              + LE +
+    'procedure TList.Destroy;'                          + LE +
+    'begin'                                             + LE +
+    '  FreeMem(Self.FData);'                            + LE +
+    '  Self.FData := nil'                               + LE +
+    'end;'                                              + LE +
+    'var L: TList;'                                     + LE +
+    'begin'                                             + LE +
+    '  L := TList.Create;'                              + LE +
+    '  L.Add(10);'                                      + LE +
+    '  L.Add(20);'                                      + LE +
+    '  L.Add(30);'                                      + LE +
+    '  WriteLn(L.Get(0));'                              + LE +
+    '  WriteLn(L.Get(1));'                              + LE +
+    '  WriteLn(L.Get(2));'                              + LE +
+    '  WriteLn(L.Count)'                                + LE +
+    'end.';
+
   { Chained READ: Pascal zero-initialises records, so O.I.Value defaults
     to 0 without any write.  Exercising the read path is enough for this
     smoke test; chained-WRITE support is tracked separately. }
@@ -875,6 +971,143 @@ begin
   begin
     if Log = '' then Log := '(valgrind produced no output — exit nonzero)';
     Fail('valgrind reported errors or leaks:' + LE + Log);
+  end;
+end;
+
+procedure TE2ETests.TestRun_ClassDestroy_FreesBuffer_Valgrind;
+var
+  Output: string;
+  RCode:  Integer;
+  Log:    string;
+  OK:     Boolean;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  AssertTrue('compile+run', CompileAndRun(SrcDestroyFreesBuffer, Output, RCode, []));
+  AssertEquals('exit 0',  0,          RCode);
+  AssertEquals('stdout',  'ok' + LE,  Output);
+  if RunProc('valgrind', ['--version'], Log, True) <> 0 then
+  begin
+    Ignore('valgrind not installed');
+    Exit;
+  end;
+  OK := RunUnderValgrind(SrcDestroyFreesBuffer, Log);
+  if not OK then
+  begin
+    if Log = '' then Log := '(valgrind produced no output — exit nonzero)';
+    Fail('Destroy did not free buffer — valgrind reports:' + LE + Log);
+  end;
+end;
+
+procedure TE2ETests.TestRun_TListARC_Valgrind;
+var
+  Output: string;
+  RCode:  Integer;
+  Log:    string;
+  OK:     Boolean;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  AssertTrue('compile+run', CompileAndRun(SrcTListARCValgrind, Output, RCode, []));
+  AssertEquals('exit 0',  0,   RCode);
+  AssertEquals('stdout',
+    '10' + LE + '20' + LE + '30' + LE + '3' + LE, Output);
+  if RunProc('valgrind', ['--version'], Log, True) <> 0 then
+  begin
+    Ignore('valgrind not installed');
+    Exit;
+  end;
+  OK := RunUnderValgrind(SrcTListARCValgrind, Log);
+  if not OK then
+  begin
+    if Log = '' then Log := '(valgrind produced no output — exit nonzero)';
+    Fail('TList FData leaked — valgrind reports:' + LE + Log);
+  end;
+end;
+
+procedure TE2ETests.TestRun_Phase3Milestone_Stdout;
+var
+  Path, Src, Output: string;
+  RCode:             Integer;
+  Lst:               TStringList;
+  Expected:          string;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  Path := ProjectRoot + 'tests/phase3_milestone.pas';
+  if not FileExists(Path) then
+  begin
+    Ignore('phase3_milestone.pas not found at ' + Path);
+    Exit;
+  end;
+  Lst := TStringList.Create;
+  try
+    Lst.LoadFromFile(Path);
+    Src := Lst.Text;
+  finally
+    Lst.Free;
+  end;
+  AssertTrue('compile+run milestone', CompileAndRun(Src, Output, RCode, []));
+  AssertEquals('milestone exit code', 0, RCode);
+  Expected :=
+    'list.count=5'             + LE +
+    'list[0]=10'               + LE +
+    'list[4]=50'               + LE +
+    'count_after_delete=4'     + LE +
+    'list[1]_after_delete=30'  + LE +
+    'dict.count=4'             + LE +
+    'beta=2'                   + LE +
+    'has_gamma=1'              + LE +
+    'beta_after_update=99'     + LE +
+    'count_after_remove=3'     + LE +
+    'has_alpha_after_remove=0' + LE;
+  AssertEquals('milestone stdout', Expected, Output);
+end;
+
+procedure TE2ETests.TestRun_Phase3Milestone_Valgrind;
+var
+  Path, Src, Log: string;
+  Lst:            TStringList;
+  Dummy:          string;
+  OK:             Boolean;
+begin
+  if not ToolchainAvailable then
+  begin
+    Ignore('qbe or RTL not built');
+    Exit;
+  end;
+  if RunProc('valgrind', ['--version'], Dummy, True) <> 0 then
+  begin
+    Ignore('valgrind not installed');
+    Exit;
+  end;
+  Path := ProjectRoot + 'tests/phase3_milestone.pas';
+  if not FileExists(Path) then
+  begin
+    Ignore('phase3_milestone.pas not found');
+    Exit;
+  end;
+  Lst := TStringList.Create;
+  try
+    Lst.LoadFromFile(Path);
+    Src := Lst.Text;
+  finally
+    Lst.Free;
+  end;
+  OK := RunUnderValgrind(Src, Log);
+  if not OK then
+  begin
+    if Log = '' then Log := '(valgrind produced no output — exit nonzero)';
+    Fail('phase3 milestone has leaks or errors:' + LE + Log);
   end;
 end;
 

@@ -90,12 +90,13 @@ type
   { Extended type descriptor for record types. }
   TRecordTypeDesc = class(TTypeDesc)
   private
-    FFields:     TObjectList;  { owned TFieldInfo }
-    FKeys:       TStringList;  { sorted, case-insensitive; Objects[] = TFieldInfo (not owned) }
-    FParent:     TRecordTypeDesc;   { not owned; nil for root classes }
-    FVTable:     TObjectList;  { owned TVTableEntry; nil if no virtual methods }
-    FImplements: TObjectList;  { not owned — TInterfaceTypeDesc references }
-    FProperties: TObjectList;  { owned TPropertyInfo }
+    FFields:          TObjectList;  { owned TFieldInfo }
+    FKeys:            TStringList;  { sorted, case-insensitive; Objects[] = TFieldInfo (not owned) }
+    FParent:          TRecordTypeDesc;   { not owned; nil for root classes }
+    FVTable:          TObjectList;  { owned TVTableEntry; nil if no virtual methods }
+    FImplements:      TObjectList;  { not owned — TInterfaceTypeDesc references }
+    FProperties:      TObjectList;  { owned TPropertyInfo }
+    FHasDestroyMethod: Boolean;     { True when the class declares a 'Destroy' method }
   public
     constructor Create(const AName: string; AKind: TTypeKind = tyRecord);
     destructor Destroy; override;
@@ -124,6 +125,8 @@ type
 
     property  Fields: TObjectList read FFields;
     property  Parent: TRecordTypeDesc read FParent write FParent;
+    property  HasDestroyMethod: Boolean
+              read FHasDestroyMethod write FHasDestroyMethod;
   end;
 
   { Type descriptor for zero-GUID interface types (Phase 3). }

@@ -51,6 +51,11 @@ type
     { String concatenation: calls RTL concat function }
     procedure TestARC_StringConcat_SemanticOK;
     procedure TestARC_StringConcat_CallsRTL;
+
+    { Destroy as destructor hook: field cleanup fn invokes it }
+    procedure TestARC_ClassDestroy_FieldCleanupCallsIt;
+    procedure TestARC_ClassWithoutDestroy_FieldCleanupNoCall;
+    procedure TestARC_GenericClass_Destroy_FieldCleanupCallsIt;
   end;
 
 implementation
@@ -297,6 +302,81 @@ var
 begin
   IR := GenIR(SrcConcat);
   AssertTrue('string concat calls RTL', IRContains(IR, '$_StringConcat'));
+end;
+
+{ ------------------------------------------------------------------ }
+{ Destroy as destructor hook                                          }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcDestroyClass =
+    'program P;'              + LineEnding +
+    'type'                    + LineEnding +
+    '  TBuf = class'          + LineEnding +
+    '    FData: ^Integer;'    + LineEnding +
+    '    procedure Destroy;'  + LineEnding +
+    '  end;'                  + LineEnding +
+    'procedure TBuf.Destroy;' + LineEnding +
+    'begin'                   + LineEnding +
+    '  FreeMem(Self.FData)'   + LineEnding +
+    'end;'                    + LineEnding +
+    'var B: TBuf;'            + LineEnding +
+    'begin'                   + LineEnding +
+    '  B := TBuf.Create'      + LineEnding +
+    'end.';
+
+  SrcNoDestroyClass =
+    'program P;'            + LineEnding +
+    'type'                  + LineEnding +
+    '  TFoo = class'        + LineEnding +
+    '    V: Integer;'       + LineEnding +
+    '  end;'                + LineEnding +
+    'var F: TFoo;'          + LineEnding +
+    'begin'                 + LineEnding +
+    '  F := TFoo.Create'    + LineEnding +
+    'end.';
+
+  SrcGenericDestroy =
+    'program P;'                                           + LineEnding +
+    'type'                                                 + LineEnding +
+    '  TBox<T> = class'                                    + LineEnding +
+    '    FData: ^T;'                                       + LineEnding +
+    '    procedure Destroy;'                               + LineEnding +
+    '  end;'                                               + LineEnding +
+    'procedure TBox<T>.Destroy;'                           + LineEnding +
+    'begin'                                                + LineEnding +
+    '  FreeMem(Self.FData)'                                + LineEnding +
+    'end;'                                                 + LineEnding +
+    'var B: TBox<Integer>;'                                + LineEnding +
+    'begin'                                                + LineEnding +
+    '  B := TBox<Integer>.Create'                          + LineEnding +
+    'end.';
+
+procedure TARCTests.TestARC_ClassDestroy_FieldCleanupCallsIt;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcDestroyClass);
+  AssertTrue('field cleanup function calls Destroy',
+    IRContains(IR, 'call $TBuf_Destroy'));
+end;
+
+procedure TARCTests.TestARC_ClassWithoutDestroy_FieldCleanupNoCall;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcNoDestroyClass);
+  AssertFalse('no Destroy call when method absent',
+    IRContains(IR, 'call $TFoo_Destroy'));
+end;
+
+procedure TARCTests.TestARC_GenericClass_Destroy_FieldCleanupCallsIt;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcGenericDestroy);
+  AssertTrue('monomorphized field cleanup calls Destroy',
+    IRContains(IR, 'call $TBox_Integer_Destroy'));
 end;
 
 initialization

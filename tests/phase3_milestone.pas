@@ -19,7 +19,7 @@ type
     procedure Add(Value: Integer);
     function  Get(AIndex: Integer): Integer;
     procedure Delete(AIndex: Integer);
-    procedure Free;
+    procedure Destroy;
     property Count: Integer read FCount;
   end;
 
@@ -34,7 +34,7 @@ type
     function  TryGetValue(Key: string; var Value: Integer): Boolean;
     function  ContainsKey(Key: string): Boolean;
     procedure Remove(Key: string);
-    procedure Free;
+    procedure Destroy;
     property Count: Integer read FCount;
   end;
 
@@ -86,10 +86,12 @@ begin
   Self.FCount := Self.FCount - 1
 end;
 
-procedure TIntList.Free;
+procedure TIntList.Destroy;
 begin
   FreeMem(Self.FData);
-  FreeMem(Self)
+  Self.FData     := nil;
+  Self.FCount    := 0;
+  Self.FCapacity := 0
 end;
 
 procedure TStrIntDict.Grow;
@@ -196,11 +198,14 @@ begin
   end
 end;
 
-procedure TStrIntDict.Free;
+procedure TStrIntDict.Destroy;
 begin
   FreeMem(Self.FKeys);
   FreeMem(Self.FValues);
-  FreeMem(Self)
+  Self.FKeys     := nil;
+  Self.FValues   := nil;
+  Self.FCount    := 0;
+  Self.FCapacity := 0
 end;
 
 var

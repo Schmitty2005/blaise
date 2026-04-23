@@ -1482,6 +1482,10 @@ var
 begin
   EmitLine(Format('function $_FieldCleanup_%s(l %%self) {', [AMangledName]));
   EmitLine('@start');
+  { If the class declares a Destroy method, invoke it first so it can release
+    raw resources (e.g. FreeMem of internal buffers) before ARC field cleanup. }
+  if ARec.HasDestroyMethod then
+    EmitLine(Format('  call $%s_Destroy(l %%self)', [AMangledName]));
   for I := 0 to ARec.Fields.Count - 1 do
   begin
     F := TFieldInfo(ARec.Fields[I]);

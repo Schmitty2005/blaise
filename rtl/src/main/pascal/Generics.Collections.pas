@@ -24,7 +24,7 @@ type
     function  Get(AIndex: Integer): T;
     procedure Delete(AIndex: Integer);
     procedure Clear;
-    procedure Free;
+    procedure Destroy;
     property Count: Integer read FCount;
   end;
 
@@ -43,7 +43,7 @@ type
     function  TryGetValue(Key: K; var Value: V): Boolean;
     function  ContainsKey(Key: K): Boolean;
     procedure Remove(Key: K);
-    procedure Free;
+    procedure Destroy;
     property Count: Integer read FCount;
   end;
 
@@ -106,9 +106,12 @@ begin
   Self.FCount := 0
 end;
 
-procedure TList<T>.Free;
+procedure TList<T>.Destroy;
 begin
-  FreeMem(Self.FData)
+  FreeMem(Self.FData);
+  Self.FData     := nil;
+  Self.FCount    := 0;
+  Self.FCapacity := 0
 end;
 
 { ------------------------------------------------------------------ }
@@ -222,10 +225,14 @@ begin
   end
 end;
 
-procedure TDictionary<K, V>.Free;
+procedure TDictionary<K, V>.Destroy;
 begin
   FreeMem(Self.FKeys);
-  FreeMem(Self.FValues)
+  FreeMem(Self.FValues);
+  Self.FKeys     := nil;
+  Self.FValues   := nil;
+  Self.FCount    := 0;
+  Self.FCapacity := 0
 end;
 
 end.
