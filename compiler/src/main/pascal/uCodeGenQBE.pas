@@ -1945,6 +1945,84 @@ begin
         Exit;
       end;
 
+      { Built-in string operations — delegate to RTL functions }
+      if SameText(Name, 'Length') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_StringLength(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'Pos') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        R := EmitExpr(TASTExpr(Args[1]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_StringPos(l %s, l %s)', [T, L, R]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'Copy') then
+      begin
+        L       := EmitExpr(TASTExpr(Args[0]));
+        R       := EmitExpr(TASTExpr(Args[1]));
+        ArgTemp := EmitExpr(TASTExpr(Args[2]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_StringCopy(l %s, w %s, w %s)',
+          [T, L, R, ArgTemp]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'UpperCase') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_StringUpperCase(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'LowerCase') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_StringLowerCase(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'SameText') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        R := EmitExpr(TASTExpr(Args[1]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_StringSameText(l %s, l %s)', [T, L, R]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'IntToStr') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_IntToStr(w %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'StrToInt') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_StrToInt(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
       { Type cast TypeName(Expr) — ResolvedDecl is nil; just copy with target QBE type }
       if ResolvedDecl = nil then
       begin

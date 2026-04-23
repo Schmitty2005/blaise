@@ -109,6 +109,15 @@ type
       Asserts expected stdout and valgrind-clean execution. }
     procedure TestRun_Phase3Milestone_Stdout;
     procedure TestRun_Phase3Milestone_Valgrind;
+
+    { String operation RTL functions: verify correct output at runtime. }
+    procedure TestRun_StringOps_Length;
+    procedure TestRun_StringOps_Pos;
+    procedure TestRun_StringOps_Copy;
+    procedure TestRun_StringOps_UpperCase;
+    procedure TestRun_StringOps_SameText;
+    procedure TestRun_StringOps_IntToStr;
+    procedure TestRun_StringOps_StrToInt;
   end;
 
 implementation
@@ -1109,6 +1118,151 @@ begin
     if Log = '' then Log := '(valgrind produced no output — exit nonzero)';
     Fail('phase3 milestone has leaks or errors:' + LE + Log);
   end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ String operation e2e tests                                          }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcStringLength =
+    'program P;'                + LineEnding +
+    'var s: string;'            + LineEnding +
+    'var n: Integer;'           + LineEnding +
+    'begin'                     + LineEnding +
+    '  s := ''hello'';'         + LineEnding +
+    '  n := Length(s);'         + LineEnding +
+    '  WriteLn(n)'              + LineEnding +
+    'end.';
+
+  SrcStringPos =
+    'program P;'                       + LineEnding +
+    'var s, sub: string;'              + LineEnding +
+    'var n: Integer;'                  + LineEnding +
+    'begin'                            + LineEnding +
+    '  s   := ''hello world'';'        + LineEnding +
+    '  sub := ''world'';'              + LineEnding +
+    '  n   := Pos(sub, s);'            + LineEnding +
+    '  WriteLn(n)'                     + LineEnding +
+    'end.';
+
+  SrcStringCopy =
+    'program P;'                       + LineEnding +
+    'var s, t: string;'                + LineEnding +
+    'begin'                            + LineEnding +
+    '  s := ''hello'';'                + LineEnding +
+    '  t := Copy(s, 2, 3);'            + LineEnding +
+    '  WriteLn(t)'                     + LineEnding +
+    'end.';
+
+  SrcStringUpperCase =
+    'program P;'               + LineEnding +
+    'var s, t: string;'        + LineEnding +
+    'begin'                    + LineEnding +
+    '  s := ''hello'';'        + LineEnding +
+    '  t := UpperCase(s);'     + LineEnding +
+    '  WriteLn(t)'             + LineEnding +
+    'end.';
+
+  SrcStringSameText =
+    'program P;'                       + LineEnding +
+    'var s, t: string;'                + LineEnding +
+    'var b: Boolean;'                  + LineEnding +
+    'begin'                            + LineEnding +
+    '  s := ''Hello'';'                + LineEnding +
+    '  t := ''hello'';'                + LineEnding +
+    '  b := SameText(s, t);'           + LineEnding +
+    '  WriteLn(b)'                     + LineEnding +
+    'end.';
+
+  SrcStringIntToStr =
+    'program P;'                + LineEnding +
+    'var n: Integer;'           + LineEnding +
+    'var s: string;'            + LineEnding +
+    'begin'                     + LineEnding +
+    '  n := 42;'                + LineEnding +
+    '  s := IntToStr(n);'       + LineEnding +
+    '  WriteLn(s)'              + LineEnding +
+    'end.';
+
+  SrcStringStrToInt =
+    'program P;'                + LineEnding +
+    'var s: string;'            + LineEnding +
+    'var n: Integer;'           + LineEnding +
+    'begin'                     + LineEnding +
+    '  s := ''123'';'           + LineEnding +
+    '  n := StrToInt(s);'       + LineEnding +
+    '  WriteLn(n)'              + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_StringOps_Length;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStringLength, Output, RCode, []));
+  AssertEquals('Length(''hello'') = 5', '5', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_StringOps_Pos;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStringPos, Output, RCode, []));
+  AssertEquals('Pos(''world'', ''hello world'') = 7', '7', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_StringOps_Copy;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStringCopy, Output, RCode, []));
+  AssertEquals('Copy(''hello'', 2, 3) = ''ell''', 'ell', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_StringOps_UpperCase;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStringUpperCase, Output, RCode, []));
+  AssertEquals('UpperCase(''hello'') = ''HELLO''', 'HELLO', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_StringOps_SameText;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStringSameText, Output, RCode, []));
+  AssertEquals('SameText(''Hello'', ''hello'') = True (1)', '1', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_StringOps_IntToStr;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStringIntToStr, Output, RCode, []));
+  AssertEquals('IntToStr(42) = ''42''', '42', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_StringOps_StrToInt;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStringStrToInt, Output, RCode, []));
+  AssertEquals('StrToInt(''123'') = 123', '123', Trim(Output));
 end;
 
 initialization

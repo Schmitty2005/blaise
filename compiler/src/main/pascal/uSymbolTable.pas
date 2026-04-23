@@ -782,6 +782,24 @@ begin
   Define(Sym);
   Sym := TSymbol.Create('FreeMem',    skProcedure, nil);
   Define(Sym);
+
+  { Built-in string operations }
+  Sym := TSymbol.Create('Length',    skFunction, FTypeInteger);
+  Define(Sym);
+  Sym := TSymbol.Create('Pos',       skFunction, FTypeInteger);
+  Define(Sym);
+  Sym := TSymbol.Create('Copy',      skFunction, FTypeString);
+  Define(Sym);
+  Sym := TSymbol.Create('UpperCase', skFunction, FTypeString);
+  Define(Sym);
+  Sym := TSymbol.Create('LowerCase', skFunction, FTypeString);
+  Define(Sym);
+  Sym := TSymbol.Create('SameText',  skFunction, FTypeBoolean);
+  Define(Sym);
+  Sym := TSymbol.Create('IntToStr',  skFunction, FTypeString);
+  Define(Sym);
+  Sym := TSymbol.Create('StrToInt',  skFunction, FTypeInteger);
+  Define(Sym);
 end;
 
 function TSymbolTable.DefineGlobal(ASymbol: TSymbol): Boolean;

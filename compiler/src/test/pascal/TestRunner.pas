@@ -52,6 +52,7 @@ uses
   cp.test.chainedfields,
   cp.test.genericconstraints,
   cp.test.weakref,
+  cp.test.stringops,
   cp.test.e2e;
 
 var

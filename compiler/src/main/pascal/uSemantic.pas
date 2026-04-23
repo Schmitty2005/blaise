@@ -2107,6 +2107,84 @@ begin
     Exit;
   end;
 
+  { Built-in string functions — validate arg count and first-arg type,
+    then set return type.  These call RTL functions at runtime. }
+  if SameText(AExpr.Name, 'Length') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('Length requires exactly one argument', AExpr.Line, AExpr.Col);
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    if ArgType.Kind <> tyString then
+      SemanticError('Length argument must be a string', AExpr.Line, AExpr.Col);
+    Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'Pos') then
+  begin
+    if AExpr.Args.Count <> 2 then
+      SemanticError('Pos requires exactly two arguments', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    AnalyseExpr(TASTExpr(AExpr.Args[1]));
+    Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'Copy') then
+  begin
+    if AExpr.Args.Count <> 3 then
+      SemanticError('Copy requires exactly three arguments', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    AnalyseExpr(TASTExpr(AExpr.Args[1]));
+    AnalyseExpr(TASTExpr(AExpr.Args[2]));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'UpperCase') or SameText(AExpr.Name, 'LowerCase') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'SameText') then
+  begin
+    if AExpr.Args.Count <> 2 then
+      SemanticError('SameText requires exactly two arguments', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    AnalyseExpr(TASTExpr(AExpr.Args[1]));
+    Result := FTable.TypeBoolean;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'IntToStr') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('IntToStr requires exactly one argument', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'StrToInt') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('StrToInt requires exactly one argument', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   Idx := FProcIndex.IndexOf(AExpr.Name);
   if Idx < 0 then
     SemanticError(
