@@ -180,6 +180,18 @@ int32_t _StrToInt(void* s) {
 }
 
 /* ------------------------------------------------------------------ */
+/* _OrdAt(s, i) : Integer  — ordinal (ASCII) value of char at         */
+/* 1-based position i.  Returns 0 if out of range.                    */
+/* ------------------------------------------------------------------ */
+
+int32_t _OrdAt(void* s, int32_t i) {
+    int32_t     len  = str_len(s);
+    const char* data = str_data(s);
+    if (i < 1 || i > len) return 0;
+    return (int32_t)(unsigned char)data[i - 1];
+}
+
+/* ------------------------------------------------------------------ */
 /* _StringCompare(s1, s2) : Integer  — case-sensitive (like strcmp)   */
 /* ------------------------------------------------------------------ */
 

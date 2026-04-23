@@ -2161,6 +2161,16 @@ begin
         Exit;
       end;
 
+      if SameText(Name, 'OrdAt') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        R := EmitExpr(TASTExpr(Args[1]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_OrdAt(l %s, w %s)', [T, L, R]));
+        Result := T;
+        Exit;
+      end;
+
       if SameText(Name, 'CompareStr') then
       begin
         L := EmitExpr(TASTExpr(Args[0]));

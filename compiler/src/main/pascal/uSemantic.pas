@@ -2230,6 +2230,17 @@ begin
     Exit;
   end;
 
+  if SameText(AExpr.Name, 'OrdAt') then
+  begin
+    if AExpr.Args.Count <> 2 then
+      SemanticError('OrdAt requires exactly 2 arguments', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    AnalyseExpr(TASTExpr(AExpr.Args[1]));
+    Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   if SameText(AExpr.Name, 'CompareStr') or SameText(AExpr.Name, 'CompareText') then
   begin
     if AExpr.Args.Count <> 2 then

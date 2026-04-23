@@ -856,6 +856,8 @@ begin
   Define(Sym);
   Sym := TSymbol.Create('CompareText', skFunction, FTypeInteger);
   Define(Sym);
+  Sym := TSymbol.Create('OrdAt',       skFunction, FTypeInteger);
+  Define(Sym);
   { Memory utilities }
   Sym := TSymbol.Create('ZeroMem',      skProcedure, nil); Define(Sym);
   Sym := TSymbol.Create('_ClassAddRef', skProcedure, nil); Define(Sym);
