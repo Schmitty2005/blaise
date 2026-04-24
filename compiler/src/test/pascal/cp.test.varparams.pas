@@ -49,6 +49,9 @@ type
     procedure TestCodegen_VarParam_WriteStoresThroughPointer;
     procedure TestCodegen_VarParam_ReadDereferencesPointer;
     procedure TestCodegen_VarParam_Swap;
+    { Var-param forwarding: passing a var param directly to another var param }
+    procedure TestCodegen_VarParam_ForwardToProc;
+    procedure TestCodegen_VarParam_ForwardToMethod;
   end;
 
 implementation
@@ -281,6 +284,58 @@ begin
   { Both X and Y addresses passed to Swap — X and Y are globals so addresses are $X, $Y }
   AssertTrue('passes address of X', Pos('l $X', IR) > 0);
   AssertTrue('passes address of Y', Pos('l $Y', IR) > 0);
+end;
+
+procedure TVarParamTests.TestCodegen_VarParam_ForwardToProc;
+var IR: string;
+begin
+  { A var param forwarded directly to another procedure's var param.
+    SetViaCaller(var N) calls SetToFive(N) — N is a var param, so the codegen
+    must emit  loadl %_var_N  to get the original caller's address, then pass
+    that value.  Passing %_var_N directly (the slot address) is wrong. }
+  IR := GenIR(
+    'program FwdTest;'                                + LineEnding +
+    'procedure SetToFive(var N: Integer);'            + LineEnding +
+    'begin N := 5 end;'                               + LineEnding +
+    'procedure SetViaCaller(var N: Integer);'         + LineEnding +
+    'begin SetToFive(N) end;'                         + LineEnding +
+    'var V: Integer;'                                 + LineEnding +
+    'begin V := 0; SetViaCaller(V) end.');
+  AssertTrue('SetViaCaller must loadl %_var_N to obtain original pointer',
+    Pos('loadl %_var_N', IR) > 0);
+  AssertFalse('must NOT pass slot address directly',
+    Pos('call $SetToFive(l %_var_N)', IR) > 0);
+end;
+
+procedure TVarParamTests.TestCodegen_VarParam_ForwardToMethod;
+const
+  SrcMethodFwd =
+    'program MethodFwd;'                              + LineEnding +
+    'type'                                            + LineEnding +
+    '  THelper = class'                               + LineEnding +
+    '    procedure SetVal(var N: Integer);'           + LineEnding +
+    '  end;'                                          + LineEnding +
+    'procedure THelper.SetVal(var N: Integer);'       + LineEnding +
+    'begin N := 7 end;'                               + LineEnding +
+    'procedure Wrapper(H: THelper; var N: Integer);'  + LineEnding +
+    'begin H.SetVal(N) end;'                          + LineEnding +
+    'var H: THelper; V: Integer;'                     + LineEnding +
+    'begin'                                           + LineEnding +
+    '  H := THelper.Create;'                          + LineEnding +
+    '  V := 0;'                                       + LineEnding +
+    '  Wrapper(H, V);'                                + LineEnding +
+    '  H.Free'                                        + LineEnding +
+    'end.';
+var IR: string;
+begin
+  { Wrapper(H: THelper; var N: Integer) calls H.SetVal(N).
+    N is a var param so the codegen must emit loadl %_var_N and pass the
+    result, not %_var_N itself (which is only the pointer's storage slot). }
+  IR := GenIR(SrcMethodFwd);
+  AssertTrue('Wrapper must loadl %_var_N for method forwarding',
+    Pos('loadl %_var_N', IR) > 0);
+  AssertFalse('must NOT pass slot address directly to SetVal',
+    Pos('call $THelper_SetVal(l %_var_N)', IR) > 0);
 end;
 
 initialization

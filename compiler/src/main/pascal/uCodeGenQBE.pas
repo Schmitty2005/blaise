@@ -84,6 +84,11 @@ type
     { Returns the QBE address token for a variable: '$Name' for globals,
       '%_var_Name' for locals. }
     function  VarRef(const AName: string; AIsGlobal: Boolean): string;
+    { Returns a QBE temp (or address token) that holds the address to pass as a
+      var-param actual argument.  When the actual argument is itself a var param
+      its local slot contains a pointer — emit loadl to obtain the original
+      caller's address.  For plain locals/globals VarRef suffices. }
+    function  EmitVarArgAddr(AIdent: TIdentExpr): string;
     { Emit a record-returning function/method call with an explicit sret address.
       The callee receives ASretAddr as its first (hidden) parameter and writes
       the result there instead of returning it.  Handles TFuncCallExpr,
@@ -1213,6 +1218,19 @@ begin
     Result := '%_var_' + AName;
 end;
 
+function TCodeGenQBE.EmitVarArgAddr(AIdent: TIdentExpr): string;
+begin
+  if AIdent.IsVarParam then
+  begin
+    { The local slot holds the caller's pointer — load it so we pass the
+      original address, not the address of the local slot. }
+    Result := AllocTemp;
+    EmitLine(Format('  %s =l loadl %%_var_%s', [Result, AIdent.Name]));
+  end
+  else
+    Result := VarRef(AIdent.Name, AIdent.IsGlobal);
+end;
+
 function TCodeGenQBE.IsRecordCall(AExpr: TASTExpr): Boolean;
 var
   MDecl: TMethodDecl;
@@ -1341,8 +1359,7 @@ begin
       Par := TMethodParam(MDecl.Params[I]);
       if Par.IsVarParam then
         ArgLine := ArgLine + Format(', l %s',
-          [VarRef(TIdentExpr(TASTExpr(FCallExpr.Args[I])).Name,
-                  TIdentExpr(TASTExpr(FCallExpr.Args[I])).IsGlobal)])
+          [EmitVarArgAddr(TIdentExpr(TASTExpr(FCallExpr.Args[I])))])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(FCallExpr.Args[I]));
@@ -1366,8 +1383,7 @@ begin
       Par := TMethodParam(MDecl.Params[I]);
       if Par.IsVarParam then
         ArgLine := ArgLine + Format(', l %s',
-          [VarRef(TIdentExpr(TASTExpr(MCallExpr.Args[I])).Name,
-                  TIdentExpr(TASTExpr(MCallExpr.Args[I])).IsGlobal)])
+          [EmitVarArgAddr(TIdentExpr(TASTExpr(MCallExpr.Args[I])))])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args[I]));
@@ -1613,8 +1629,7 @@ begin
       Par := TMethodParam(MDecl.Params[I]);
       if Par.IsVarParam then
         ArgLine := ArgLine + Format(', l %s',
-          [VarRef(TIdentExpr(TASTExpr(ACall.Args[I])).Name,
-                  TIdentExpr(TASTExpr(ACall.Args[I])).IsGlobal)])
+          [EmitVarArgAddr(TIdentExpr(TASTExpr(ACall.Args[I])))])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(ACall.Args[I]));
@@ -1693,8 +1708,7 @@ begin
     Par := TMethodParam(MDecl.Params[I]);
     if Par.IsVarParam then
       ArgLine := ArgLine + Format(', l %s',
-        [VarRef(TIdentExpr(TASTExpr(ACall.Args[I])).Name,
-                TIdentExpr(TASTExpr(ACall.Args[I])).IsGlobal)])
+        [EmitVarArgAddr(TIdentExpr(TASTExpr(ACall.Args[I])))])
     else
     begin
       ArgTemp := EmitExpr(TASTExpr(ACall.Args[I]));
@@ -2521,11 +2535,8 @@ begin
       Par := TMethodParam(MDecl.Params[I]);
       if ArgLine <> '' then ArgLine := ArgLine + ', ';
       if Par.IsVarParam then
-        { Pass address of the variable — global vars: $Name is the address;
-          local vars: %_var_Name is the alloc'd slot address }
         ArgLine := ArgLine + Format('l %s',
-          [VarRef(TIdentExpr(TASTExpr(ACall.Args[I])).Name,
-                  TIdentExpr(TASTExpr(ACall.Args[I])).IsGlobal)])
+          [EmitVarArgAddr(TIdentExpr(TASTExpr(ACall.Args[I])))])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(ACall.Args[I]));
@@ -2998,8 +3009,7 @@ begin
         if ArgLine <> '' then ArgLine := ArgLine + ', ';
         if Par.IsVarParam then
           ArgLine := ArgLine + Format('l %s',
-            [VarRef(TIdentExpr(TASTExpr(Args[I])).Name,
-                    TIdentExpr(TASTExpr(Args[I])).IsGlobal)])
+            [EmitVarArgAddr(TIdentExpr(TASTExpr(Args[I])))])
         else
         begin
           ArgTemp := EmitExpr(TASTExpr(Args[I]));
@@ -3119,10 +3129,8 @@ begin
     begin
       Par := TMethodParam(MDecl.Params[I]);
       if Par.IsVarParam then
-        { Pass address of the variable directly — do not load through it }
         ArgLine := ArgLine + Format(', l %s',
-          [VarRef(TIdentExpr(TASTExpr(MCallExpr.Args[I])).Name,
-                  TIdentExpr(TASTExpr(MCallExpr.Args[I])).IsGlobal)])
+          [EmitVarArgAddr(TIdentExpr(TASTExpr(MCallExpr.Args[I])))])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args[I]));
