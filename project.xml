@@ -10,7 +10,7 @@
   </build>
 
   <modules>
-    <module>rtl</module>
+    <module activeByDefault="false">rtl</module>
     <module>compiler</module>
     <module>tools/migration-analyser</module>
   </modules>

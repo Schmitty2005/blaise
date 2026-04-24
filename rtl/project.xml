@@ -6,6 +6,10 @@
   <build>
     <packaging>library</packaging>
     <!-- mainSource not needed — PasBuild auto-generates bootstrap -->
+    <!-- System.pas is compiled by Blaise, not FPC; FPC already provides System implicitly -->
+    <bootstrapExclude>
+      <unit>System</unit>
+    </bootstrapExclude>
   </build>
 
   <test>
