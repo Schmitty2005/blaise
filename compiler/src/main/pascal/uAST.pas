@@ -40,6 +40,15 @@ type
   TStringLiteral = class(TASTExpr)
   public
     Value: string;
+    IsCharCoerce: Boolean;  { set by uSemantic when used as Byte in a comparison }
+    CharOrdValue: Integer;  { Ord(Value[1]) — valid only when IsCharCoerce = True }
+  end;
+
+  TStringSubscriptExpr = class(TASTExpr)
+  public
+    StrExpr:   TASTExpr;  { owned }
+    IndexExpr: TASTExpr;  { owned }
+    destructor Destroy; override;
   end;
 
   TNilLiteral = class(TASTExpr);  { nil keyword — type is tyNil }
@@ -695,6 +704,13 @@ end;
 destructor TDerefExpr.Destroy;
 begin
   Expr.Free;
+  inherited Destroy;
+end;
+
+destructor TStringSubscriptExpr.Destroy;
+begin
+  StrExpr.Free;
+  IndexExpr.Free;
   inherited Destroy;
 end;
 

@@ -84,6 +84,13 @@ type
     procedure TestCodegen_Format_CallsRTL;
     procedure TestCodegen_Format_IntArgUsesTagZero;
     procedure TestCodegen_Format_StringArgUsesTagOne;
+    { ------------------------------------------------------------------ }
+    { String subscript S[N]                                               }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_StringSubscript_EmitsLoadub;
+    procedure TestCodegen_StringSubscript_CharLiteralCoerce;
+    procedure TestSemantic_StringSubscript_NonStringError;
+    procedure TestSemantic_StringSubscript_MultiByteCharError;
   end;
 
 implementation
@@ -642,6 +649,69 @@ begin
   IR := GenIR(SrcFormatOneStr);
   { String args are preceded by tag 1 }
   AssertTrue('tag 1 for str arg', IRContains(IR, 'w 1,'));
+end;
+
+{ ------------------------------------------------------------------ }
+{ String subscript S[N]                                               }
+{ ------------------------------------------------------------------ }
+
+procedure TStringOpsTests.TestCodegen_StringSubscript_EmitsLoadub;
+const
+  Src =
+    'program T;'                   + LineEnding +
+    'var S: string;'               + LineEnding +
+    'var B: Integer;'              + LineEnding +
+    'begin'                        + LineEnding +
+    '  S := ''hello'';'            + LineEnding +
+    '  B := S[1]'                  + LineEnding +
+    'end.';
+var
+  IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('loadub instruction present', IRContains(IR, 'loadub'));
+end;
+
+procedure TStringOpsTests.TestCodegen_StringSubscript_CharLiteralCoerce;
+const
+  Src =
+    'program T;'                   + LineEnding +
+    'var S: string;'               + LineEnding +
+    'begin'                        + LineEnding +
+    '  S := ''hello'';'            + LineEnding +
+    '  if S[1] = ''h'' then WriteLn(''yes'')' + LineEnding +
+    'end.';
+var
+  IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('loadub for subscript', IRContains(IR, 'loadub'));
+  AssertTrue('copy 104 for h', IRContains(IR, 'copy 104'));  { Ord('h') = 104 }
+end;
+
+procedure TStringOpsTests.TestSemantic_StringSubscript_NonStringError;
+const
+  Src =
+    'program T;'                   + LineEnding +
+    'var N: Integer;'              + LineEnding +
+    'var B: Integer;'              + LineEnding +
+    'begin'                        + LineEnding +
+    '  B := N[1]'                  + LineEnding +
+    'end.';
+begin
+  SemanticError(Src);
+end;
+
+procedure TStringOpsTests.TestSemantic_StringSubscript_MultiByteCharError;
+const
+  Src =
+    'program T;'                   + LineEnding +
+    'var S: string;'               + LineEnding +
+    'begin'                        + LineEnding +
+    '  if S[1] = ''😀'' then WriteLn(''yes'')' + LineEnding +
+    'end.';
+begin
+  SemanticError(Src);
 end;
 
 initialization

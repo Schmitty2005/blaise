@@ -1935,6 +1935,7 @@ var
   Line, Col:  Integer;
   ZeroNode:   TIntLiteral;
   NegNode:    TBinaryExpr;
+  SubNode:    TStringSubscriptExpr;
 begin
   case FCurrent.Kind of
     tkNot:
@@ -2203,6 +2204,24 @@ begin
     raise EParseError.CreateFmt(
       'Expected expression at line %d col %d',
       [FCurrent.Line, FCurrent.Col]);
+  end;
+  { Postfix subscript: Expr[N] — string byte access }
+  if Check(tkLBracket) then
+  begin
+    SubNode := TStringSubscriptExpr.Create;
+    SubNode.Line := FCurrent.Line;
+    SubNode.Col  := FCurrent.Col;
+    SubNode.StrExpr := Result;
+    Result := nil;
+    try
+      Advance;  { consume '[' }
+      SubNode.IndexExpr := ParseExpr;
+      Expect(tkRBracket);
+    except
+      SubNode.Free;
+      raise;
+    end;
+    Result := SubNode;
   end;
 end;
 

@@ -78,6 +78,7 @@ type
     function  EmitExpr(AExpr: TASTExpr): string;
     function  EmitIsExpr(AExpr: TIsExpr): string;
     function  EmitAsExpr(AExpr: TAsExpr): string;
+    function  EmitStringSubscriptExpr(AExpr: TStringSubscriptExpr): string;
     { Returns a QBE temp holding a pointer to the storage of a record or class
       instance referenced by AExpr.  Used by chained field access to traverse
       base nodes without loading record aggregates as scalars. }
@@ -3195,7 +3196,18 @@ begin
   end
   else if AExpr is TStringLiteral then
   begin
-    Result := EmitStrLit(TStringLiteral(AExpr).Value);
+    if TStringLiteral(AExpr).IsCharCoerce then
+    begin
+      T := AllocTemp;
+      EmitLine(Format('  %s =w copy %d', [T, TStringLiteral(AExpr).CharOrdValue]));
+      Result := T;
+    end
+    else
+      Result := EmitStrLit(TStringLiteral(AExpr).Value);
+  end
+  else if AExpr is TStringSubscriptExpr then
+  begin
+    Result := EmitStringSubscriptExpr(TStringSubscriptExpr(AExpr));
   end
   else if AExpr is TFieldAccessExpr then
   begin
@@ -3957,6 +3969,26 @@ end;
 function TCodeGenQBE.GetOutput: string;
 begin
   Result := FOutput.Text;
+end;
+
+function TCodeGenQBE.EmitStringSubscriptExpr(AExpr: TStringSubscriptExpr): string;
+var
+  StrPtr, IdxW, IdxL, Offset, BytePtr, ByteVal: string;
+begin
+  { String layout: [refcount(4)][length(4)][capacity(4)][chars...][0]
+    String variable holds pointer to the 12-byte header; chars start at ptr+12.
+    S[N] (1-based) = byte at ptr + 12 + (N - 1) = ptr + N + 11 }
+  StrPtr  := EmitExpr(AExpr.StrExpr);    { pointer to string header (l) }
+  IdxW    := EmitExpr(AExpr.IndexExpr);  { 1-based index (w) }
+  IdxL    := AllocTemp;
+  Offset  := AllocTemp;
+  BytePtr := AllocTemp;
+  ByteVal := AllocTemp;
+  EmitLine(Format('  %s =l extuw %s', [IdxL, IdxW]));
+  EmitLine(Format('  %s =l add %s, 11', [Offset, IdxL]));  { 12 + (N-1) = N+11 }
+  EmitLine(Format('  %s =l add %s, %s', [BytePtr, StrPtr, Offset]));
+  EmitLine(Format('  %s =w loadub %s', [ByteVal, BytePtr]));
+  Result := ByteVal;
 end;
 
 end.

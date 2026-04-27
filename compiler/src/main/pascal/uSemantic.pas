@@ -75,6 +75,8 @@ type
     function  AnalyseIsExpr(AExpr: TIsExpr): TTypeDesc;
     function  AnalyseAsExpr(AExpr: TAsExpr): TTypeDesc;
     function  AnalyseDerefExpr(AExpr: TDerefExpr): TTypeDesc;
+    function  AnalyseStringSubscriptExpr(AExpr: TStringSubscriptExpr): TTypeDesc;
+    procedure CoerceToCharOrd(ALit: TStringLiteral);
     procedure AnalysePointerWriteStmt(AStmt: TPointerWriteStmt);
 
     procedure AnalyseCompoundBody(ABody: TCompoundStmt);
@@ -3138,6 +3140,8 @@ begin
     Result := AnalyseAsExpr(TAsExpr(AExpr))
   else if AExpr is TDerefExpr then
     Result := AnalyseDerefExpr(TDerefExpr(AExpr))
+  else if AExpr is TStringSubscriptExpr then
+    Result := AnalyseStringSubscriptExpr(TStringSubscriptExpr(AExpr))
   else if AExpr is TNotExpr then
   begin
     Result := AnalyseExpr(TNotExpr(AExpr).Expr);
@@ -3358,6 +3362,17 @@ begin
 
   if IsComparisonOp(ABin.Op) then
   begin
+    { Char literal coercion: S[N] = '-' — subscript yields Integer; coerce the literal }
+    if (LType.Kind = tyInteger) and (ABin.Right is TStringLiteral) then
+    begin
+      CoerceToCharOrd(TStringLiteral(ABin.Right));
+      RType := ABin.Right.ResolvedType;
+    end
+    else if (RType.Kind = tyInteger) and (ABin.Left is TStringLiteral) then
+    begin
+      CoerceToCharOrd(TStringLiteral(ABin.Left));
+      LType := ABin.Left.ResolvedType;
+    end;
     { nil can be compared with class, interface, or pointer types }
     if not (
       (LType = RType) or
@@ -3476,6 +3491,37 @@ begin
       'Cannot dereference untyped ''Pointer'' — use a typed pointer (e.g. ^Integer)',
       AExpr.Line, AExpr.Col);
   Result := TPointerTypeDesc(PtrType).BaseType;
+end;
+
+function TSemanticAnalyser.AnalyseStringSubscriptExpr(AExpr: TStringSubscriptExpr): TTypeDesc;
+var
+  StrType, IdxType: TTypeDesc;
+begin
+  StrType := AnalyseExpr(AExpr.StrExpr);
+  if not StrType.IsString then
+    SemanticError(
+      Format('String subscript ''[]'' requires a string expression, got ''%s''',
+        [StrType.Name]),
+      AExpr.Line, AExpr.Col);
+  IdxType := AnalyseExpr(AExpr.IndexExpr);
+  if not IdxType.IsNumeric then
+    SemanticError(
+      Format('String subscript index must be numeric, got ''%s''', [IdxType.Name]),
+      AExpr.Line, AExpr.Col);
+  Result := FTable.TypeInteger;
+end;
+
+procedure TSemanticAnalyser.CoerceToCharOrd(ALit: TStringLiteral);
+begin
+  if Length(ALit.Value) <> 1 then
+    SemanticError(
+      Format('String literal ''%s'' is %d bytes and cannot coerce to Byte; ' +
+        'use a single ASCII character (U+0000..U+007F)',
+        [ALit.Value, Length(ALit.Value)]),
+      ALit.Line, ALit.Col);
+  ALit.IsCharCoerce := True;
+  ALit.CharOrdValue := Ord(ALit.Value[1]);
+  ALit.ResolvedType := FTable.TypeInteger;
 end;
 
 procedure TSemanticAnalyser.AnalyseCaseStmt(AStmt: TCaseStmt);
