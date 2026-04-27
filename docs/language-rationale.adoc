@@ -287,6 +287,63 @@ has been assigned within the callee.
 
 ---
 
+=== Open Array Parameters (`const A: array of T`)
+
+==== Decision
+
+Blaise supports open-array parameters using the standard two-register ABI
+inherited from FPC and Delphi:
+
+* `l %_par_A` — pointer to the first element (a `l` / pointer-width value).
+* `l %_par_A_high` — the high index (count − 1); negative means the array
+  is empty.
+
+Both registers are passed as separate QBE parameters and allocated to local
+variables (`%_var_A` and `%_var_A_high`) at function entry.
+
+The `const` qualifier is syntactically required for open-array parameters
+in the current implementation. It is advisory only: no mutation check is
+performed. This matches FPC's treatment, where `const` on an open array
+prevents re-assignment of the parameter variable but does not enforce deep
+immutability of the referenced elements.
+
+`Low(A)` always returns the constant `0`. `High(A)` loads and truncates
+`%_var_A_high` to `Integer` (`w` in QBE).
+
+Element access `A[I]` computes `base + I × sizeof(element)` using QBE
+pointer arithmetic and emits the appropriate load instruction for the
+element type.
+
+==== ABI rationale
+
+The two-register layout matches FPC/Delphi so that Blaise can eventually
+call RTL functions that accept open arrays, and so that ABI knowledge
+transfers directly from existing Pascal documentation.
+
+An alternative would be a single-pointer struct (pointer + length), but
+this would require a hidden temporary at every call site and would diverge
+from the established Pascal ABI without benefit.
+
+==== Forwarding
+
+Passing an open-array parameter `A` to another open-array formal forwards
+both `%_var_A` (data pointer) and `%_var_A_high` (high index) as two
+separate QBE arguments, preserving the ABI invariant.
+
+==== ARC exclusion
+
+Open-array parameters are excluded from the ARC addref/release loops
+emitted at function entry and exit. The array elements are owned by the
+caller; the callee holds only a borrowed pointer.
+
+==== Array literal call sites
+
+Passing an array literal (`['a', 'b', 'c']`) at a call site is deferred
+to a later implementation item. The current feature covers declaration,
+element access, `High`/`Low`, and open-array-to-open-array forwarding.
+
+---
+
 == Compiler / Build System Integration
 
 === Build-Tool-Drives-Compiler

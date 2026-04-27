@@ -64,6 +64,7 @@ type
     tkInherited,
     tkCase,
     tkOf,
+    tkArray,
     tkConst,
     tkOut,
     { Identifier }
@@ -176,6 +177,7 @@ begin
   else if AUpper = 'CONTINUE'       then Result := tkContinue
   else if AUpper = 'CASE'           then Result := tkCase
   else if AUpper = 'OF'             then Result := tkOf
+  else if AUpper = 'ARRAY'          then Result := tkArray
   else if AUpper = 'CONST'          then Result := tkConst
   else if AUpper = 'OUT'            then Result := tkOut
   else if AUpper = 'INHERITED'      then Result := tkInherited

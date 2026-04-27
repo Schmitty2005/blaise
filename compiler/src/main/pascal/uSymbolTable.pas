@@ -32,7 +32,8 @@ type
     tyVoid,       { No value — used as procedure return type }
     tyNil,        { Pseudo-type for the nil literal; compatible with tyClass }
     tyPointer,    { Typed or untyped pointer — QBE 'l'; see TPointerTypeDesc }
-    tyEnum        { Enumeration type — stored as QBE 'w' (Integer); see TEnumTypeDesc }
+    tyEnum,       { Enumeration type — stored as QBE 'w' (Integer); see TEnumTypeDesc }
+    tyOpenArray   { Open-array parameter — two-register ABI: data ptr + high index }
   );
 
   TTypeDesc = class
@@ -54,6 +55,14 @@ type
   TPointerTypeDesc = class(TTypeDesc)
   public
     BaseType: TTypeDesc;  { not owned; nil = untyped Pointer }
+  end;
+
+  { Open-array parameter descriptor.
+    Carries the element type; the two-register ABI (data ptr + high index)
+    is handled entirely in the parser, semantic pass, and codegen. }
+  TOpenArrayTypeDesc = class(TTypeDesc)
+  public
+    ElementType: TTypeDesc;  { not owned }
   end;
 
   { Enum type descriptor.  Members are ordered; ordinal values are 0..N-1.
@@ -274,6 +283,10 @@ type
     { Creates a typed pointer descriptor '^BaseType'. Registered in FAllTypes. }
     function NewPointerType(const AName: string; ABase: TTypeDesc): TPointerTypeDesc;
     function NewEnumType(const AName: string): TEnumTypeDesc;
+
+    { Creates an open-array type descriptor for element type AElementType.
+      Registered in FAllTypes so the table owns the lifetime. }
+    function NewOpenArrayType(AElementType: TTypeDesc): TOpenArrayTypeDesc;
 
     { Generic template registry — stores TGenericTypeDef as TObject to avoid
       circular unit dependency with uAST. Callers cast the result. }
@@ -765,6 +778,15 @@ end;
 function TSymbolTable.NewEnumType(const AName: string): TEnumTypeDesc;
 begin
   Result := TEnumTypeDesc.Create(AName);
+  FAllTypes.Add(Result);
+end;
+
+function TSymbolTable.NewOpenArrayType(AElementType: TTypeDesc): TOpenArrayTypeDesc;
+begin
+  Result             := TOpenArrayTypeDesc.Create;
+  Result.Kind        := tyOpenArray;
+  Result.Name        := 'array of ' + AElementType.Name;
+  Result.ElementType := AElementType;
   FAllTypes.Add(Result);
 end;
 

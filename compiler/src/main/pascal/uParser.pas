@@ -781,16 +781,19 @@ end;
 
 procedure TParser.ParseParamList(AParams: TObjectList);
 var
-  Par:      TMethodParam;
-  I:        Integer;
-  Names:    TStringList;
-  TypeN:    string;
-  IsVarGrp: Boolean;
+  Par:         TMethodParam;
+  I:           Integer;
+  Names:       TStringList;
+  TypeN:       string;
+  IsVarGrp:    Boolean;
+  IsConstGrp:  Boolean;
+  IsOpenArr:   Boolean;
 begin
   repeat
-    IsVarGrp := Check(tkVar) or Check(tkOut);
+    IsVarGrp   := Check(tkVar) or Check(tkOut);
+    IsConstGrp := Check(tkConst);
     if IsVarGrp then Advance
-    else if Check(tkConst) then Advance;  { const params treated as value params }
+    else if IsConstGrp then Advance;
     Names := TStringList.Create;
     try
       if not Check(tkIdent) then
@@ -808,13 +811,23 @@ begin
         Advance;
       end;
       Expect(tkColon);
-      TypeN := ParseTypeName;
+      IsOpenArr := Check(tkArray);
+      if IsOpenArr then
+      begin
+        Advance;        { consume 'array' }
+        Expect(tkOf);
+        TypeN := ParseTypeName;   { element type }
+      end
+      else
+        TypeN := ParseTypeName;
       for I := 0 to Names.Count - 1 do
       begin
-        Par            := TMethodParam.Create;
-        Par.ParamName  := Names[I];
-        Par.TypeName   := TypeN;
-        Par.IsVarParam := IsVarGrp;
+        Par              := TMethodParam.Create;
+        Par.ParamName    := Names[I];
+        Par.TypeName     := TypeN;
+        Par.IsVarParam   := IsVarGrp;
+        Par.IsConstParam := IsConstGrp;
+        Par.IsOpenArray  := IsOpenArr;
         AParams.Add(Par);
       end;
     finally

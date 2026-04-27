@@ -297,10 +297,17 @@ ParamList
     ;
 
 ParamGroup
-    = [ VAR ] IdentList COLON TypeName
+    = [ VAR | CONST ] IdentList COLON ParamType
     ;
 
-(* VAR prefix marks a by-reference (var) parameter. *)
+ParamType
+    = ARRAY OF TypeName
+    | TypeName
+    ;
+
+(* VAR marks a by-reference parameter; CONST marks a read-only parameter.
+ * ARRAY OF TypeName denotes an open-array parameter using the two-register
+ * ABI: a data pointer and a high-index value passed as separate arguments. *)
 
 TypeParamList
     = IDENT { COMMA IDENT }

@@ -237,6 +237,7 @@ begin
     tyRecord:                               Result := 'l';  { pointer to aggregate }
     tyClass:                                Result := 'l';  { heap pointer }
     tyPointer:                              Result := 'l';  { pointer (typed or untyped) }
+    tyOpenArray:                            Result := 'l';  { data pointer (high idx is separate) }
   else
     Result := 'w';
   end;
@@ -1867,6 +1868,17 @@ begin
   for I := 0 to AMethod.Params.Count - 1 do
   begin
     Par := TMethodParam(AMethod.Params[I]);
+    if Par.IsOpenArray then
+    begin
+      { Open array arrives as two params: data ptr + high index }
+      EmitLine(Format('  %%_var_%s =l alloc8 1', [Par.ParamName]));
+      EmitLine(Format('  storel %%_par_%s, %%_var_%s',
+        [Par.ParamName, Par.ParamName]));
+      EmitLine(Format('  %%_var_%s_high =l alloc8 1', [Par.ParamName]));
+      EmitLine(Format('  storel %%_par_%s_high, %%_var_%s_high',
+        [Par.ParamName, Par.ParamName]));
+      Continue;
+    end;
     if Par.IsVarParam then
     begin
       { Var param arrives as a pointer — spill pointer into a local slot }
@@ -1922,7 +1934,10 @@ begin
   for I := 0 to AMethod.Params.Count - 1 do
   begin
     Par := TMethodParam(AMethod.Params[I]);
-    if Par.IsVarParam then
+    if Par.IsOpenArray then
+      Sig := Sig + Format(', l %%_par_%s, l %%_par_%s_high',
+        [Par.ParamName, Par.ParamName])
+    else if Par.IsVarParam then
       Sig := Sig + Format(', l %%_par_%s', [Par.ParamName])
     else
       Sig := Sig + Format(', %s %%_par_%s',
@@ -2353,7 +2368,10 @@ begin
   begin
     Par := TMethodParam(ADecl.Params[I]);
     if Sig <> '' then Sig := Sig + ', ';
-    if Par.IsVarParam then
+    if Par.IsOpenArray then
+      Sig := Sig + Format('l %%_par_%s, l %%_par_%s_high',
+        [Par.ParamName, Par.ParamName])
+    else if Par.IsVarParam then
       Sig := Sig + Format('l %%_par_%s', [Par.ParamName])
     else
       Sig := Sig + Format('%s %%_par_%s', [QbeTypeOf(Par.ResolvedType), Par.ParamName]);
@@ -2380,6 +2398,17 @@ begin
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     Par := TMethodParam(ADecl.Params[I]);
+    if Par.IsOpenArray then
+    begin
+      { Open array: spill data pointer and high index into separate slots }
+      EmitLine(Format('  %%_var_%s =l alloc8 1', [Par.ParamName]));
+      EmitLine(Format('  storel %%_par_%s, %%_var_%s',
+        [Par.ParamName, Par.ParamName]));
+      EmitLine(Format('  %%_var_%s_high =l alloc8 1', [Par.ParamName]));
+      EmitLine(Format('  storel %%_par_%s_high, %%_var_%s_high',
+        [Par.ParamName, Par.ParamName]));
+      Continue;
+    end;
     if Par.IsVarParam then
     begin
       { Var param: spill the pointer into a local slot }
@@ -2409,7 +2438,7 @@ begin
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     Par := TMethodParam(ADecl.Params[I]);
-    if Par.IsVarParam then Continue;
+    if Par.IsVarParam or Par.IsOpenArray then Continue;
     if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;
@@ -2454,7 +2483,7 @@ begin
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     Par := TMethodParam(ADecl.Params[I]);
-    if Par.IsVarParam then Continue;
+    if Par.IsVarParam or Par.IsOpenArray then Continue;
     if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;
@@ -2554,7 +2583,16 @@ begin
     begin
       Par := TMethodParam(MDecl.Params[I]);
       if ArgLine <> '' then ArgLine := ArgLine + ', ';
-      if Par.IsVarParam then
+      if Par.IsOpenArray then
+      begin
+        { Forward open array: pass data pointer + high index as two QBE args }
+        ArgTemp  := EmitExpr(TASTExpr(ACall.Args[I]));
+        ArgTemp2 := AllocTemp;
+        EmitLine(Format('  %s =l loadl %%_var_%s_high',
+          [ArgTemp2, TIdentExpr(TASTExpr(ACall.Args[I])).Name]));
+        ArgLine := ArgLine + Format('l %s, l %s', [ArgTemp, ArgTemp2]);
+      end
+      else if Par.IsVarParam then
         ArgLine := ArgLine + Format('l %s',
           [EmitVarArgAddr(TIdentExpr(TASTExpr(ACall.Args[I])))])
       else
@@ -2701,6 +2739,7 @@ var
   SelfTemp:   string;
   ArgLine:    string;
   ArgTemp:    string;
+  ArgTemp2:   string;
   Par:        TMethodParam;
   MDecl:      TMethodDecl;
   RT:         TRecordTypeDesc;
@@ -2754,6 +2793,27 @@ begin
         EmitLine(Format('  %s =l extsw %s', [ArgTemp, R]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $realloc(l %s, l %s)', [T, L, ArgTemp]));
+        Result := T;
+        Exit;
+      end;
+
+      { Open-array intrinsics }
+      if SameText(Name, 'High') then
+      begin
+        { Load the high-index slot and truncate to Integer (w) }
+        L := TIdentExpr(Args[0]).Name;
+        T := AllocTemp;
+        R := AllocTemp;
+        EmitLine(Format('  %s =l loadl %%_var_%s_high', [R, L]));
+        EmitLine(Format('  %s =w truncl %s', [T, R]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'Low') then
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =w copy 0', [T]));
         Result := T;
         Exit;
       end;
@@ -3027,7 +3087,16 @@ begin
       begin
         Par := TMethodParam(MDecl.Params[I]);
         if ArgLine <> '' then ArgLine := ArgLine + ', ';
-        if Par.IsVarParam then
+        if Par.IsOpenArray then
+        begin
+          { Forward open array: pass data pointer + high index }
+          ArgTemp  := EmitExpr(TASTExpr(Args[I]));
+          ArgTemp2 := AllocTemp;
+          EmitLine(Format('  %s =l loadl %%_var_%s_high',
+            [ArgTemp2, TIdentExpr(TASTExpr(Args[I])).Name]));
+          ArgLine := ArgLine + Format('l %s, l %s', [ArgTemp, ArgTemp2]);
+        end
+        else if Par.IsVarParam then
           ArgLine := ArgLine + Format('l %s',
             [EmitVarArgAddr(TIdentExpr(TASTExpr(Args[I])))])
         else
@@ -3974,10 +4043,41 @@ end;
 function TCodeGenQBE.EmitStringSubscriptExpr(AExpr: TStringSubscriptExpr): string;
 var
   StrPtr, IdxW, IdxL, Offset, BytePtr, ByteVal: string;
+  ElemType:  TOpenArrayTypeDesc;
+  ElemSize:  Integer;
+  QLoad:     string;
+  QType:     string;
+  ElemPtr:   string;
 begin
-  { String layout: [refcount(4)][length(4)][capacity(4)][chars...][0]
-    String variable holds pointer to the 12-byte header; chars start at ptr+12.
-    S[N] (1-based) = byte at ptr + 12 + (N - 1) = ptr + N + 11 }
+  { Open-array element access: A[I] where A: array of T }
+  if AExpr.StrExpr.ResolvedType.Kind = tyOpenArray then
+  begin
+    ElemType := TOpenArrayTypeDesc(AExpr.StrExpr.ResolvedType);
+    ElemSize := ElemType.ElementType.ByteSize;
+    case ElemType.ElementType.Kind of
+      tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum: QLoad := 'loadw';
+      tyInt64, tyString, tyClass, tyPointer:          QLoad := 'loadl';
+    else
+      QLoad := 'loadl';
+    end;
+    QType   := QbeTypeOf(ElemType.ElementType);
+    StrPtr  := EmitExpr(AExpr.StrExpr);
+    IdxW    := EmitExpr(AExpr.IndexExpr);
+    IdxL    := AllocTemp;
+    Offset  := AllocTemp;
+    ElemPtr := AllocTemp;
+    ByteVal := AllocTemp;
+    EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
+    EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
+    EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
+    EmitLine(Format('  %s =%s %s %s', [ByteVal, QType, QLoad, ElemPtr]));
+    Result := ByteVal;
+    Exit;
+  end;
+
+  { String byte access: S[N] (1-based).
+    String layout: [refcount(4)][length(4)][capacity(4)][chars...][0]
+    S[N] = byte at ptr + 12 + (N - 1) = ptr + N + 11 }
   StrPtr  := EmitExpr(AExpr.StrExpr);    { pointer to string header (l) }
   IdxW    := EmitExpr(AExpr.IndexExpr);  { 1-based index (w) }
   IdxL    := AllocTemp;

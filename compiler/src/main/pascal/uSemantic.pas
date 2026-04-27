@@ -40,6 +40,11 @@ type
 
     { Generic type instantiation: resolves 'TBox<Integer>' on demand. }
     function  FindTypeOrInstantiate(const AName: string): TTypeDesc;
+
+    { Resolves a parameter's type, handling both plain types and open arrays.
+      For IsOpenArray params, creates and registers a TOpenArrayTypeDesc. }
+    function  ResolveParamType(APar: TMethodParam;
+                ALoc: Integer; ACol: Integer): TTypeDesc;
     function  InstantiateGeneric(const ATypeName: string): TRecordTypeDesc;
     function  InstantiateGenericInterface(const ATypeName: string): TInterfaceTypeDesc;
     function  SubstTypeParam(const ATypeName: string;
@@ -310,6 +315,13 @@ begin
      (TPointerTypeDesc(AActual).BaseType = nil) and
      (AExpected.Kind in [tyClass, tyInterface, tyString, tyPointer]) then
     Exit;
+  { Open-array forwarding: both must be tyOpenArray with the same element type }
+  if (AExpected.Kind = tyOpenArray) and (AActual.Kind = tyOpenArray) then
+  begin
+    if TOpenArrayTypeDesc(AExpected).ElementType =
+       TOpenArrayTypeDesc(AActual).ElementType then
+      Exit;
+  end;
   SemanticError(
     Format('Type mismatch in %s: expected ''%s'' but got ''%s''',
       [AContext, AExpected.Name, AActual.Name]),
@@ -349,14 +361,8 @@ begin
 
       for J := 0 to MDecl.Params.Count - 1 do
       begin
-        Par     := TMethodParam(MDecl.Params[J]);
-        ParType := FTable.FindType(Par.TypeName);
-        if ParType = nil then
-          SemanticError(
-            Format('Unknown type ''%s'' for parameter ''%s''',
-              [Par.TypeName, Par.ParamName]),
-            MDecl.Line, MDecl.Col);
-        Par.ResolvedType := ParType;
+        Par              := TMethodParam(MDecl.Params[J]);
+        Par.ResolvedType := ResolveParamType(Par, MDecl.Line, MDecl.Col);
       end;
 
       if MDecl.ReturnTypeName <> '' then
@@ -394,14 +400,8 @@ begin
 
       for J := 0 to ImplDecl.Params.Count - 1 do
       begin
-        Par     := TMethodParam(ImplDecl.Params[J]);
-        ParType := FTable.FindType(Par.TypeName);
-        if ParType = nil then
-          SemanticError(
-            Format('Unknown type ''%s'' for parameter ''%s''',
-              [Par.TypeName, Par.ParamName]),
-            ImplDecl.Line, ImplDecl.Col);
-        Par.ResolvedType := ParType;
+        Par              := TMethodParam(ImplDecl.Params[J]);
+        Par.ResolvedType := ResolveParamType(Par, ImplDecl.Line, ImplDecl.Col);
       end;
 
       if ImplDecl.ReturnTypeName <> '' then
@@ -503,14 +503,8 @@ begin
 
     for J := 0 to MDecl.Params.Count - 1 do
     begin
-      Par     := TMethodParam(MDecl.Params[J]);
-      ParType := FTable.FindType(Par.TypeName);
-      if ParType = nil then
-        SemanticError(
-          Format('Unknown type ''%s'' for parameter ''%s''',
-            [Par.TypeName, Par.ParamName]),
-          MDecl.Line, MDecl.Col);
-      Par.ResolvedType := ParType;
+      Par              := TMethodParam(MDecl.Params[J]);
+      Par.ResolvedType := ResolveParamType(Par, MDecl.Line, MDecl.Col);
     end;
 
     if MDecl.ReturnTypeName <> '' then
@@ -550,14 +544,8 @@ begin
 
       for J := 0 to ImplDecl.Params.Count - 1 do
       begin
-        Par     := TMethodParam(ImplDecl.Params[J]);
-        ParType := FTable.FindType(Par.TypeName);
-        if ParType = nil then
-          SemanticError(
-            Format('Unknown type ''%s'' for parameter ''%s''',
-              [Par.TypeName, Par.ParamName]),
-            ImplDecl.Line, ImplDecl.Col);
-        Par.ResolvedType := ParType;
+        Par              := TMethodParam(ImplDecl.Params[J]);
+        Par.ResolvedType := ResolveParamType(Par, ImplDecl.Line, ImplDecl.Col);
       end;
 
       if ImplDecl.ReturnTypeName <> '' then
@@ -726,6 +714,32 @@ begin
     Result := InstantiateGeneric(AName);
     if Result = nil then
       Result := InstantiateGenericInterface(AName);
+  end;
+end;
+
+function TSemanticAnalyser.ResolveParamType(APar: TMethodParam;
+  ALoc: Integer; ACol: Integer): TTypeDesc;
+var
+  ElemType: TTypeDesc;
+begin
+  if APar.IsOpenArray then
+  begin
+    ElemType := FindTypeOrInstantiate(APar.TypeName);
+    if ElemType = nil then
+      SemanticError(
+        Format('Unknown element type ''%s'' in open-array parameter ''%s''',
+          [APar.TypeName, APar.ParamName]),
+        ALoc, ACol);
+    Result := FTable.NewOpenArrayType(ElemType);
+  end
+  else
+  begin
+    Result := FindTypeOrInstantiate(APar.TypeName);
+    if Result = nil then
+      SemanticError(
+        Format('Unknown type ''%s'' for parameter ''%s''',
+          [APar.TypeName, APar.ParamName]),
+        ALoc, ACol);
   end;
 end;
 
@@ -1474,14 +1488,8 @@ begin
 
         for K := 0 to MDecl.Params.Count - 1 do
         begin
-          Par     := TMethodParam(MDecl.Params[K]);
-          ParType := FTable.FindType(Par.TypeName);
-          if ParType = nil then
-            SemanticError(
-              Format('Unknown type ''%s'' for parameter ''%s''',
-                [Par.TypeName, Par.ParamName]),
-              MDecl.Line, MDecl.Col);
-          Par.ResolvedType := ParType;
+          Par              := TMethodParam(MDecl.Params[K]);
+          Par.ResolvedType := ResolveParamType(Par, MDecl.Line, MDecl.Col);
         end;
 
         if MDecl.ReturnTypeName <> '' then
@@ -1713,14 +1721,8 @@ begin
     { Resolve parameter types }
     for J := 0 to ADecl.Params.Count - 1 do
     begin
-      Par     := TMethodParam(ADecl.Params[J]);
-      ParType := FTable.FindType(Par.TypeName);
-      if ParType = nil then
-        SemanticError(
-          Format('Unknown type ''%s'' for parameter ''%s'' of ''%s''',
-            [Par.TypeName, Par.ParamName, ADecl.Name]),
-          ADecl.Line, ADecl.Col);
-      Par.ResolvedType := ParType;
+      Par              := TMethodParam(ADecl.Params[J]);
+      Par.ResolvedType := ResolveParamType(Par, ADecl.Line, ADecl.Col);
     end;
 
     { Resolve return type for functions }
@@ -2515,6 +2517,30 @@ begin
       if (Sym <> nil) and (Sym.Kind = skType) then
         TIdentExpr(AExpr.Args[0]).ResolvedType := Sym.TypeDesc;
     end;
+    Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'High') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('High requires exactly one argument', AExpr.Line, AExpr.Col);
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    if ArgType.Kind <> tyOpenArray then
+      SemanticError('High argument must be an open-array parameter', AExpr.Line, AExpr.Col);
+    Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'Low') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('Low requires exactly one argument', AExpr.Line, AExpr.Col);
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    if ArgType.Kind <> tyOpenArray then
+      SemanticError('Low argument must be an open-array parameter', AExpr.Line, AExpr.Col);
     Result := FTable.TypeInteger;
     AExpr.ResolvedType := Result;
     Exit;
@@ -3498,6 +3524,18 @@ var
   StrType, IdxType: TTypeDesc;
 begin
   StrType := AnalyseExpr(AExpr.StrExpr);
+  { Open-array element access: A[I] where A is an open-array parameter }
+  if StrType.Kind = tyOpenArray then
+  begin
+    IdxType := AnalyseExpr(AExpr.IndexExpr);
+    if not IdxType.IsNumeric then
+      SemanticError(
+        Format('Open-array index must be numeric, got ''%s''', [IdxType.Name]),
+        AExpr.Line, AExpr.Col);
+    Result := TOpenArrayTypeDesc(StrType).ElementType;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
   if not StrType.IsString then
     SemanticError(
       Format('String subscript ''[]'' requires a string expression, got ''%s''',

@@ -360,9 +360,11 @@ type
   TMethodParam = class(TASTNode)
   public
     ParamName:    string;
-    TypeName:     string;
+    TypeName:     string;      { element type name when IsOpenArray = True }
     IsVarParam:   Boolean;    { True = passed by reference (var keyword) }
-    ResolvedType: TTypeDesc;  { set by uSemantic }
+    IsConstParam: Boolean;    { True = 'const' keyword present }
+    IsOpenArray:  Boolean;    { True = 'array of T'; TypeName is the element type }
+    ResolvedType: TTypeDesc;  { set by uSemantic — TOpenArrayTypeDesc when IsOpenArray }
   end;
 
   TMethodDecl = class(TASTNode)
