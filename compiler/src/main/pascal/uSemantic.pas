@@ -81,8 +81,10 @@ type
     function  AnalyseAsExpr(AExpr: TAsExpr): TTypeDesc;
     function  AnalyseDerefExpr(AExpr: TDerefExpr): TTypeDesc;
     function  AnalyseStringSubscriptExpr(AExpr: TStringSubscriptExpr): TTypeDesc;
+    function  AnalyseArrayLiteralExpr(AExpr: TArrayLiteralExpr): TTypeDesc;
     procedure CoerceToCharOrd(ALit: TStringLiteral);
     procedure AnalysePointerWriteStmt(AStmt: TPointerWriteStmt);
+    procedure AnalyseStaticSubscriptAssign(AStmt: TStaticSubscriptAssign);
 
     procedure AnalyseCompoundBody(ABody: TCompoundStmt);
     function  FindMethodDecl(const ATypeName, AMethodName: string): TMethodDecl;
@@ -692,9 +694,31 @@ var
   BaseType: TTypeDesc;
   PT:       TPointerTypeDesc;
   Sym:      TSymbol;
+  DDotPos, RBrPos, OfPos: Integer;
+  LStr, HStr, ElemName: string;
+  SAT: TStaticArrayTypeDesc;
 begin
   Result := FTable.FindType(AName);
   if Result <> nil then Exit;
+  { Static array: 'array[L..H] of TypeName' — create on demand }
+  if (Length(AName) > 6) and (Copy(AName, 1, 6) = 'array[') then
+  begin
+    DDotPos  := Pos('..', AName);
+    RBrPos   := Pos(']', AName);
+    OfPos    := Pos(' of ', AName);
+    LStr     := Copy(AName, 7, DDotPos - 7);
+    HStr     := Copy(AName, DDotPos + 2, RBrPos - DDotPos - 2);
+    ElemName := Copy(AName, OfPos + 4, MaxInt);
+    BaseType := FindTypeOrInstantiate(ElemName);
+    if BaseType <> nil then
+    begin
+      SAT := FTable.NewStaticArrayType(BaseType, StrToInt(LStr), StrToInt(HStr));
+      Sym := TSymbol.Create(AName, skType, SAT);
+      FTable.DefineGlobal(Sym);
+      Result := SAT;
+    end;
+    Exit;
+  end;
   { Typed pointer: '^TypeName' — create on demand }
   if (Length(AName) > 1) and (AName[1] = '^') then
   begin
@@ -2025,6 +2049,8 @@ begin
     AnalyseInheritedCall(TInheritedCallStmt(AStmt))
   else if AStmt is TPointerWriteStmt then
     AnalysePointerWriteStmt(TPointerWriteStmt(AStmt))
+  else if AStmt is TStaticSubscriptAssign then
+    AnalyseStaticSubscriptAssign(TStaticSubscriptAssign(AStmt))
   else if AStmt is TProcCall then
     AnalyseProcCall(TProcCall(AStmt))
   else if AStmt is TCaseStmt then
@@ -3168,6 +3194,8 @@ begin
     Result := AnalyseDerefExpr(TDerefExpr(AExpr))
   else if AExpr is TStringSubscriptExpr then
     Result := AnalyseStringSubscriptExpr(TStringSubscriptExpr(AExpr))
+  else if AExpr is TArrayLiteralExpr then
+    Result := AnalyseArrayLiteralExpr(TArrayLiteralExpr(AExpr))
   else if AExpr is TNotExpr then
   begin
     Result := AnalyseExpr(TNotExpr(AExpr).Expr);
@@ -3524,6 +3552,18 @@ var
   StrType, IdxType: TTypeDesc;
 begin
   StrType := AnalyseExpr(AExpr.StrExpr);
+  { Static array element access: A[I] where A is a static array local }
+  if StrType.Kind = tyStaticArray then
+  begin
+    IdxType := AnalyseExpr(AExpr.IndexExpr);
+    if not IdxType.IsNumeric then
+      SemanticError(
+        Format('Static array index must be numeric, got ''%s''', [IdxType.Name]),
+        AExpr.Line, AExpr.Col);
+    Result := TStaticArrayTypeDesc(StrType).ElementType;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
   { Open-array element access: A[I] where A is an open-array parameter }
   if StrType.Kind = tyOpenArray then
   begin
@@ -3605,6 +3645,56 @@ begin
   AStmt.BaseTy := TPointerTypeDesc(PtrType).BaseType;
   ValType := AnalyseExpr(AStmt.ValExpr);
   CheckTypesMatch(AStmt.BaseTy, ValType, 'pointer write', AStmt.Line, AStmt.Col);
+end;
+
+procedure TSemanticAnalyser.AnalyseStaticSubscriptAssign(AStmt: TStaticSubscriptAssign);
+var
+  Sym:     TSymbol;
+  ArrType: TStaticArrayTypeDesc;
+  IdxType: TTypeDesc;
+  ValType: TTypeDesc;
+begin
+  Sym := FTable.Lookup(AStmt.ArrayName);
+  if Sym = nil then
+    SemanticError(
+      Format('Undeclared variable ''%s''', [AStmt.ArrayName]),
+      AStmt.Line, AStmt.Col);
+  if Sym.TypeDesc.Kind <> tyStaticArray then
+    SemanticError(
+      Format('''%s'' is not a static array', [AStmt.ArrayName]),
+      AStmt.Line, AStmt.Col);
+  ArrType := TStaticArrayTypeDesc(Sym.TypeDesc);
+  AStmt.IsGlobal := Sym.IsGlobal;
+  AStmt.ResolvedArrayType := ArrType;
+  IdxType := AnalyseExpr(AStmt.IndexExpr);
+  if not IdxType.IsNumeric then
+    SemanticError('Array index must be numeric', AStmt.Line, AStmt.Col);
+  ValType := AnalyseExpr(AStmt.ValueExpr);
+  CheckTypesMatch(ArrType.ElementType, ValType,
+    Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
+end;
+
+function TSemanticAnalyser.AnalyseArrayLiteralExpr(AExpr: TArrayLiteralExpr): TTypeDesc;
+var
+  ElemType: TTypeDesc;
+  ActType:  TTypeDesc;
+  I:        Integer;
+begin
+  if AExpr.Elements.Count = 0 then
+    SemanticError('Array literal must contain at least one element',
+      AExpr.Line, AExpr.Col);
+  ElemType := AnalyseExpr(TASTExpr(AExpr.Elements[0]));
+  for I := 1 to AExpr.Elements.Count - 1 do
+  begin
+    ActType := AnalyseExpr(TASTExpr(AExpr.Elements[I]));
+    if ActType <> ElemType then
+      SemanticError(
+        Format('Array literal element %d has type ''%s''; expected ''%s''',
+          [I + 1, ActType.Name, ElemType.Name]),
+        AExpr.Line, AExpr.Col);
+  end;
+  Result := FTable.NewOpenArrayType(ElemType);
+  AExpr.ResolvedType := Result;
 end;
 
 end.

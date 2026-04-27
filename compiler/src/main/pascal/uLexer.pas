@@ -92,6 +92,7 @@ type
     tkComma,
     tkSemicolon,
     tkDot,
+    tkDotDot,        { .. — array bounds separator and case range }
     tkCaret          { ^ — pointer dereference / pointer type prefix }
   );
 
@@ -315,6 +316,7 @@ begin
         else if text = ']'  then Result.Kind := tkRBracket
         else if text = ','  then Result.Kind := tkComma
         else if text = ';'  then Result.Kind := tkSemicolon
+        else if text = '..' then Result.Kind := tkDotDot
         else if text = '.'  then Result.Kind := tkDot
         else if text = '+'  then Result.Kind := tkPlus
         else if text = '-'  then Result.Kind := tkMinus

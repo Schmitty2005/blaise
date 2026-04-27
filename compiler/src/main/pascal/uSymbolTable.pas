@@ -33,7 +33,8 @@ type
     tyNil,        { Pseudo-type for the nil literal; compatible with tyClass }
     tyPointer,    { Typed or untyped pointer — QBE 'l'; see TPointerTypeDesc }
     tyEnum,       { Enumeration type — stored as QBE 'w' (Integer); see TEnumTypeDesc }
-    tyOpenArray   { Open-array parameter — two-register ABI: data ptr + high index }
+    tyOpenArray,  { Open-array parameter — two-register ABI: data ptr + high index }
+    tyStaticArray { Fixed-size array: stack-allocated, compile-time bounds }
   );
 
   TTypeDesc = class
@@ -48,6 +49,10 @@ type
     function ByteSize: Integer;
     { QBE alloc alignment: 4 for integer-only records, 8 for pointer/string. }
     function AllocAlign: Integer;
+    { True storage footprint for a single value: 1 for Byte/Boolean, 4 for Integer,
+      8 for pointer/string/Int64.  Use for array element sizing; ByteSize pads
+      small scalars to 4 for standalone-variable alignment. }
+    function RawSize: Integer;
   end;
 
   { Typed or untyped pointer descriptor.
@@ -63,6 +68,15 @@ type
   TOpenArrayTypeDesc = class(TTypeDesc)
   public
     ElementType: TTypeDesc;  { not owned }
+  end;
+
+  { Static array descriptor: fixed-size, stack-allocated, compile-time bounds.
+    Element access: base_ptr + (I − LowBound) × ElementType.ByteSize. }
+  TStaticArrayTypeDesc = class(TTypeDesc)
+  public
+    ElementType: TTypeDesc;  { not owned }
+    LowBound:    Integer;
+    HighBound:   Integer;
   end;
 
   { Enum type descriptor.  Members are ordered; ordinal values are 0..N-1.
@@ -288,6 +302,10 @@ type
       Registered in FAllTypes so the table owns the lifetime. }
     function NewOpenArrayType(AElementType: TTypeDesc): TOpenArrayTypeDesc;
 
+    { Creates a static array type descriptor. Registered in FAllTypes. }
+    function NewStaticArrayType(AElementType: TTypeDesc;
+      ALow, AHigh: Integer): TStaticArrayTypeDesc;
+
     { Generic template registry — stores TGenericTypeDef as TObject to avoid
       circular unit dependency with uAST. Callers cast the result. }
     procedure RegisterGeneric(const AName: string; ATempl: TObject);
@@ -331,6 +349,22 @@ begin
   Result := Kind = tyRecord;
 end;
 
+function TTypeDesc.RawSize: Integer;
+begin
+  case Kind of
+    tyByte, tyBoolean: Result := 1;
+    tyInteger, tyUInt32, tyEnum: Result := 4;
+    tyInt64, tyString, tyClass, tyPointer, tyNil: Result := 8;
+    tyRecord: Result := TRecordTypeDesc(Self).TotalSize;
+    tyStaticArray:
+      Result := (TStaticArrayTypeDesc(Self).HighBound -
+                 TStaticArrayTypeDesc(Self).LowBound + 1) *
+                 TStaticArrayTypeDesc(Self).ElementType.RawSize;
+  else
+    Result := 8;
+  end;
+end;
+
 function TTypeDesc.ByteSize: Integer;
 begin
   case Kind of
@@ -340,6 +374,10 @@ begin
     tyString:            Result := 8;  { pointer size on 64-bit }
     tyRecord:            Result := TRecordTypeDesc(Self).TotalSize;
     tyNil:               Result := 8;
+    tyStaticArray:
+      Result := (TStaticArrayTypeDesc(Self).HighBound -
+                 TStaticArrayTypeDesc(Self).LowBound + 1) *
+                 TStaticArrayTypeDesc(Self).ElementType.RawSize;
   else
     Result := 8;
   end;
@@ -352,6 +390,7 @@ begin
     tyByte, tyBoolean:   Result := 4;  { round up to word boundary }
     tyInt64, tyString:   Result := 8;
     tyRecord:            Result := TRecordTypeDesc(Self).MaxAlign;
+    tyStaticArray: Result := TStaticArrayTypeDesc(Self).ElementType.AllocAlign;
   else
     Result := 8;
   end;
@@ -787,6 +826,18 @@ begin
   Result.Kind        := tyOpenArray;
   Result.Name        := 'array of ' + AElementType.Name;
   Result.ElementType := AElementType;
+  FAllTypes.Add(Result);
+end;
+
+function TSymbolTable.NewStaticArrayType(AElementType: TTypeDesc;
+  ALow, AHigh: Integer): TStaticArrayTypeDesc;
+begin
+  Result             := TStaticArrayTypeDesc.Create;
+  Result.Kind        := tyStaticArray;
+  Result.Name        := Format('array[%d..%d] of %s', [ALow, AHigh, AElementType.Name]);
+  Result.ElementType := AElementType;
+  Result.LowBound    := ALow;
+  Result.HighBound   := AHigh;
   FAllTypes.Add(Result);
 end;
 

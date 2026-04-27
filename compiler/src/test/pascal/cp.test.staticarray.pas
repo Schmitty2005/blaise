@@ -1,0 +1,298 @@
+{
+  Blaise - An Object Pascal Compiler
+  Copyright (c) 2026 Graeme Geldenhuys
+  SPDX-License-Identifier: BSD-3-Clause
+  See LICENSE file in the project root for full license terms.
+}
+
+unit cp.test.staticarray;
+
+{$mode objfpc}{$H+}
+
+{ Tests for static array declarations and element access:
+  parsing, semantic analysis, and QBE IR code generation. }
+
+interface
+
+uses
+  Classes, SysUtils, fpcunit, testregistry,
+  uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
+
+type
+  TStaticArrayTests = class(TTestCase)
+  private
+    function ParseSrc(const ASrc: string): TProgram;
+    function AnalyseSrc(const ASrc: string): TProgram;
+    function GenIR(const ASrc: string): string;
+  published
+    { ------------------------------------------------------------------ }
+    { Parser                                                               }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_StaticArray_TypeName;
+    procedure TestParse_StaticArray_SubscriptAssign_Name;
+
+    { ------------------------------------------------------------------ }
+    { Semantic                                                             }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_StaticArray_Kind;
+    procedure TestSemantic_StaticArray_ElementType;
+    procedure TestSemantic_StaticArray_Bounds;
+    procedure TestSemantic_StaticArray_ByteSize;
+    procedure TestSemantic_StaticArray_IntArray;
+    procedure TestSemantic_StaticArray_NonZero_LowBound;
+
+    { ------------------------------------------------------------------ }
+    { Codegen                                                              }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_StaticArray_AllocEmitted;
+    procedure TestCodegen_StaticArray_MemsetEmitted;
+    procedure TestCodegen_StaticArray_WriteEmitted;
+    procedure TestCodegen_StaticArray_ReadEmitted;
+    procedure TestCodegen_StaticArray_NonZero_OffsetSubtracted;
+  end;
+
+implementation
+
+{ ------------------------------------------------------------------ }
+{ Helpers                                                             }
+{ ------------------------------------------------------------------ }
+
+function TStaticArrayTests.ParseSrc(const ASrc: string): TProgram;
+var L: TLexer; P: TParser;
+begin
+  L := TLexer.Create(ASrc);
+  P := TParser.Create(L);
+  try
+    Result := P.Parse;
+  finally
+    P.Free; L.Free;
+  end;
+end;
+
+function TStaticArrayTests.AnalyseSrc(const ASrc: string): TProgram;
+var A: TSemanticAnalyser;
+begin
+  Result := ParseSrc(ASrc);
+  A := TSemanticAnalyser.Create;
+  try
+    A.Analyse(Result);
+  finally
+    A.Free;
+  end;
+end;
+
+function TStaticArrayTests.GenIR(const ASrc: string): string;
+var P: TProgram; CG: TCodeGenQBE;
+begin
+  P := AnalyseSrc(ASrc);
+  try
+    CG := TCodeGenQBE.Create;
+    try
+      CG.Generate(P);
+      Result := CG.GetOutput;
+    finally
+      CG.Free;
+    end;
+  finally
+    P.Free;
+  end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Shared source snippets                                              }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcByteBuf =
+    'program SA;'                                          + LineEnding +
+    'procedure Foo;'                                       + LineEnding +
+    'var Buf: array[0..7] of Byte;'                        + LineEnding +
+    'begin'                                                + LineEnding +
+    '  Buf[0] := 42'                                       + LineEnding +
+    'end;'                                                 + LineEnding +
+    'begin end.';
+
+  SrcIntArray =
+    'program SA;'                                          + LineEnding +
+    'procedure Foo;'                                       + LineEnding +
+    'var A: array[0..3] of Integer;'                       + LineEnding +
+    'begin'                                                + LineEnding +
+    '  A[2] := 99'                                         + LineEnding +
+    'end;'                                                 + LineEnding +
+    'begin end.';
+
+  SrcReadBack =
+    'program SA;'                                          + LineEnding +
+    'function GetFirst: Integer;'                          + LineEnding +
+    'var A: array[0..3] of Integer;'                       + LineEnding +
+    'begin'                                                + LineEnding +
+    '  A[0] := 7;'                                        + LineEnding +
+    '  Result := A[0]'                                     + LineEnding +
+    'end;'                                                 + LineEnding +
+    'begin end.';
+
+  SrcNonZero =
+    'program SA;'                                          + LineEnding +
+    'procedure Foo;'                                       + LineEnding +
+    'var R: array[5..9] of Integer;'                       + LineEnding +
+    'begin'                                                + LineEnding +
+    '  R[5] := 1'                                         + LineEnding +
+    'end;'                                                 + LineEnding +
+    'begin end.';
+
+{ ------------------------------------------------------------------ }
+{ Parser tests                                                        }
+{ ------------------------------------------------------------------ }
+
+procedure TStaticArrayTests.TestParse_StaticArray_TypeName;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl;
+begin
+  P := ParseSrc(SrcByteBuf);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    AssertEquals('type name encoded', 'array[0..7] of Byte', Decl.TypeName);
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestParse_StaticArray_SubscriptAssign_Name;
+var P: TProgram; MD: TMethodDecl; Stmt: TStaticSubscriptAssign;
+begin
+  P := ParseSrc(SrcByteBuf);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    AssertTrue('stmt is TStaticSubscriptAssign',
+      MD.Body.Stmts[0] is TStaticSubscriptAssign);
+    Stmt := TStaticSubscriptAssign(MD.Body.Stmts[0]);
+    AssertEquals('array name', 'Buf', Stmt.ArrayName);
+  finally P.Free; end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Semantic tests                                                      }
+{ ------------------------------------------------------------------ }
+
+procedure TStaticArrayTests.TestSemantic_StaticArray_Kind;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl;
+begin
+  P := AnalyseSrc(SrcByteBuf);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    AssertNotNull('ResolvedType set', Decl.ResolvedType);
+    AssertEquals('kind is tyStaticArray',
+      Ord(tyStaticArray), Ord(Decl.ResolvedType.Kind));
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_StaticArray_ElementType;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl; SAT: TStaticArrayTypeDesc;
+begin
+  P := AnalyseSrc(SrcByteBuf);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    AssertTrue('is TStaticArrayTypeDesc', Decl.ResolvedType is TStaticArrayTypeDesc);
+    SAT := TStaticArrayTypeDesc(Decl.ResolvedType);
+    AssertNotNull('ElementType set', SAT.ElementType);
+    AssertEquals('element is tyByte', Ord(tyByte), Ord(SAT.ElementType.Kind));
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_StaticArray_Bounds;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl; SAT: TStaticArrayTypeDesc;
+begin
+  P := AnalyseSrc(SrcByteBuf);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    SAT  := TStaticArrayTypeDesc(Decl.ResolvedType);
+    AssertEquals('LowBound = 0', 0, SAT.LowBound);
+    AssertEquals('HighBound = 7', 7, SAT.HighBound);
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_StaticArray_ByteSize;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl;
+begin
+  P := AnalyseSrc(SrcByteBuf);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    { 8 elements × 1 byte each = 8 bytes }
+    AssertEquals('ByteSize = 8', 8, Decl.ResolvedType.ByteSize);
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_StaticArray_IntArray;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl;
+begin
+  P := AnalyseSrc(SrcIntArray);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    { 4 elements × 4 bytes each = 16 bytes }
+    AssertEquals('ByteSize = 16', 16, Decl.ResolvedType.ByteSize);
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_StaticArray_NonZero_LowBound;
+var P: TProgram; MD: TMethodDecl; Decl: TVarDecl; SAT: TStaticArrayTypeDesc;
+begin
+  P := AnalyseSrc(SrcNonZero);
+  try
+    MD   := TMethodDecl(P.Block.ProcDecls[0]);
+    Decl := TVarDecl(MD.Body.Decls[0]);
+    SAT  := TStaticArrayTypeDesc(Decl.ResolvedType);
+    AssertEquals('LowBound = 5', 5, SAT.LowBound);
+    AssertEquals('HighBound = 9', 9, SAT.HighBound);
+  finally P.Free; end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Codegen tests                                                       }
+{ ------------------------------------------------------------------ }
+
+procedure TStaticArrayTests.TestCodegen_StaticArray_AllocEmitted;
+var IR: string;
+begin
+  IR := GenIR(SrcByteBuf);
+  { 8-byte Byte array: alloc4 alignment, 8 bytes total }
+  AssertTrue('alloc4 8 emitted', Pos('alloc4 8', IR) > 0);
+end;
+
+procedure TStaticArrayTests.TestCodegen_StaticArray_MemsetEmitted;
+var IR: string;
+begin
+  IR := GenIR(SrcByteBuf);
+  AssertTrue('memset call emitted', Pos('call $memset', IR) > 0);
+end;
+
+procedure TStaticArrayTests.TestCodegen_StaticArray_WriteEmitted;
+var IR: string;
+begin
+  IR := GenIR(SrcByteBuf);
+  { Byte element write uses storeb }
+  AssertTrue('storeb emitted', Pos('storeb', IR) > 0);
+end;
+
+procedure TStaticArrayTests.TestCodegen_StaticArray_ReadEmitted;
+var IR: string;
+begin
+  IR := GenIR(SrcReadBack);
+  { Integer element read uses loadw }
+  AssertTrue('loadw emitted', Pos('loadw', IR) > 0);
+end;
+
+procedure TStaticArrayTests.TestCodegen_StaticArray_NonZero_OffsetSubtracted;
+var IR: string;
+begin
+  IR := GenIR(SrcNonZero);
+  { R[5] with LowBound=5: offset = (5-5)*4 = 0; sub instruction emitted }
+  AssertTrue('sub for low-bound adjustment', Pos('=l sub', IR) > 0);
+end;
+
+initialization
+  RegisterTest(TStaticArrayTests);
+
+end.

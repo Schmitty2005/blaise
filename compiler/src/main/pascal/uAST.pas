@@ -51,6 +51,13 @@ type
     destructor Destroy; override;
   end;
 
+  TArrayLiteralExpr = class(TASTExpr)
+  public
+    Elements: TObjectList;  { owned list of TASTExpr }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
   TNilLiteral = class(TASTExpr);  { nil keyword — type is tyNil }
 
   TIdentExpr = class(TASTExpr)
@@ -231,6 +238,17 @@ type
     IsImplicitSelf:    Boolean; { set by uSemantic — RecordName is a field of Self }
     ImplicitBaseInfo:  TFieldInfo; { non-owned — the field of Self that holds the record/class }
     IsGlobal:          Boolean; { set by uSemantic — RecordName is a program-level global }
+    destructor Destroy; override;
+  end;
+
+  { Static-array element write: 'ArrayName[IndexExpr] := ValueExpr' }
+  TStaticSubscriptAssign = class(TASTStmt)
+  public
+    ArrayName: string;
+    IndexExpr: TASTExpr;  { owned }
+    ValueExpr: TASTExpr;  { owned }
+    IsGlobal: Boolean;    { set by uSemantic }
+    ResolvedArrayType: TTypeDesc;  { set by uSemantic; not owned }
     destructor Destroy; override;
   end;
 
@@ -692,6 +710,15 @@ begin
   inherited Destroy;
 end;
 
+{ TStaticSubscriptAssign }
+
+destructor TStaticSubscriptAssign.Destroy;
+begin
+  IndexExpr.Free;
+  ValueExpr.Free;
+  inherited Destroy;
+end;
+
 { TPointerWriteStmt }
 
 destructor TPointerWriteStmt.Destroy;
@@ -713,6 +740,20 @@ destructor TStringSubscriptExpr.Destroy;
 begin
   StrExpr.Free;
   IndexExpr.Free;
+  inherited Destroy;
+end;
+
+{ TArrayLiteralExpr }
+
+constructor TArrayLiteralExpr.Create;
+begin
+  inherited Create;
+  Elements := TObjectList.Create(True);
+end;
+
+destructor TArrayLiteralExpr.Destroy;
+begin
+  Elements.Free;
   inherited Destroy;
 end;
 

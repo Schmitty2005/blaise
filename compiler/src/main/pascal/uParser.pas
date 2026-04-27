@@ -134,7 +134,31 @@ end;
   Returns 'Integer', 'TBox<Integer>', 'TPair<string,Integer>', etc.
   Spaces around commas are stripped for a canonical representation. }
 function TParser.ParseTypeName: string;
+var
+  LStr, HStr, ElemTypeName: string;
 begin
+  { Static array: array[L..H] of T }
+  if Check(tkArray) then
+  begin
+    Advance;  { consume 'array' }
+    Expect(tkLBracket);
+    if not Check(tkIntLit) then
+      raise EParseError.CreateFmt('Expected integer bound at line %d col %d',
+        [FCurrent.Line, FCurrent.Col]);
+    LStr := FCurrent.Value;
+    Advance;
+    Expect(tkDotDot);
+    if not Check(tkIntLit) then
+      raise EParseError.CreateFmt('Expected integer bound at line %d col %d',
+        [FCurrent.Line, FCurrent.Col]);
+    HStr := FCurrent.Value;
+    Advance;
+    Expect(tkRBracket);
+    Expect(tkOf);
+    ElemTypeName := Self.ParseTypeName;
+    Result := Format('array[%s..%s] of %s', [LStr, HStr, ElemTypeName]);
+    Exit;
+  end;
   { Pointer-to type: '^TypeName' }
   if Check(tkCaret) then
   begin
@@ -1041,6 +1065,7 @@ var
   FldNode:     TFieldAccessExpr;
   CastRcv:     TASTExpr;
   FCallNode:   TFuncCallExpr;
+  SubAssign:   TStaticSubscriptAssign;
 begin
   Result := nil;
 
@@ -1131,6 +1156,27 @@ begin
   Line := FCurrent.Line;
   Col  := FCurrent.Col;
   Advance;
+
+  if Check(tkLBracket) then
+  begin
+    { Static array subscript assignment: Name[IndexExpr] := ValueExpr }
+    Advance;  { consume '[' }
+    SubAssign := TStaticSubscriptAssign.Create;
+    SubAssign.Line := Line;
+    SubAssign.Col := Col;
+    SubAssign.ArrayName := Name;
+    try
+      SubAssign.IndexExpr := ParseExpr;
+      Expect(tkRBracket);
+      Expect(tkAssign);
+      SubAssign.ValueExpr := ParseExpr;
+    except
+      SubAssign.Free;
+      raise;
+    end;
+    Result := SubAssign;
+    Exit;
+  end;
 
   if Check(tkCaret) then
   begin
@@ -1949,6 +1995,7 @@ var
   ZeroNode:   TIntLiteral;
   NegNode:    TBinaryExpr;
   SubNode:    TStringSubscriptExpr;
+  ArrNode:    TArrayLiteralExpr;
 begin
   case FCurrent.Kind of
     tkNot:
@@ -2194,6 +2241,30 @@ begin
           DerefNode.Expr := Result;
           Result         := DerefNode;
         end;
+      end;
+    tkLBracket:
+      begin
+        ArrNode      := TArrayLiteralExpr.Create;
+        ArrNode.Line := FCurrent.Line;
+        ArrNode.Col  := FCurrent.Col;
+        try
+          Advance;  { consume '[' }
+          if not Check(tkRBracket) then
+          begin
+            ArrNode.Elements.Add(ParseExpr);
+            while Check(tkComma) do
+            begin
+              Advance;  { consume ',' }
+              ArrNode.Elements.Add(ParseExpr);
+            end;
+          end;
+          Expect(tkRBracket);
+        except
+          ArrNode.Free;
+          raise;
+        end;
+        Result := ArrNode;
+        Exit;  { array literals are not subscriptable — skip postfix check }
       end;
     tkLParen:
       begin

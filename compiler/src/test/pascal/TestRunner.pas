@@ -57,6 +57,7 @@ uses
   cp.test.caseenum,
   cp.test.selfhosting,
   cp.test.openarray,
+  cp.test.staticarray,
   cp.test.e2e,
   cp.test.multifile;
 

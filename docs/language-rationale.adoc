@@ -338,9 +338,83 @@ caller; the callee holds only a borrowed pointer.
 
 ==== Array literal call sites
 
-Passing an array literal (`['a', 'b', 'c']`) at a call site is deferred
-to a later implementation item. The current feature covers declaration,
-element access, `High`/`Low`, and open-array-to-open-array forwarding.
+Array literals `['a', 'b', 'c']` may be passed directly as arguments to
+open-array formals. The literal is a stack-allocated temporary:
+
+* A buffer of `N × sizeof(element)` bytes is allocated on the stack using
+  QBE's `alloc8` (for pointer-sized elements) or `alloc4` (for 32-bit
+  elements) at function entry.
+* Each element expression is evaluated and stored into the buffer at the
+  corresponding offset.
+* The high index `N − 1` is a compile-time constant; no hidden slot is
+  needed.
+* The call receives two QBE arguments: the buffer pointer and the literal
+  integer high index.
+
+The element type is inferred from the first element. All elements must
+resolve to the same type. Empty literals `[]` are a semantic error because
+the element type cannot be inferred without type-context propagation (which
+is deferred).
+
+---
+
+=== Static Arrays (`array[L..H] of T`)
+
+==== Decision
+
+Blaise supports fixed-size, stack-allocated arrays declared as
+`array[L..H] of T`, where `L` and `H` are compile-time integer literals and
+`T` is any scalar or record type.
+
+* The array occupies a contiguous block of `(H − L + 1) × sizeof(T)` bytes
+  on the stack, allocated with QBE's `alloc4` or `alloc8` instruction.
+* The block is zero-initialised with `memset` at function entry (Pascal
+  default initialisation semantics; also required by QBE's SSA checker).
+* Element access uses `base + (I − L) × sizeof(T)`.  Non-zero-based ranges
+  are supported: `array[5..9] of Integer` stores 5 elements; `A[5]` maps to
+  offset 0.
+* `sizeof(T)` for array element sizing uses the _raw_ byte footprint of the
+  element type: 1 for `Byte`/`Boolean`, 4 for `Integer`/`UInt32`, 8 for
+  `Int64`/`String`/pointer types.  This differs from the standalone-variable
+  allocation size (which pads `Byte` to 4 for alignment), because array
+  elements are packed consecutively.
+* Write access `A[I] := val` is parsed as a `TStaticSubscriptAssign`
+  statement node distinct from `TAssignment`, because the LHS is not a bare
+  identifier.
+* Read access `A[I]` in an expression is handled by the existing
+  `TStringSubscriptExpr` / `EmitStringSubscriptExpr` dispatch, extended with
+  a `tyStaticArray` branch before the `tyOpenArray` branch.
+
+==== Syntax variants and scope
+
+[cols="2,1"]
+|===
+| Syntax | Status
+
+| `array[0..N] of T` — zero-based
+| Supported
+
+| `array[L..H] of T` — non-zero-based
+| Supported
+
+| `array[Word] of T` — ordinal-type index
+| Deferred
+
+| `array[L..H, M..N] of T` — multi-dimensional
+| Deferred
+
+| `array of array of T` — multi-dim open array
+| Separate feature
+|===
+
+==== Deferred items
+
+* `Low(A)` and `High(A)` for static arrays (returns `LowBound`/`HighBound`).
+* `@A[I]` — address-of subscript.
+* Global static array variables (require QBE data-section layout for
+  variable-size blocks).
+* Static arrays as value parameters (pass-by-copy semantics).
+* Chained subscript on record fields: `Rec.Arr[I]` (local arrays only for now).
 
 ---
 

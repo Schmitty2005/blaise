@@ -74,11 +74,13 @@ type
     procedure EmitCaseStmt(AStmt: TCaseStmt);
     procedure EmitProcCall(ACall: TProcCall);
     procedure EmitPointerWrite(AStmt: TPointerWriteStmt);
+    procedure EmitStaticSubscriptAssign(AStmt: TStaticSubscriptAssign);
     procedure EmitWrite(ACall: TProcCall; ANewline: Boolean);
     function  EmitExpr(AExpr: TASTExpr): string;
     function  EmitIsExpr(AExpr: TIsExpr): string;
     function  EmitAsExpr(AExpr: TAsExpr): string;
     function  EmitStringSubscriptExpr(AExpr: TStringSubscriptExpr): string;
+    function  EmitArrayLiteralExpr(AExpr: TArrayLiteralExpr): string;
     { Returns a QBE temp holding a pointer to the storage of a record or class
       instance referenced by AExpr.  Used by chained field access to traverse
       base nodes without loading record aggregates as scalars. }
@@ -238,6 +240,7 @@ begin
     tyClass:                                Result := 'l';  { heap pointer }
     tyPointer:                              Result := 'l';  { pointer (typed or untyped) }
     tyOpenArray:                            Result := 'l';  { data pointer (high idx is separate) }
+    tyStaticArray:                          Result := 'l';  { base pointer to stack buffer }
   else
     Result := 'w';
   end;
@@ -251,6 +254,9 @@ var
   RT:       TRecordTypeDesc;
   RecSize:  Integer;
   RecAlign: Integer;
+  SAT:      TStaticArrayTypeDesc;
+  ArrSize:  Integer;
+  ArrAlign: Integer;
 begin
   for I := 0 to ABlock.Decls.Count - 1 do
   begin
@@ -313,6 +319,20 @@ begin
             { Pointer var (typed or untyped) — allocate one pointer slot, nil-init }
             EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
             EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
+          end;
+
+        tyStaticArray:
+          begin
+            SAT      := TStaticArrayTypeDesc(Decl.ResolvedType);
+            ArrSize  := SAT.ByteSize;
+            ArrAlign := SAT.AllocAlign;
+            if ArrAlign >= 8 then
+              EmitLine(Format('  %%_var_%s =l alloc8 %d', [VarName, ArrSize]))
+            else
+              EmitLine(Format('  %%_var_%s =l alloc4 %d', [VarName, ArrSize]));
+            if ArrSize > 0 then
+              EmitLine(Format('  call $memset(l %%_var_%s, w 0, l %d)',
+                [VarName, ArrSize]));
           end;
 
         tyInterface:
@@ -555,6 +575,8 @@ begin
     EmitFieldAssignment(TFieldAssignment(AStmt))
   else if AStmt is TPointerWriteStmt then
     EmitPointerWrite(TPointerWriteStmt(AStmt))
+  else if AStmt is TStaticSubscriptAssign then
+    EmitStaticSubscriptAssign(TStaticSubscriptAssign(AStmt))
   else if AStmt is TAssignment then
     EmitAssignment(TAssignment(AStmt))
   else if AStmt is TMethodCallStmt then
@@ -2585,12 +2607,21 @@ begin
       if ArgLine <> '' then ArgLine := ArgLine + ', ';
       if Par.IsOpenArray then
       begin
-        { Forward open array: pass data pointer + high index as two QBE args }
-        ArgTemp  := EmitExpr(TASTExpr(ACall.Args[I]));
-        ArgTemp2 := AllocTemp;
-        EmitLine(Format('  %s =l loadl %%_var_%s_high',
-          [ArgTemp2, TIdentExpr(TASTExpr(ACall.Args[I])).Name]));
-        ArgLine := ArgLine + Format('l %s, l %s', [ArgTemp, ArgTemp2]);
+        if TASTExpr(ACall.Args[I]) is TArrayLiteralExpr then
+        begin
+          ArgTemp := EmitArrayLiteralExpr(TArrayLiteralExpr(TASTExpr(ACall.Args[I])));
+          ArgLine := ArgLine + Format('l %s, l %d',
+            [ArgTemp, TArrayLiteralExpr(TASTExpr(ACall.Args[I])).Elements.Count - 1]);
+        end
+        else
+        begin
+          { Forward an open-array param variable }
+          ArgTemp  := EmitExpr(TASTExpr(ACall.Args[I]));
+          ArgTemp2 := AllocTemp;
+          EmitLine(Format('  %s =l loadl %%_var_%s_high',
+            [ArgTemp2, TIdentExpr(TASTExpr(ACall.Args[I])).Name]));
+          ArgLine := ArgLine + Format('l %s, l %s', [ArgTemp, ArgTemp2]);
+        end;
       end
       else if Par.IsVarParam then
         ArgLine := ArgLine + Format('l %s',
@@ -3089,12 +3120,21 @@ begin
         if ArgLine <> '' then ArgLine := ArgLine + ', ';
         if Par.IsOpenArray then
         begin
-          { Forward open array: pass data pointer + high index }
-          ArgTemp  := EmitExpr(TASTExpr(Args[I]));
-          ArgTemp2 := AllocTemp;
-          EmitLine(Format('  %s =l loadl %%_var_%s_high',
-            [ArgTemp2, TIdentExpr(TASTExpr(Args[I])).Name]));
-          ArgLine := ArgLine + Format('l %s, l %s', [ArgTemp, ArgTemp2]);
+          if TASTExpr(Args[I]) is TArrayLiteralExpr then
+          begin
+            ArgTemp := EmitArrayLiteralExpr(TArrayLiteralExpr(TASTExpr(Args[I])));
+            ArgLine := ArgLine + Format('l %s, l %d',
+              [ArgTemp, TArrayLiteralExpr(TASTExpr(Args[I])).Elements.Count - 1]);
+          end
+          else
+          begin
+            { Forward an open-array param variable }
+            ArgTemp  := EmitExpr(TASTExpr(Args[I]));
+            ArgTemp2 := AllocTemp;
+            EmitLine(Format('  %s =l loadl %%_var_%s_high',
+              [ArgTemp2, TIdentExpr(TASTExpr(Args[I])).Name]));
+            ArgLine := ArgLine + Format('l %s, l %s', [ArgTemp, ArgTemp2]);
+          end;
         end
         else if Par.IsVarParam then
           ArgLine := ArgLine + Format('l %s',
@@ -3277,6 +3317,10 @@ begin
   else if AExpr is TStringSubscriptExpr then
   begin
     Result := EmitStringSubscriptExpr(TStringSubscriptExpr(AExpr));
+  end
+  else if AExpr is TArrayLiteralExpr then
+  begin
+    Result := EmitArrayLiteralExpr(TArrayLiteralExpr(AExpr));
   end
   else if AExpr is TFieldAccessExpr then
   begin
@@ -3597,9 +3641,10 @@ begin
       else
         EmitLine(Format('  %s =w loadw %s', [T, Ptr]));
     end
-    else if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyRecord) then
+    else if (AExpr.ResolvedType <> nil) and
+            (AExpr.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
     begin
-      { Record variable — return its storage address directly (no load). }
+      { Aggregate variable — return its storage address directly (no load). }
       Result := VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal);
       Exit;
     end
@@ -4048,7 +4093,45 @@ var
   QLoad:     string;
   QType:     string;
   ElemPtr:   string;
+  SAT:       TStaticArrayTypeDesc;
+  LowBnd:    Integer;
+  Adj:       string;
 begin
+  { Static array element read: A[I] where A: array[L..H] of T }
+  if AExpr.StrExpr.ResolvedType.Kind = tyStaticArray then
+  begin
+    SAT      := TStaticArrayTypeDesc(AExpr.StrExpr.ResolvedType);
+    ElemSize := SAT.ElementType.RawSize;
+    LowBnd   := SAT.LowBound;
+    case SAT.ElementType.Kind of
+      tyByte, tyBoolean: QLoad := 'loadub';
+      tyInteger, tyUInt32, tyEnum: QLoad := 'loadw';
+      tyInt64, tyString, tyClass, tyPointer: QLoad := 'loadl';
+    else
+      QLoad := 'loadl';
+    end;
+    QType   := QbeTypeOf(SAT.ElementType);
+    StrPtr  := EmitExpr(AExpr.StrExpr);
+    IdxW    := EmitExpr(AExpr.IndexExpr);
+    IdxL    := AllocTemp;
+    Offset  := AllocTemp;
+    ElemPtr := AllocTemp;
+    ByteVal := AllocTemp;
+    EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
+    if LowBnd <> 0 then
+    begin
+      Adj := AllocTemp;
+      EmitLine(Format('  %s =l sub %s, %d', [Adj, IdxL, LowBnd]));
+      EmitLine(Format('  %s =l mul %s, %d', [Offset, Adj, ElemSize]));
+    end
+    else
+      EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
+    EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
+    EmitLine(Format('  %s =%s %s %s', [ByteVal, QType, QLoad, ElemPtr]));
+    Result := ByteVal;
+    Exit;
+  end;
+
   { Open-array element access: A[I] where A: array of T }
   if AExpr.StrExpr.ResolvedType.Kind = tyOpenArray then
   begin
@@ -4089,6 +4172,98 @@ begin
   EmitLine(Format('  %s =l add %s, %s', [BytePtr, StrPtr, Offset]));
   EmitLine(Format('  %s =w loadub %s', [ByteVal, BytePtr]));
   Result := ByteVal;
+end;
+
+procedure TCodeGenQBE.EmitStaticSubscriptAssign(AStmt: TStaticSubscriptAssign);
+var
+  SAT:        TStaticArrayTypeDesc;
+  ElemType:   TTypeDesc;
+  ElemSize:   Integer;
+  LowBnd:     Integer;
+  StoreInstr: string;
+  IdxW:       string;
+  IdxL:       string;
+  Adj:        string;
+  Offset:     string;
+  ElemPtr:    string;
+  ElemVal:    string;
+begin
+  SAT      := TStaticArrayTypeDesc(AStmt.ResolvedArrayType);
+  ElemType := SAT.ElementType;
+  ElemSize := ElemType.RawSize;
+  LowBnd   := SAT.LowBound;
+  case ElemType.Kind of
+    tyByte, tyBoolean: StoreInstr := 'storeb';
+    tyInteger, tyUInt32, tyEnum: StoreInstr := 'storew';
+    tyInt64, tyString, tyClass, tyPointer: StoreInstr := 'storel';
+  else
+    StoreInstr := 'storew';
+  end;
+  { %_var_Name is already the base pointer to the stack buffer (from alloc) }
+  IdxW    := EmitExpr(AStmt.IndexExpr);
+  IdxL    := AllocTemp;
+  Offset  := AllocTemp;
+  ElemPtr := AllocTemp;
+  ElemVal := EmitExpr(AStmt.ValueExpr);
+  EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
+  if LowBnd <> 0 then
+  begin
+    Adj := AllocTemp;
+    EmitLine(Format('  %s =l sub %s, %d', [Adj, IdxL, LowBnd]));
+    EmitLine(Format('  %s =l mul %s, %d', [Offset, Adj, ElemSize]));
+  end
+  else
+    EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
+  EmitLine(Format('  %s =l add %%_var_%s, %s', [ElemPtr, AStmt.ArrayName, Offset]));
+  EmitLine(Format('  %s %s, %s', [StoreInstr, ElemVal, ElemPtr]));
+end;
+
+function TCodeGenQBE.EmitArrayLiteralExpr(AExpr: TArrayLiteralExpr): string;
+var
+  OAType:     TOpenArrayTypeDesc;
+  ElemType:   TTypeDesc;
+  ElemSize:   Integer;
+  AllocInstr: string;
+  StoreInstr: string;
+  TotalBytes: Integer;
+  BufPtr:     string;
+  ElemVal:    string;
+  ElemPtr:    string;
+  Offset:     string;
+  I:          Integer;
+begin
+  OAType   := TOpenArrayTypeDesc(AExpr.ResolvedType);
+  ElemType := OAType.ElementType;
+  ElemSize := ElemType.ByteSize;
+  TotalBytes := AExpr.Elements.Count * ElemSize;
+  if TotalBytes < 1 then TotalBytes := 1;
+  case ElemType.Kind of
+    tyString, tyClass, tyPointer, tyInt64:
+    begin
+      AllocInstr := 'alloc8';
+      StoreInstr := 'storel';
+    end;
+  else
+    AllocInstr := 'alloc4';
+    StoreInstr := 'storew';
+  end;
+  BufPtr := AllocTemp;
+  EmitLine(Format('  %s =l %s %d', [BufPtr, AllocInstr, TotalBytes]));
+  for I := 0 to AExpr.Elements.Count - 1 do
+  begin
+    ElemVal := EmitExpr(TASTExpr(AExpr.Elements[I]));
+    if I = 0 then
+      EmitLine(Format('  %s %s, %s', [StoreInstr, ElemVal, BufPtr]))
+    else
+    begin
+      Offset  := AllocTemp;
+      ElemPtr := AllocTemp;
+      EmitLine(Format('  %s =l copy %d', [Offset, I * ElemSize]));
+      EmitLine(Format('  %s =l add %s, %s', [ElemPtr, BufPtr, Offset]));
+      EmitLine(Format('  %s %s, %s', [StoreInstr, ElemVal, ElemPtr]));
+    end;
+  end;
+  Result := BufPtr;
 end;
 
 end.

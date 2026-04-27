@@ -51,6 +51,19 @@ type
     procedure TestCodegen_Low_EmitsZero;
     procedure TestCodegen_Subscript_PointerArithmetic;
     procedure TestCodegen_Forwarding_PassesTwoArgs;
+
+    { ------------------------------------------------------------------ }
+    { Array literal call site                                              }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_ArrayLiteral_NodeType;
+    procedure TestParse_ArrayLiteral_ElementCount;
+    procedure TestParse_ArrayLiteral_SingleElement;
+    procedure TestSemantic_ArrayLiteral_ResolvesToOpenArray;
+    procedure TestSemantic_ArrayLiteral_ElementType;
+    procedure TestCodegen_ArrayLiteral_AllocsBuffer;
+    procedure TestCodegen_ArrayLiteral_StoresElements;
+    procedure TestCodegen_ArrayLiteral_HighIndexIsOne;
+    procedure TestCodegen_ArrayLiteral_SingleElem_HighZero;
   end;
 
 implementation
@@ -140,6 +153,22 @@ const
     '  Inner(A)'                                       + LineEnding +
     'end;'                                             + LineEnding +
     'begin end.';
+
+  SrcLiteralCall =
+    'program OA;'                                      + LineEnding +
+    'procedure Print(const A: array of string);'       + LineEnding +
+    'begin end;'                                       + LineEnding +
+    'begin'                                            + LineEnding +
+    '  Print([''hello'', ''world''])'                  + LineEnding +
+    'end.';
+
+  SrcLiteralSingle =
+    'program OA;'                                      + LineEnding +
+    'procedure Print(const A: array of string);'       + LineEnding +
+    'begin end;'                                       + LineEnding +
+    'begin'                                            + LineEnding +
+    '  Print([''only''])'                              + LineEnding +
+    'end.';
 
 { ------------------------------------------------------------------ }
 { Parser tests                                                        }
@@ -320,6 +349,103 @@ begin
   { Inner(A) from Outer must pass both data ptr and high from A's two slots }
   AssertTrue('forwards data pointer',  Pos('loadl %_var_A', IR) > 0);
   AssertTrue('forwards high index',    Pos('loadl %_var_A_high', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Array literal tests                                               }
+{ ------------------------------------------------------------------ }
+
+procedure TOpenArrayTests.TestParse_ArrayLiteral_NodeType;
+var P: TProgram; Call: TProcCall; Arg: TASTExpr;
+begin
+  P := ParseSrc(SrcLiteralCall);
+  try
+    { First statement in the main block is Print([...]) }
+    Call := TProcCall(P.Block.Stmts[0]);
+    Arg  := TASTExpr(Call.Args[0]);
+    AssertTrue('arg is TArrayLiteralExpr', Arg is TArrayLiteralExpr);
+  finally P.Free; end;
+end;
+
+procedure TOpenArrayTests.TestParse_ArrayLiteral_ElementCount;
+var P: TProgram; Call: TProcCall; Lit: TArrayLiteralExpr;
+begin
+  P := ParseSrc(SrcLiteralCall);
+  try
+    Call := TProcCall(P.Block.Stmts[0]);
+    Lit  := TArrayLiteralExpr(TASTExpr(Call.Args[0]));
+    AssertEquals('two elements', 2, Lit.Elements.Count);
+  finally P.Free; end;
+end;
+
+procedure TOpenArrayTests.TestParse_ArrayLiteral_SingleElement;
+var P: TProgram; Call: TProcCall; Lit: TArrayLiteralExpr;
+begin
+  P := ParseSrc(SrcLiteralSingle);
+  try
+    Call := TProcCall(P.Block.Stmts[0]);
+    Lit  := TArrayLiteralExpr(TASTExpr(Call.Args[0]));
+    AssertEquals('one element', 1, Lit.Elements.Count);
+  finally P.Free; end;
+end;
+
+procedure TOpenArrayTests.TestSemantic_ArrayLiteral_ResolvesToOpenArray;
+var P: TProgram; Call: TProcCall; Arg: TASTExpr;
+begin
+  P := AnalyseSrc(SrcLiteralCall);
+  try
+    Call := TProcCall(P.Block.Stmts[0]);
+    Arg  := TASTExpr(Call.Args[0]);
+    AssertNotNull('ResolvedType set', Arg.ResolvedType);
+    AssertEquals('kind is tyOpenArray', Ord(tyOpenArray), Ord(Arg.ResolvedType.Kind));
+  finally P.Free; end;
+end;
+
+procedure TOpenArrayTests.TestSemantic_ArrayLiteral_ElementType;
+var P: TProgram; Call: TProcCall; Arg: TASTExpr; OAT: TOpenArrayTypeDesc;
+begin
+  P := AnalyseSrc(SrcLiteralCall);
+  try
+    Call := TProcCall(P.Block.Stmts[0]);
+    Arg  := TASTExpr(Call.Args[0]);
+    AssertTrue('is TOpenArrayTypeDesc', Arg.ResolvedType is TOpenArrayTypeDesc);
+    OAT := TOpenArrayTypeDesc(Arg.ResolvedType);
+    AssertEquals('element is tyString', Ord(tyString), Ord(OAT.ElementType.Kind));
+  finally P.Free; end;
+end;
+
+procedure TOpenArrayTests.TestCodegen_ArrayLiteral_AllocsBuffer;
+var IR: string;
+begin
+  IR := GenIR(SrcLiteralCall);
+  AssertTrue('buffer alloc emitted', Pos('alloc8', IR) > 0);
+end;
+
+procedure TOpenArrayTests.TestCodegen_ArrayLiteral_StoresElements;
+var IR: string;
+begin
+  IR := GenIR(SrcLiteralCall);
+  { Two string elements — each needs a storel }
+  AssertTrue('first storel emitted',  Pos('storel', IR) > 0);
+  { Count occurrences: need at least 2 storel instructions }
+  AssertTrue('second storel emitted',
+    Pos('storel', IR) <> LastDelimiter('storel', IR) + 1);
+end;
+
+procedure TOpenArrayTests.TestCodegen_ArrayLiteral_HighIndexIsOne;
+var IR: string;
+begin
+  IR := GenIR(SrcLiteralCall);
+  { Two-element literal → high index = 1 }
+  AssertTrue('high index 1 in call', Pos('l 1', IR) > 0);
+end;
+
+procedure TOpenArrayTests.TestCodegen_ArrayLiteral_SingleElem_HighZero;
+var IR: string;
+begin
+  IR := GenIR(SrcLiteralSingle);
+  { Single-element literal → high index = 0 }
+  AssertTrue('high index 0 in call', Pos('l 0', IR) > 0);
 end;
 
 initialization
