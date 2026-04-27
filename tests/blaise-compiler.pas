@@ -1903,7 +1903,7 @@ begin
   case Kind of
     tyInteger, tyUInt32, tyEnum: Result := 4;
     tyInt64:             Result := 8;
-    tyByte, tyBoolean:   Result := 1;
+    tyByte, tyBoolean:   Result := 4;  { stored as word, same as AllocAlign }
     tyString:            Result := 8;  
     tyRecord:            Result := TRecordTypeDesc(Self).TotalSize;
     tyNil:               Result := 8;
@@ -10161,14 +10161,7 @@ begin
 
   if AAssign.ObjExpr <> nil then
   begin
-    
     PtrTemp := EmitExpr(AAssign.ObjExpr);
-    if AAssign.IsClassAccess then
-    begin
-      Ptr := AllocTemp;
-      EmitLine(Format('  %s =l loadl %s', Ptr, PtrTemp));
-      PtrTemp := Ptr;
-    end;
     if AAssign.FieldInfo.Offset > 0 then
     begin
       Ptr := AllocTemp;
@@ -12357,6 +12350,28 @@ begin
   else if AExpr is TBinaryExpr then
   begin
     BinExpr := TBinaryExpr(AExpr);
+    if (BinExpr.Op = boAnd) or (BinExpr.Op = boOr) then
+    begin
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l alloc4 1', SelfTemp));
+      L := EmitExpr(BinExpr.Left);
+      EmitLine(Format('  storew %s, %s', L, SelfTemp));
+      FuncName := AllocLabel('sc_rhs');
+      ArgLine  := AllocLabel('sc_end');
+      if BinExpr.Op = boAnd then
+        EmitLine(Format('  jnz %s, @%s, @%s', L, FuncName, ArgLine))
+      else
+        EmitLine(Format('  jnz %s, @%s, @%s', L, ArgLine, FuncName));
+      EmitLine('@' + FuncName);
+      R := EmitExpr(BinExpr.Right);
+      EmitLine(Format('  storew %s, %s', R, SelfTemp));
+      EmitLine(Format('  jmp @%s', ArgLine));
+      EmitLine('@' + ArgLine);
+      T := AllocTemp;
+      EmitLine(Format('  %s =w loadw %s', T, SelfTemp));
+      Result := T;
+      Exit;
+    end;
     L := EmitExpr(BinExpr.Left);
     R := EmitExpr(BinExpr.Right);
     T := AllocTemp;
