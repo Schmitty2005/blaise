@@ -365,3 +365,18 @@ void* _StringFormat(void* fmt, ...) {
     *dst = '\0';
     return result;
 }
+
+/* _StringFromPChar(p) : string
+ * Converts a NUL-terminated C string into a Blaise ARC string.
+ * Returns a new unowned string (RefCount = 0); the compiler's ARC
+ * wrapper calls _StringAddRef at the assignment site. */
+void* _StringFromPChar(const char* p) {
+    int32_t len;
+    void*   r;
+    if (!p) return str_alloc(0);
+    len = (int32_t)strlen(p);
+    r   = str_alloc(len);
+    if (r && len > 0)
+        memcpy((char*)r + sizeof(BlaiseStrHdr), p, (size_t)len);
+    return r;
+}

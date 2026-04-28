@@ -34,7 +34,8 @@ type
     tyPointer,    { Typed or untyped pointer — QBE 'l'; see TPointerTypeDesc }
     tyEnum,       { Enumeration type — stored as QBE 'w' (Integer); see TEnumTypeDesc }
     tyOpenArray,  { Open-array parameter — two-register ABI: data ptr + high index }
-    tyStaticArray { Fixed-size array: stack-allocated, compile-time bounds }
+    tyStaticArray, { Fixed-size array: stack-allocated, compile-time bounds }
+    tyPChar  { Opaque C pointer for interop: PChar(str) / string(pchar) }
   );
 
   TTypeDesc = class
@@ -260,6 +261,7 @@ type
     FTypeVoid:    TTypeDesc;
     FTypeNil:     TTypeDesc;
     FTypePointer: TPointerTypeDesc;  { untyped Pointer }
+    FTypePChar:   TTypeDesc;         { opaque C pointer }
 
     function GetCurrentScope: TScope;
     function GetScopeDepth: Integer;
@@ -321,6 +323,7 @@ type
     property TypeVoid:    TTypeDesc    read FTypeVoid;
     property TypeNil:     TTypeDesc    read FTypeNil;
     property TypePointer: TPointerTypeDesc read FTypePointer;
+    property TypePChar:   TTypeDesc        read FTypePChar;
   end;
 
 implementation
@@ -871,6 +874,7 @@ begin
   FTypeVoid    := NewType(tyVoid,    'void');
   FTypeNil     := NewType(tyNil,     'nil');
   FTypePointer := NewPointerType('Pointer', nil);  { untyped pointer }
+  FTypePChar   := NewType(tyPChar, 'PChar');
 
   { Register type names as skType symbols in global scope }
   Define(TSymbol.Create('Integer', skType, FTypeInteger));
@@ -880,6 +884,7 @@ begin
   Define(TSymbol.Create('Boolean', skType, FTypeBoolean));
   Define(TSymbol.Create('string',  skType, FTypeString));
   Define(TSymbol.Create('Pointer', skType, FTypePointer));
+  Define(TSymbol.Create('PChar',   skType, FTypePChar));
 
   { TObject — root of the class hierarchy; no fields, no parent }
   Define(TSymbol.Create('TObject', skType, NewClassType('TObject')));

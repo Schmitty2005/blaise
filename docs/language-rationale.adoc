@@ -199,6 +199,27 @@ interoperability.
 * `string(pchar)` — built-in conversion; constructs an ARC string from a
   null-terminated byte sequence by measuring `strlen` and copying.
 
+==== Implementation
+
+`PChar` is a distinct type kind (`tyPChar`) registered as a built-in type.
+It maps to `l` (64-bit pointer) in QBE IR. Variable declarations
+(`var p: PChar`) allocate an 8-byte nil-initialised pointer slot.
+
+`PChar(str)` emits `add str_ptr, 12` — skipping the 12-byte ARC header
+(4 bytes refcount + 4 bytes length + 4 bytes capacity) to reach the
+character data. Because the RTL null-terminates all strings, the result
+is a valid C `char*`.
+
+`string(pchar)` calls `_StringFromPChar(p: char*): void*` in `blaise_str.c`.
+That function measures `strlen`, allocates a new ARC string via `str_alloc`,
+copies the bytes, and returns the header pointer with `RefCount = 0`. The
+compiler's ARC machinery calls `_StringAddRef` at the assignment site,
+bringing the refcount to 1.
+
+`PChar(pchar_expr)` is an identity cast: the value is returned unchanged.
+This allows code that obtains a `PChar` from one source to pass it
+onwards without an explicit type annotation.
+
 ==== Alternatives rejected
 
 * *No `PChar` at all* — rejected. The compiler itself calls external
@@ -206,13 +227,10 @@ interoperability.
   require null-terminated byte pointers at the C boundary. Eliminating
   `PChar` would require an alternative C-interop mechanism.
 
-* *`PChar` as an alias for `^Byte`* — under consideration. Functionally
-  equivalent but would require the pointer type machinery to be in place.
-  Deferred until typed pointer support is complete.
-
-==== Status
-
-_Planned. Not yet implemented._
+* *`PChar` as an alias for `^Byte`* — rejected for now. Functionally
+  equivalent but requires the typed-pointer dereferencing machinery,
+  which is not yet in place. `tyPChar` is a simpler, opaque type that
+  covers the immediate C-interop use cases without pointer arithmetic.
 
 ---
 

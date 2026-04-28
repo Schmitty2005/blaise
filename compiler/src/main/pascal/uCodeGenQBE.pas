@@ -241,6 +241,7 @@ begin
     tyPointer:                              Result := 'l';  { pointer (typed or untyped) }
     tyOpenArray:                            Result := 'l';  { data pointer (high idx is separate) }
     tyStaticArray:                          Result := 'l';  { base pointer to stack buffer }
+    tyPChar:                                Result := 'l';  { opaque C pointer }
   else
     Result := 'w';
   end;
@@ -317,6 +318,13 @@ begin
         tyPointer:
           begin
             { Pointer var (typed or untyped) — allocate one pointer slot, nil-init }
+            EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
+            EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
+          end;
+
+        tyPChar:
+          begin
+            { PChar var — opaque C pointer slot, nil-init }
             EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
             EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
           end;
@@ -2855,6 +2863,30 @@ begin
             TStaticArrayTypeDesc(TASTExpr(Args[0]).ResolvedType).LowBound]))
         else
           EmitLine(Format('  %s =w copy 0', [T]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'PChar') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        if TASTExpr(Args[0]).ResolvedType.Kind = tyPChar then
+          Result := L  { PChar(pchar_expr) — identity }
+        else
+        begin
+          { PChar(str) — pointer to char data: str_ptr + 12 (past ARC header) }
+          T := AllocTemp;
+          EmitLine(Format('  %s =l add %s, 12', [T, L]));
+          Result := T;
+        end;
+        Exit;
+      end;
+
+      if SameText(Name, 'string') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_StringFromPChar(l %s)', [T, L]));
         Result := T;
         Exit;
       end;

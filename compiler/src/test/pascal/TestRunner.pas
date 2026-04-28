@@ -41,6 +41,7 @@ uses
   cp.test.properties,
   cp.test.genericfuncs,
   cp.test.pointers,
+  cp.test.pchar,
   cp.test.tlist,
   cp.test.genericintfs,
   cp.test.genericdefaults,

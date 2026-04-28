@@ -2548,6 +2548,36 @@ begin
     Exit;
   end;
 
+  if SameText(AExpr.Name, 'PChar') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('PChar requires exactly one argument', AExpr.Line, AExpr.Col);
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    if not (ArgType.Kind in [tyString, tyPChar]) then
+      SemanticError(
+        Format('PChar cast requires a string or PChar expression, got ''%s''',
+          [ArgType.Name]),
+        AExpr.Line, AExpr.Col);
+    Result := FTable.TypePChar;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'string') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('string() requires exactly one argument', AExpr.Line, AExpr.Col);
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    if ArgType.Kind <> tyPChar then
+      SemanticError(
+        Format('string() cast requires a PChar expression, got ''%s''',
+          [ArgType.Name]),
+        AExpr.Line, AExpr.Col);
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   if SameText(AExpr.Name, 'High') then
   begin
     if AExpr.Args.Count <> 1 then
