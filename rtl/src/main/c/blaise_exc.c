@@ -37,9 +37,11 @@ typedef struct BlaiseExcFrame {
 } BlaiseExcFrame;
 
 #ifdef _WIN32
-static __declspec(thread) BlaiseExcFrame* g_exc_top = NULL;
+static __declspec(thread) BlaiseExcFrame* g_exc_top        = NULL;
+static __declspec(thread) void*           g_current_exception = NULL;
 #else
-static __thread BlaiseExcFrame* g_exc_top = NULL;
+static __thread BlaiseExcFrame* g_exc_top        = NULL;
+static __thread void*           g_current_exception = NULL;
 #endif
 
 /*
@@ -70,6 +72,7 @@ void _PopExcFrame(void) {
 void _Raise(void* obj) {
     if (!g_exc_top)
         abort();
+    g_current_exception  = obj;
     g_exc_top->exception = obj;
     longjmp(*(jmp_buf*)g_exc_top, 1);
 }
@@ -89,7 +92,10 @@ void* _CurrentException(void) {
  * Returns an empty string if no exception is active.
  */
 void* _CurrentExceptionMessage(void) {
-    void* exc = g_exc_top ? g_exc_top->exception : NULL;
+    /* Use g_current_exception rather than g_exc_top->exception: the codegen
+       calls _PopExcFrame() before running the except body, so g_exc_top has
+       already been unwound by the time CurrentExceptionMessage is called. */
+    void* exc = g_current_exception;
     if (!exc) return exc_str_from_cstr("");
     /* FMessage is the first user field, after the 8-byte vptr */
     void* msg = *((void**)((char*)exc + 8));

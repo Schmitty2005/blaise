@@ -51,43 +51,8 @@ begin
 
 end;
 
-{ File path helpers — replacements for FPC SysUtils functions }
-
-function ExtractFileName(const APath: string): string;
-var
-  I: Integer;
-begin
-  Result := APath;
-  I := Length(APath);
-  while I >= 1 do
-  begin
-    if OrdAt(APath, I) = 47 then
-    begin
-      Result := Copy(APath, I + 1, Length(APath) - I);
-      Exit;
-    end;
-    I := I - 1;
-  end;
-end;
-
-function ChangeFileExt(const AFileName: string; const AExt: string): string;
-var
-  I: Integer;
-begin
-  I := Length(AFileName);
-  while I >= 1 do
-  begin
-    if OrdAt(AFileName, I) = 46 then
-    begin
-      Result := Copy(AFileName, 1, I - 1) + AExt;
-      Exit;
-    end;
-    if OrdAt(AFileName, I) = 47 then
-      break;
-    I := I - 1;
-  end;
-  Result := AFileName + AExt;
-end;
+{ ChangeFileExt, ExtractFileName, ExtractFilePath, IncludeTrailingPathDelimiter
+  are now compiler built-ins (step 11) — no hand implementations needed. }
 
 
 { === RTL: Collections === }
@@ -2471,6 +2436,10 @@ begin
   Sym := TSymbol.Create('GetEnvVar',  skFunction,  FTypeString);  Define(Sym);
   Sym := TSymbol.Create('Exec',       skFunction,  FTypeInteger); Define(Sym);
   Sym := TSymbol.Create('Halt',       skProcedure, nil);          Define(Sym);
+  Sym := TSymbol.Create('ChangeFileExt',                skFunction, FTypeString); Define(Sym);
+  Sym := TSymbol.Create('ExtractFileName',              skFunction, FTypeString); Define(Sym);
+  Sym := TSymbol.Create('ExtractFilePath',              skFunction, FTypeString); Define(Sym);
+  Sym := TSymbol.Create('IncludeTrailingPathDelimiter', skFunction, FTypeString); Define(Sym);
 end;
 
 function TSymbolTable.DefineGlobal(ASymbol: TSymbol): Boolean;
@@ -8250,6 +8219,30 @@ begin
     Exit;
   end;
 
+  if SameText(AExpr.Name, 'ChangeFileExt') then
+  begin
+    if AExpr.Args.Count <> 2 then
+      SemanticError('ChangeFileExt requires exactly 2 arguments', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Get(0)));
+    AnalyseExpr(TASTExpr(AExpr.Args.Get(1)));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'ExtractFileName') or
+     SameText(AExpr.Name, 'ExtractFilePath') or
+     SameText(AExpr.Name, 'IncludeTrailingPathDelimiter') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError(Format('''%s'' requires exactly 1 argument', AExpr.Name),
+                    AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Get(0)));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   Idx := FProcIndex.IndexOf(AExpr.Name);
   if Idx < 0 then
     SemanticError(
@@ -11820,6 +11813,43 @@ begin
         L := EmitExpr(TASTExpr(TFuncCallExpr(AExpr).Args.Get(0)));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_Exec(l %s)', T, L));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(TFuncCallExpr(AExpr).Name, 'ChangeFileExt') then
+      begin
+        L := EmitExpr(TASTExpr(TFuncCallExpr(AExpr).Args.Get(0)));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_ChangeFileExt(l %s, l %s)',
+          T, L, EmitExpr(TASTExpr(TFuncCallExpr(AExpr).Args.Get(1)))));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(TFuncCallExpr(AExpr).Name, 'ExtractFileName') then
+      begin
+        L := EmitExpr(TASTExpr(TFuncCallExpr(AExpr).Args.Get(0)));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_ExtractFileName(l %s)', T, L));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(TFuncCallExpr(AExpr).Name, 'ExtractFilePath') then
+      begin
+        L := EmitExpr(TASTExpr(TFuncCallExpr(AExpr).Args.Get(0)));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_ExtractFilePath(l %s)', T, L));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(TFuncCallExpr(AExpr).Name, 'IncludeTrailingPathDelimiter') then
+      begin
+        L := EmitExpr(TASTExpr(TFuncCallExpr(AExpr).Args.Get(0)));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_IncludeTrailingPathDelimiter(l %s)', T, L));
         Result := T;
         Exit;
       end;
