@@ -93,7 +93,8 @@ type
     tkSemicolon,
     tkDot,
     tkDotDot,        { .. — array bounds separator and case range }
-    tkCaret          { ^ — pointer dereference / pointer type prefix }
+    tkCaret,         { ^ — pointer dereference / pointer type prefix }
+    tkAt             { @ — address-of operator }
   );
 
   TToken = record
@@ -323,6 +324,7 @@ begin
         else if text = '*'  then Result.Kind := tkStar
         else if text = '/'  then Result.Kind := tkSlash
         else if text = '^'  then Result.Kind := tkCaret
+        else if text = '@'  then Result.Kind := tkAt
         else
           raise Exception.CreateFmt(
             'Unexpected symbol ''%s'' at line %d col %d',

@@ -1987,6 +1987,7 @@ var
   MCallNode:  TMethodCallExpr;
   FCallNode:  TFuncCallExpr;
   DerefNode:  TDerefExpr;
+  AddrNode:   TAddrOfExpr;
   NotNode:    TNotExpr;
   Inner:      TASTExpr;
   Name:       string;
@@ -1998,6 +1999,15 @@ var
   ArrNode:    TArrayLiteralExpr;
 begin
   case FCurrent.Kind of
+    tkAt:
+      begin
+        AddrNode      := TAddrOfExpr.Create;
+        AddrNode.Line := FCurrent.Line;
+        AddrNode.Col  := FCurrent.Col;
+        Advance;  { consume '@' }
+        AddrNode.Expr := Self.ParseFactor;  { Self. forces recursive call }
+        Result := AddrNode;
+      end;
     tkNot:
       begin
         NotNode      := TNotExpr.Create;

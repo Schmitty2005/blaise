@@ -288,6 +288,13 @@ type
     destructor Destroy; override;
   end;
 
+  { Address-of expression: '@Expr' — result type is ^ElemType }
+  TAddrOfExpr = class(TASTExpr)
+  public
+    Expr: TASTExpr;  { owned — the inner expression whose address is taken }
+    destructor Destroy; override;
+  end;
+
   TMethodCallStmt = class(TASTStmt)
   public
     ObjectName: string;
@@ -731,6 +738,12 @@ end;
 { TDerefExpr }
 
 destructor TDerefExpr.Destroy;
+begin
+  Expr.Free;
+  inherited Destroy;
+end;
+
+destructor TAddrOfExpr.Destroy;
 begin
   Expr.Free;
   inherited Destroy;

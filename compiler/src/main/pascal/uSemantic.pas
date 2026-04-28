@@ -80,6 +80,7 @@ type
     function  AnalyseIsExpr(AExpr: TIsExpr): TTypeDesc;
     function  AnalyseAsExpr(AExpr: TAsExpr): TTypeDesc;
     function  AnalyseDerefExpr(AExpr: TDerefExpr): TTypeDesc;
+    function  AnalyseAddrOfExpr(AExpr: TAddrOfExpr): TTypeDesc;
     function  AnalyseStringSubscriptExpr(AExpr: TStringSubscriptExpr): TTypeDesc;
     function  AnalyseArrayLiteralExpr(AExpr: TArrayLiteralExpr): TTypeDesc;
     procedure CoerceToCharOrd(ALit: TStringLiteral);
@@ -3222,6 +3223,8 @@ begin
     Result := AnalyseAsExpr(TAsExpr(AExpr))
   else if AExpr is TDerefExpr then
     Result := AnalyseDerefExpr(TDerefExpr(AExpr))
+  else if AExpr is TAddrOfExpr then
+    Result := AnalyseAddrOfExpr(TAddrOfExpr(AExpr))
   else if AExpr is TStringSubscriptExpr then
     Result := AnalyseStringSubscriptExpr(TStringSubscriptExpr(AExpr))
   else if AExpr is TArrayLiteralExpr then
@@ -3575,6 +3578,26 @@ begin
       'Cannot dereference untyped ''Pointer'' — use a typed pointer (e.g. ^Integer)',
       AExpr.Line, AExpr.Col);
   Result := TPointerTypeDesc(PtrType).BaseType;
+end;
+
+function TSemanticAnalyser.AnalyseAddrOfExpr(AExpr: TAddrOfExpr): TTypeDesc;
+var
+  InnerType: TTypeDesc;
+  PtrName: string;
+  PT: TPointerTypeDesc;
+  Sym: TSymbol;
+begin
+  InnerType := AnalyseExpr(AExpr.Expr);
+  PtrName := '^' + InnerType.Name;
+  Result := FindTypeOrInstantiate(PtrName);
+  if Result = nil then
+  begin
+    PT := FTable.NewPointerType(PtrName, InnerType);
+    Sym := TSymbol.Create(PtrName, skType, PT);
+    FTable.DefineGlobal(Sym);
+    Result := PT;
+  end;
+  AExpr.ResolvedType := Result;
 end;
 
 function TSemanticAnalyser.AnalyseStringSubscriptExpr(AExpr: TStringSubscriptExpr): TTypeDesc;

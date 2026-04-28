@@ -57,6 +57,15 @@ type
     procedure TestSemantic_StaticArray_High_ReturnsInteger;
     procedure TestCodegen_StaticArray_Low_EmitsLowBound;
     procedure TestCodegen_StaticArray_High_EmitsHighBound;
+
+    { ------------------------------------------------------------------ }
+    { Address-of                                                           }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_AddrOf_NodeType;
+    procedure TestSemantic_AddrOf_ReturnsPointerType;
+    procedure TestSemantic_AddrOf_BaseTypeIsByte;
+    procedure TestCodegen_AddrOf_NoLoad;
+    procedure TestCodegen_AddrOf_AddressArithmetic;
   end;
 
 implementation
@@ -145,6 +154,16 @@ const
     'var R: array[5..9] of Integer;'                       + LineEnding +
     'begin'                                                + LineEnding +
     '  R[5] := 1'                                         + LineEnding +
+    'end;'                                                 + LineEnding +
+    'begin end.';
+
+  SrcAddrOf =
+    'program SA;'                                          + LineEnding +
+    'procedure Foo;'                                       + LineEnding +
+    'var Buf: array[0..7] of Byte;'                        + LineEnding +
+    '    P: ^Byte;'                                        + LineEnding +
+    'begin'                                                + LineEnding +
+    '  P := @Buf[0]'                                       + LineEnding +
     'end;'                                                 + LineEnding +
     'begin end.';
 
@@ -347,6 +366,64 @@ begin
   IR := GenIR(SrcLowHigh);
   { High(A) on array[3..7] emits: copy 7 }
   AssertTrue('copy 7 for High(A)', Pos('copy 7', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Address-of tests                                                    }
+{ ------------------------------------------------------------------ }
+
+procedure TStaticArrayTests.TestParse_AddrOf_NodeType;
+var P: TProgram; MD: TMethodDecl; Assign: TAssignment;
+begin
+  P := ParseSrc(SrcAddrOf);
+  try
+    MD     := TMethodDecl(P.Block.ProcDecls[0]);
+    Assign := TAssignment(MD.Body.Stmts[0]);
+    AssertTrue('expr is TAddrOfExpr', Assign.Expr is TAddrOfExpr);
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_AddrOf_ReturnsPointerType;
+var P: TProgram; MD: TMethodDecl; Assign: TAssignment;
+begin
+  P := AnalyseSrc(SrcAddrOf);
+  try
+    MD     := TMethodDecl(P.Block.ProcDecls[0]);
+    Assign := TAssignment(MD.Body.Stmts[0]);
+    AssertNotNull('expr resolved', Assign.Expr.ResolvedType);
+    AssertEquals('@Buf[0] resolves to tyPointer',
+      Ord(tyPointer), Ord(Assign.Expr.ResolvedType.Kind));
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_AddrOf_BaseTypeIsByte;
+var P: TProgram; MD: TMethodDecl; Assign: TAssignment; PT: TPointerTypeDesc;
+begin
+  P := AnalyseSrc(SrcAddrOf);
+  try
+    MD     := TMethodDecl(P.Block.ProcDecls[0]);
+    Assign := TAssignment(MD.Body.Stmts[0]);
+    AssertTrue('is TPointerTypeDesc', Assign.Expr.ResolvedType is TPointerTypeDesc);
+    PT := TPointerTypeDesc(Assign.Expr.ResolvedType);
+    AssertNotNull('BaseType set', PT.BaseType);
+    AssertEquals('BaseType is tyByte', Ord(tyByte), Ord(PT.BaseType.Kind));
+  finally P.Free; end;
+end;
+
+procedure TStaticArrayTests.TestCodegen_AddrOf_NoLoad;
+var IR: string;
+begin
+  IR := GenIR(SrcAddrOf);
+  { @Buf[0] takes address only — no loadub should appear }
+  AssertTrue('no loadub emitted', Pos('loadub', IR) = 0);
+end;
+
+procedure TStaticArrayTests.TestCodegen_AddrOf_AddressArithmetic;
+var IR: string;
+begin
+  IR := GenIR(SrcAddrOf);
+  { address is computed: base + offset using add }
+  AssertTrue('=l add emitted', Pos('=l add', IR) > 0);
 end;
 
 initialization

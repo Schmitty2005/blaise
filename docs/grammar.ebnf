@@ -465,10 +465,15 @@ Factor
     | STRING_LIT
     | NIL
     | ArrayLiteral
+    | AddrOf
     | IDENT DOT IDENT [ LPAREN [ ArgList ] RPAREN ]  (* field/constructor/method *)
     | IDENT LESS TypeArgList GREATER LPAREN [ ArgList ] RPAREN   (* generic func call *)
     | IDENT [ LPAREN [ ArgList ] RPAREN ]             (* variable, func call, type cast *)
     | LPAREN Expr RPAREN
+    ;
+
+AddrOf
+    = AT Factor
     ;
 
 ArrayLiteral

@@ -80,6 +80,7 @@ type
     function  EmitIsExpr(AExpr: TIsExpr): string;
     function  EmitAsExpr(AExpr: TAsExpr): string;
     function  EmitStringSubscriptExpr(AExpr: TStringSubscriptExpr): string;
+    function  EmitAddrOfExpr(AExpr: TAddrOfExpr): string;
     function  EmitArrayLiteralExpr(AExpr: TArrayLiteralExpr): string;
     { Returns a QBE temp holding a pointer to the storage of a record or class
       instance referenced by AExpr.  Used by chained field access to traverse
@@ -3847,6 +3848,8 @@ begin
       EmitLine(Format('  %s =l loadl %s', [L, T]));
     Result := L;
   end
+  else if AExpr is TAddrOfExpr then
+    Result := EmitAddrOfExpr(TAddrOfExpr(AExpr))
   else if AExpr is TIsExpr then
     Result := EmitIsExpr(TIsExpr(AExpr))
   else if AExpr is TAsExpr then
@@ -4214,6 +4217,72 @@ begin
   EmitLine(Format('  %s =l add %s, %s', [BytePtr, StrPtr, Offset]));
   EmitLine(Format('  %s =w loadub %s', [ByteVal, BytePtr]));
   Result := ByteVal;
+end;
+
+function TCodeGenQBE.EmitAddrOfExpr(AExpr: TAddrOfExpr): string;
+var
+  Sub:     TStringSubscriptExpr;
+  SAT:     TStaticArrayTypeDesc;
+  OAT:     TOpenArrayTypeDesc;
+  ElemSize: Integer;
+  LowBnd:  Integer;
+  StrPtr:  string;
+  IdxW:    string;
+  IdxL:    string;
+  Adj:     string;
+  Offset:  string;
+  ElemPtr: string;
+begin
+  if AExpr.Expr is TStringSubscriptExpr then
+  begin
+    Sub := TStringSubscriptExpr(AExpr.Expr);
+    if Sub.StrExpr.ResolvedType.Kind = tyStaticArray then
+    begin
+      SAT      := TStaticArrayTypeDesc(Sub.StrExpr.ResolvedType);
+      ElemSize := SAT.ElementType.RawSize;
+      LowBnd   := SAT.LowBound;
+      StrPtr   := EmitExpr(Sub.StrExpr);
+      IdxW     := EmitExpr(Sub.IndexExpr);
+      IdxL     := AllocTemp;
+      Offset   := AllocTemp;
+      ElemPtr  := AllocTemp;
+      EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
+      if LowBnd <> 0 then
+      begin
+        Adj := AllocTemp;
+        EmitLine(Format('  %s =l sub %s, %d', [Adj, IdxL, LowBnd]));
+        EmitLine(Format('  %s =l mul %s, %d', [Offset, Adj, ElemSize]));
+      end
+      else
+        EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
+      EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
+      Result := ElemPtr;
+      Exit;
+    end;
+    if Sub.StrExpr.ResolvedType.Kind = tyOpenArray then
+    begin
+      OAT      := TOpenArrayTypeDesc(Sub.StrExpr.ResolvedType);
+      ElemSize := OAT.ElementType.RawSize;
+      StrPtr   := EmitExpr(Sub.StrExpr);
+      IdxW     := EmitExpr(Sub.IndexExpr);
+      IdxL     := AllocTemp;
+      Offset   := AllocTemp;
+      ElemPtr  := AllocTemp;
+      EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
+      EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
+      EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
+      Result := ElemPtr;
+      Exit;
+    end;
+  end;
+  if AExpr.Expr is TIdentExpr then
+  begin
+    Result := VarRef(TIdentExpr(AExpr.Expr).Name,
+                     TIdentExpr(AExpr.Expr).IsGlobal);
+    Exit;
+  end;
+  raise ECodeGenError.Create(
+    'address-of (@) is only supported for array subscripts and local variables');
 end;
 
 procedure TCodeGenQBE.EmitStaticSubscriptAssign(AStmt: TStaticSubscriptAssign);
