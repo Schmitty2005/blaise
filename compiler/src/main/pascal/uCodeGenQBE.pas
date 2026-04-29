@@ -2793,6 +2793,33 @@ begin
     ArgTemp := EmitExpr(TASTExpr(ACall.Args[0]));
     EmitLine(Format('  call $_DeleteFile(l %s)', [ArgTemp]));
   end
+  else if UCaseName = 'PROCESSSETEXE' then
+  begin
+    ArgTemp  := EmitExpr(TASTExpr(ACall.Args[0]));
+    ArgTemp2 := EmitExpr(TASTExpr(ACall.Args[1]));
+    EmitLine(Format('  call $_ProcessSetExe(l %s, l %s)', [ArgTemp, ArgTemp2]));
+  end
+  else if UCaseName = 'PROCESSADDARG' then
+  begin
+    ArgTemp  := EmitExpr(TASTExpr(ACall.Args[0]));
+    ArgTemp2 := EmitExpr(TASTExpr(ACall.Args[1]));
+    EmitLine(Format('  call $_ProcessAddArg(l %s, l %s)', [ArgTemp, ArgTemp2]));
+  end
+  else if UCaseName = 'PROCESSEXECUTE' then
+  begin
+    ArgTemp := EmitExpr(TASTExpr(ACall.Args[0]));
+    EmitLine(Format('  call $_ProcessExecute(l %s)', [ArgTemp]));
+  end
+  else if UCaseName = 'PROCESSWAITONEXIT' then
+  begin
+    ArgTemp := EmitExpr(TASTExpr(ACall.Args[0]));
+    EmitLine(Format('  call $_ProcessWaitOnExit(l %s)', [ArgTemp]));
+  end
+  else if UCaseName = 'PROCESSFREE' then
+  begin
+    ArgTemp := EmitExpr(TASTExpr(ACall.Args[0]));
+    EmitLine(Format('  call $_ProcessFree(l %s)', [ArgTemp]));
+  end
   else
     raise ECodeGenError.Create(Format(
       'Unknown procedure ''%s'' at line %d', [ACall.Name, ACall.Line]));
@@ -3256,6 +3283,42 @@ begin
         L := EmitExpr(TASTExpr(Args[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_IncludeTrailingPathDelimiter(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      { Process management built-ins }
+      if SameText(Name, 'ProcessCreate') then
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_ProcessCreate()', [T]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'ProcessRunning') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_ProcessRunning(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'ProcessReadOutput') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_ProcessReadOutput(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(Name, 'ProcessExitCode') then
+      begin
+        L := EmitExpr(TASTExpr(Args[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_ProcessExitCode(l %s)', [T, L]));
         Result := T;
         Exit;
       end;

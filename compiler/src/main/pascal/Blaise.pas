@@ -236,31 +236,42 @@ begin
   Result := True;
 end;
 
-function RunProcess(const AExe: string; const AArgs: array of string;
-  out AOutput: string): Integer;
+{ Read one chunk from a running process's pipe into a string.
+  Wraps FPC's TStream.Read; replaced by Proc.ReadOutput at step 10. }
+function ReadProcessChunk(AProc: TProcess): string;
 const
   BufSize = 4096;
 var
-  Proc: TProcess;
-  Buf:  array[0..BufSize-1] of Byte;
-  N:    Integer;
-  I:    Integer;
+  Buf: array[0..BufSize-1] of Byte;
+  N:   Integer;
+begin
+  N := AProc.Output.Read(Buf, BufSize);
+  Result := '';
+  if N > 0 then
+    Result := Copy(string(PChar(@Buf[0])), 1, N);
+end;
+
+function RunProcess(const AExe: string; AArgs: TStringList;
+  out AOutput: string): Integer;
+var
+  Proc:  TProcess;
+  Chunk: string;
+  I:     Integer;
 begin
   Proc := TProcess.Create(nil);
   try
     Proc.Executable := AExe;
-    for I := Low(AArgs) to High(AArgs) do
+    for I := 0 to AArgs.Count - 1 do
       Proc.Parameters.Add(AArgs[I]);
     { Do NOT use poWaitOnExit with poUsePipes — if the child fills the pipe
-      buffer before we read, both sides deadlock.  Drain stderr in a loop. }
+      buffer before we read, both sides deadlock.  Drain output in a loop. }
     Proc.Options := [poUsePipes, poStderrToOutPut];
     Proc.Execute;
     AOutput := '';
     repeat
-      N := Proc.Output.Read(Buf, BufSize);
-      if N > 0 then
-        AOutput := AOutput + Copy(string(PChar(@Buf[0])), 1, N);
-    until (N = 0) and not Proc.Running;
+      Chunk := ReadProcessChunk(Proc);
+      AOutput := AOutput + Chunk;
+    until (Chunk = '') and not Proc.Running;
     Proc.WaitOnExit;
     Result := Proc.ExitCode;
   finally
@@ -291,11 +302,20 @@ var
   AsmFile, RTLPath: string;
   Msg:              string;
   ExitCode:         Integer;
+  Args:             TStringList;
 begin
   AsmFile := ChangeFileExt(AIRFile, '.s');
   RTLPath := FindRTL;
 
-  ExitCode := RunProcess('qbe', ['-o', AsmFile, AIRFile], Msg);
+  Args := TStringList.Create;
+  try
+    Args.Add('-o');
+    Args.Add(AsmFile);
+    Args.Add(AIRFile);
+    ExitCode := RunProcess('qbe', Args, Msg);
+  finally
+    Args.Free;
+  end;
   if ExitCode <> 0 then
   begin
     WriteLn(StdErr, 'qbe error (exit ', ExitCode, '):');
@@ -303,10 +323,17 @@ begin
     Halt(1);
   end;
 
-  if RTLPath <> '' then
-    ExitCode := RunProcess('cc', ['-o', AOutputFile, AsmFile, RTLPath], Msg)
-  else
-    ExitCode := RunProcess('cc', ['-o', AOutputFile, AsmFile], Msg);
+  Args := TStringList.Create;
+  try
+    Args.Add('-o');
+    Args.Add(AOutputFile);
+    Args.Add(AsmFile);
+    if RTLPath <> '' then
+      Args.Add(RTLPath);
+    ExitCode := RunProcess('cc', Args, Msg);
+  finally
+    Args.Free;
+  end;
 
   if ExitCode <> 0 then
   begin

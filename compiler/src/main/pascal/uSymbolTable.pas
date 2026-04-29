@@ -1008,6 +1008,16 @@ begin
   Sym := TSymbol.Create('ExtractFileName',              skFunction, FTypeString); Define(Sym);
   Sym := TSymbol.Create('ExtractFilePath',              skFunction, FTypeString); Define(Sym);
   Sym := TSymbol.Create('IncludeTrailingPathDelimiter', skFunction, FTypeString); Define(Sym);
+  { Process management (used by Process.pas RTL) }
+  Sym := TSymbol.Create('ProcessCreate',     skFunction,  FTypePointer); Define(Sym);
+  Sym := TSymbol.Create('ProcessSetExe',     skProcedure, nil);          Define(Sym);
+  Sym := TSymbol.Create('ProcessAddArg',     skProcedure, nil);          Define(Sym);
+  Sym := TSymbol.Create('ProcessExecute',    skProcedure, nil);          Define(Sym);
+  Sym := TSymbol.Create('ProcessRunning',    skFunction,  FTypeBoolean); Define(Sym);
+  Sym := TSymbol.Create('ProcessReadOutput', skFunction,  FTypeString);  Define(Sym);
+  Sym := TSymbol.Create('ProcessWaitOnExit', skProcedure, nil);          Define(Sym);
+  Sym := TSymbol.Create('ProcessExitCode',   skFunction,  FTypeInteger); Define(Sym);
+  Sym := TSymbol.Create('ProcessFree',       skProcedure, nil);          Define(Sym);
 end;
 
 function TSymbolTable.DefineGlobal(ASymbol: TSymbol): Boolean;

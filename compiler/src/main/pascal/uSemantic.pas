@@ -2999,6 +2999,46 @@ begin
     Exit;
   end;
 
+  { Process management built-ins }
+  if SameText(AExpr.Name, 'ProcessCreate') then
+  begin
+    if AExpr.Args.Count <> 0 then
+      SemanticError('ProcessCreate takes no arguments', AExpr.Line, AExpr.Col);
+    Result := FTable.TypePointer;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'ProcessRunning') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('ProcessRunning requires exactly 1 argument', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    Result := FTable.TypeBoolean;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'ProcessReadOutput') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('ProcessReadOutput requires exactly 1 argument', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'ProcessExitCode') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('ProcessExitCode requires exactly 1 argument', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args[0]));
+    Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   Idx := FProcIndex.IndexOf(AExpr.Name);
   if Idx < 0 then
     SemanticError(

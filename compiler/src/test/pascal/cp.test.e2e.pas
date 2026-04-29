@@ -153,6 +153,11 @@ type
     procedure TestRun_ExtractFileName_ReturnsName;
     procedure TestRun_ExtractFilePath_ReturnsDir;
     procedure TestRun_IncludeTrailingPathDelimiter_AppendsSlash;
+    { ------------------------------------------------------------------ }
+    { Process management built-ins (step 8)                               }
+    { ------------------------------------------------------------------ }
+    procedure TestRun_ProcessBuiltins_CapturesOutput;
+    procedure TestRun_ProcessBuiltins_ExitCode;
   end;
 
 implementation
@@ -2025,6 +2030,49 @@ const
     '  WriteLn(IncludeTrailingPathDelimiter(''/usr/bin/''))'        + LineEnding +
     'end.';
 
+  { Step 8: process built-ins — run 'echo' and capture output }
+  SrcProcessBuiltinsCapture =
+    'program P;'                                    + LineEnding +
+    'var'                                            + LineEnding +
+    '  H:     Pointer;'                             + LineEnding +
+    '  Output: string;'                             + LineEnding +
+    '  Chunk:  string;'                             + LineEnding +
+    'begin'                                          + LineEnding +
+    '  H := ProcessCreate;'                          + LineEnding +
+    '  ProcessSetExe(H, ''echo'');'                  + LineEnding +
+    '  ProcessAddArg(H, ''hello from process'');'    + LineEnding +
+    '  ProcessExecute(H);'                           + LineEnding +
+    '  Output := '''';'                              + LineEnding +
+    '  Chunk := ProcessReadOutput(H);'               + LineEnding +
+    '  while Chunk <> '''' do'                       + LineEnding +
+    '  begin'                                        + LineEnding +
+    '    Output := Output + Chunk;'                  + LineEnding +
+    '    Chunk := ProcessReadOutput(H)'              + LineEnding +
+    '  end;'                                         + LineEnding +
+    '  ProcessWaitOnExit(H);'                        + LineEnding +
+    '  ProcessFree(H);'                              + LineEnding +
+    '  Write(Output)'                                + LineEnding +
+    'end.';
+
+  SrcProcessBuiltinsExitCode =
+    'program P;'                                    + LineEnding +
+    'var'                                            + LineEnding +
+    '  H:    Pointer;'                              + LineEnding +
+    '  Code: Integer;'                              + LineEnding +
+    '  Chunk: string;'                              + LineEnding +
+    'begin'                                          + LineEnding +
+    '  H := ProcessCreate;'                          + LineEnding +
+    '  ProcessSetExe(H, ''true'');'                  + LineEnding +
+    '  ProcessExecute(H);'                           + LineEnding +
+    '  Chunk := ProcessReadOutput(H);'               + LineEnding +
+    '  while Chunk <> '''' do'                       + LineEnding +
+    '    Chunk := ProcessReadOutput(H);'             + LineEnding +
+    '  ProcessWaitOnExit(H);'                        + LineEnding +
+    '  Code := ProcessExitCode(H);'                  + LineEnding +
+    '  ProcessFree(H);'                              + LineEnding +
+    '  WriteLn(IntToStr(Code))'                      + LineEnding +
+    'end.';
+
 procedure TE2ETests.TestRun_ChangeFileExt_ChangesExtension;
 var
   Output: string;
@@ -2096,6 +2144,32 @@ begin
   finally
     Lines.Free;
   end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Step 8: process management built-ins                                }
+{ ------------------------------------------------------------------ }
+
+procedure TE2ETests.TestRun_ProcessBuiltins_CapturesOutput;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcProcessBuiltinsCapture, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('captured echo output', 'hello from process', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_ProcessBuiltins_ExitCode;
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcProcessBuiltinsExitCode, Output, RCode, []));
+  AssertEquals('program exit code 0', 0, RCode);
+  AssertEquals('true exits with 0', '0', Trim(Output));
 end;
 
 initialization

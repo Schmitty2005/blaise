@@ -58,6 +58,7 @@ uses
   cp.test.caseenum,
   cp.test.sets,
   cp.test.selfhosting,
+  cp.test.process,
   cp.test.openarray,
   cp.test.staticarray,
   cp.test.e2e,
