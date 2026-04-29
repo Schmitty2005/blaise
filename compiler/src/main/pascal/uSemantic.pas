@@ -144,7 +144,7 @@ end;
 
 procedure TSemanticAnalyser.SemanticError(const AMsg: string; ALine, ACol: Integer);
 begin
-  raise ESemanticError.CreateFmt('%s at line %d col %d', [AMsg, ALine, ACol]);
+  raise ESemanticError.Create(Format('%s at line %d col %d', [AMsg, ALine, ACol]));
 end;
 
 function TSemanticAnalyser.AttrMatches(const AAttrName, ACanonical: string): Boolean;
@@ -185,16 +185,16 @@ begin
 
   ArgType := FTable.FindType(AArgName);
   if ArgType = nil then
-    raise ESemanticError.CreateFmt(
+    raise ESemanticError.Create(Format(
       'Unknown type ''%s'' for type parameter ''%s'' in %s',
-      [AArgName, AParamName, AContext]);
+      [AArgName, AParamName, AContext]));
 
   if SameText(AConstraint, 'class') then
   begin
     if ArgType.Kind <> tyClass then
-      raise ESemanticError.CreateFmt(
+      raise ESemanticError.Create(Format(
         'Type ''%s'' does not satisfy constraint ''%s: class'' in %s',
-        [AArgName, AParamName, AContext]);
+        [AArgName, AParamName, AContext]));
     Exit;
   end;
 
@@ -202,9 +202,9 @@ begin
   begin
     if not (ArgType.Kind in [tyRecord, tyInteger, tyInt64, tyUInt32, tyByte,
                              tyBoolean, tyString, tyPointer]) then
-      raise ESemanticError.CreateFmt(
+      raise ESemanticError.Create(Format(
         'Type ''%s'' does not satisfy constraint ''%s: record'' in %s',
-        [AArgName, AParamName, AContext]);
+        [AArgName, AParamName, AContext]));
     Exit;
   end;
 
@@ -212,18 +212,18 @@ begin
     for classes/interfaces — inherit from / implement it. }
   ConstrType := FTable.FindType(AConstraint);
   if ConstrType = nil then
-    raise ESemanticError.CreateFmt(
+    raise ESemanticError.Create(Format(
       'Unknown constraint type ''%s'' for type parameter ''%s'' in %s',
-      [AConstraint, AParamName, AContext]);
+      [AConstraint, AParamName, AContext]));
 
   if ArgType = ConstrType then Exit;
 
   if (ConstrType.Kind = tyClass) and (ArgType.Kind = tyClass) then
   begin
     if IsSubtypeOf(ArgType, ConstrType) then Exit;
-    raise ESemanticError.CreateFmt(
+    raise ESemanticError.Create(Format(
       'Type ''%s'' does not inherit from ''%s'' (constraint ''%s: %s'') in %s',
-      [AArgName, AConstraint, AParamName, AConstraint, AContext]);
+      [AArgName, AConstraint, AParamName, AConstraint, AContext]));
   end;
 
   if (ConstrType.Kind = tyInterface) and (ArgType.Kind = tyClass) then
@@ -237,15 +237,15 @@ begin
         Break;
       end;
     if not Implements then
-      raise ESemanticError.CreateFmt(
+      raise ESemanticError.Create(Format(
         'Type ''%s'' does not implement ''%s'' (constraint ''%s: %s'') in %s',
-        [AArgName, AConstraint, AParamName, AConstraint, AContext]);
+        [AArgName, AConstraint, AParamName, AConstraint, AContext]));
     Exit;
   end;
 
-  raise ESemanticError.CreateFmt(
+  raise ESemanticError.Create(Format(
     'Type ''%s'' does not satisfy constraint ''%s: %s'' in %s',
-    [AArgName, AParamName, AConstraint, AContext]);
+    [AArgName, AParamName, AConstraint, AContext]));
 end;
 
 function TSemanticAnalyser.IsSubtypeOf(AActual, AExpected: TTypeDesc): Boolean;

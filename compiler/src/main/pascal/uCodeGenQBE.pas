@@ -266,9 +266,9 @@ begin
   begin
     Decl := TVarDecl(ABlock.Decls[I]);
     if Decl.ResolvedType = nil then
-      raise ECodeGenError.CreateFmt(
+      raise ECodeGenError.Create(Format(
         'Variable ''%s'' has no resolved type — semantic pass required',
-        [Decl.Names[0]]);
+        [Decl.Names[0]]));
     if Decl.IsGlobal then
       Continue;  { global vars are emitted in the data section, not as stack allocs }
 
@@ -371,9 +371,9 @@ begin
           end;
 
       else
-        raise ECodeGenError.CreateFmt(
+        raise ECodeGenError.Create(Format(
           'Unsupported type kind %d for variable ''%s''',
-          [Ord(Decl.ResolvedType.Kind), VarName]);
+          [Ord(Decl.ResolvedType.Kind), VarName]));
       end;
     end;
   end;
@@ -647,7 +647,7 @@ begin
     EmitLine('@' + DeadLbl);
   end
   else
-    raise ECodeGenError.CreateFmt('Unknown statement node type at line %d', [AStmt.Line]);
+    raise ECodeGenError.Create(Format('Unknown statement node type at line %d', [AStmt.Line]));
 end;
 
 procedure TCodeGenQBE.EmitIfStmt(AStmt: TIfStmt);
@@ -919,8 +919,8 @@ var
   ExtTemp:   string;
 begin
   if AAssign.Expr.ResolvedType = nil then
-    raise ECodeGenError.CreateFmt(
-      'Expression in assignment to ''%s'' has no resolved type', [AAssign.Name]);
+    raise ECodeGenError.Create(Format(
+      'Expression in assignment to ''%s'' has no resolved type', [AAssign.Name]));
 
   { Implicit Self.Field assignment: bare field name like FPos := ... }
   if AAssign.ImplicitSelfField <> nil then
@@ -1585,9 +1585,9 @@ begin
   end;
 
   if AAssign.FieldInfo = nil then
-    raise ECodeGenError.CreateFmt(
+    raise ECodeGenError.Create(Format(
       'Field assignment ''%s.%s'' has no resolved field info',
-      [AAssign.RecordName, AAssign.FieldName]);
+      [AAssign.RecordName, AAssign.FieldName]));
 
   ValTemp := EmitExpr(AAssign.Expr);
 
@@ -2794,8 +2794,8 @@ begin
     EmitLine(Format('  call $_DeleteFile(l %s)', [ArgTemp]));
   end
   else
-    raise ECodeGenError.CreateFmt(
-      'Unknown procedure ''%s'' at line %d', [ACall.Name, ACall.Line]);
+    raise ECodeGenError.Create(Format(
+      'Unknown procedure ''%s'' at line %d', [ACall.Name, ACall.Line]));
 end;
 
 procedure TCodeGenQBE.EmitPointerWrite(AStmt: TPointerWriteStmt);
@@ -3558,8 +3558,8 @@ begin
       end;
       L := EmitInstancePtr(FldAccess.Base);
       if FldAccess.FieldInfo = nil then
-        raise ECodeGenError.CreateFmt(
-          'Chained field ''%s'' has no resolved field info', [FldAccess.FieldName]);
+        raise ECodeGenError.Create(Format(
+          'Chained field ''%s'' has no resolved field info', [FldAccess.FieldName]));
       if FldAccess.FieldInfo.Offset > 0 then
       begin
         Ptr := AllocTemp;
@@ -3759,9 +3759,9 @@ begin
     begin
       { Record field access }
       if FldAccess.FieldInfo = nil then
-        raise ECodeGenError.CreateFmt(
+        raise ECodeGenError.Create(Format(
           'Field access ''%s.%s'' has no resolved field info',
-          [FldAccess.RecordName, FldAccess.FieldName]);
+          [FldAccess.RecordName, FldAccess.FieldName]));
       Ptr   := FieldPtr(FldAccess.RecordName, FldAccess.FieldInfo.Offset);
       QType := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       T     := AllocTemp;
@@ -4011,8 +4011,8 @@ begin
         boNE:
           EmitLine(Format('  %s =w cnew %s, %s', [T, L, R]));
       else
-        raise ECodeGenError.CreateFmt(
-          'Operator not supported for set types at line %d', [BinExpr.Line]);
+        raise ECodeGenError.Create(Format(
+          'Operator not supported for set types at line %d', [BinExpr.Line]));
       end;
       Result := T;
       Exit;
@@ -4572,8 +4572,8 @@ begin
       raise ECodeGenError.Create('Set literal elements must be enum constant references');
     IdExpr := TIdentExpr(Elem);
     if not IdExpr.IsConstant then
-      raise ECodeGenError.CreateFmt(
-        'Set literal element ''%s'' is not a constant', [IdExpr.Name]);
+      raise ECodeGenError.Create(Format(
+        'Set literal element ''%s'' is not a constant', [IdExpr.Name]));
     Mask := Mask or (Int64(1) shl IdExpr.ConstValue);
   end;
   Tmp := AllocTemp;

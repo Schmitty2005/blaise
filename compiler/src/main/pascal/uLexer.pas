@@ -334,16 +334,16 @@ begin
         else if text = '^'  then Result.Kind := tkCaret
         else if text = '@'  then Result.Kind := tkAt
         else
-          raise Exception.CreateFmt(
+          raise Exception.Create(Format(
             'Unexpected symbol ''%s'' at line %d col %d',
-            [text, raw.Line, raw.Column]);
+            [text, raw.Line, raw.Column]));
         Result.Value := text;
       end;
 
   else
-    raise Exception.CreateFmt(
+    raise Exception.Create(Format(
       'Unexpected token kind %d at line %d col %d',
-      [Ord(raw.Kind), raw.Line, raw.Column]);
+      [Ord(raw.Kind), raw.Line, raw.Column]));
   end;
 end;
 

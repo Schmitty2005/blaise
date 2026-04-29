@@ -130,13 +130,13 @@ begin
   if FLoadedNames.IndexOf(AName) >= 0 then Exit;  { already in result list }
 
   if FLoading.IndexOf(AName) >= 0 then
-    raise ECircularDependency.CreateFmt(
-      'Circular unit dependency: ''%s''', [AName]);
+    raise ECircularDependency.Create(Format(
+      'Circular unit dependency: ''%s''', [AName]));
 
   Path := Locate(AName);
   if Path = '' then
-    raise EUnitNotFound.CreateFmt(
-      'Unit ''%s'' not found in search paths', [AName]);
+    raise EUnitNotFound.Create(Format(
+      'Unit ''%s'' not found in search paths', [AName]));
 
   FLoading.Add(AName);
   U := nil;
