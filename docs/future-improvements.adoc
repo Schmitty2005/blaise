@@ -62,3 +62,128 @@ single precision is sufficient and throughput matters.
   instantiation as a parent — it needs template lookup + monomorphisation.
   Moderate-significant effort.
 
+== Language
+
+=== Multi-line string literals
+
+*What.* Add a raw-string or heredoc literal syntax to Blaise so that
+multi-line text — especially inline source snippets used in compiler tests
+— can be written without explicit `LineEnding` concatenation.
+
+*Why it matters.* The compiler test suite contains many constants of the
+form:
+
+[source,pascal]
+----
+SrcFoo =
+  'program P;'       + LineEnding +
+  'var X: Integer;'  + LineEnding +
+  'begin'            + LineEnding +
+  '  X := 1'        + LineEnding +
+  'end.';
+----
+
+The concatenation noise makes the inline source hard to read, and
+mismatched `LineEnding` vs `#10` introduces subtle platform inconsistencies.
+A raw-string literal would reduce these test constants to readable inline
+Pascal source and eliminate the concatenation entirely.
+
+*Candidate syntaxes.*
+
+* *Heredoc* (`<<'EOF' ... EOF`) — familiar from shell and Ruby; clear
+  delimiter; supports embedded single quotes and percent signs without
+  escaping.
+
+* *Raw string* (backtick or `{{{ ... }}}`) — shorter for small literals;
+  less common in Pascal codebases.
+
+* *FPC `string` style with `{$DEFINE MULTI}`* — non-starter; requires
+  a mode switch and breaks FPC compatibility.
+
+The heredoc design is preferred: it is unambiguous, works with the
+existing single-pass lexer (scan until the closing sentinel on its own
+line), and is easy to explain to users familiar with FPC's existing
+multi-line string workarounds.
+
+*Effort.* Moderate.  Lexer changes to detect `<<'IDENT'` and collect lines;
+parser treatment as a `TStringLit` node; no semantic or codegen changes
+beyond what a regular string literal requires.
+
+== Stream I/O
+
+=== Formal TStream decorator hierarchy
+
+*What.* Define a `TStream` / `TFilterStream` base pair in the Blaise RTL,
+together with canonical concrete implementations: `TFileStream`,
+`TBufferedStream`, `TDataReader`, and `TDataWriter`.
+
+*Why it matters.* FPC and Delphi define `TStream` as an abstract base, but
+the standard library lacks a `TFilterStream` root for decorator chains.
+Each unit that wraps a stream (ZLib, Cipher, LZMA) reinvents the
+constructor convention, making chains non-uniform and difficult to compose.
+A `TFilterStream` base ensures that every decorator follows the same
+ownership and lifetime contract, enabling composable pipelines such as:
+
+[source,pascal]
+----
+Pipe := TBufferedStream.Create(TFileStream.Create(Path, fmOpenRead));
+----
+
+*ARC advantage.* Under Blaise’s ARC model the outer stream holds a strong
+reference to the inner stream; teardown is automatic when the outermost
+wrapper goes out of scope.  No explicit free-order management is required,
+which eliminates a common source of bugs in FPC code that builds nested
+stream chains.
+
+*Implementation notes.*
+
+* `TStream` — abstract base: `Read`, `Write`, `Seek`, `Size`, `Position`.
+* `TFilterStream` — abstract decorator base: holds `FInner: TStream`; all
+  abstract methods default to forwarding to `FInner`.
+* `TDataReader` / `TDataWriter` — typed I/O over an arbitrary `TStream`
+  (mirrors Java’s `DataInputStream` / `DataOutputStream`).
+* Connection to `TProcess`: process I/O output is currently accumulated as
+  a `string`.  Once `TStream` exists, `TProcessOutput` can expose a
+  `TStream` interface, enabling streaming reads without a full buffer.
+
+*Effort.* Moderate.  Blocked on abstract method support in the class system.
+
+== macOS — Debugging and Code-Signing
+
+=== Debugger entitlement requirements
+
+*What.* On macOS, a debugger binary must carry the
+`com.apple.security.get-task-allow` entitlement (and, post-SIP, the binary
+it attaches to must carry the same entitlement) before the kernel permits
+`task_for_pid`.  The Blaise debugger will need a documented signing workflow
+for macOS targets.
+
+*Why it matters.* Without the entitlement, `ptrace` and Mach exception
+ports are blocked by the kernel even for self-compiled binaries.  Open-source
+users who cannot obtain an Apple Developer certificate ($99/year) need a
+supported path.
+
+*Recommended approach.*
+
+. *Ad-hoc signing* — the user self-signs with a locally generated certificate.
+  Works for development; the compiler should emit a post-build `codesign`
+  invocation for debug configurations.
+
+. *Debug-server architecture* — ship a small, separately signed stub
+  (`blaisedbgserver`) that handles `task_for_pid` and communicates over a
+  local socket.  The main debugger frontend requires no special entitlement.
+  This mirrors LLDB’s `debugserver` design and avoids per-binary signing of
+  every compiled Pascal program.
+
+. *SIP caveat* — SIP blocks attachment to Apple-signed system processes.
+  For user-compiled Pascal binaries, SIP is not an obstacle provided the
+  binary carries `get-task-allow`.
+
+*Debug-format note.* The Blaise compiler’s own debug information format
+(OPDF or equivalent) avoids dependency on Mach-O `dSYM` bundles and
+Apple’s `dsymutil`.  This is the correct design: DWARF/dSYM integration adds
+fragile toolchain coupling without benefit for a self-hosted debugger.
+
+*Effort.* Small (documentation + build-system integration for `codesign`);
+moderate for the debug-server architecture.
+

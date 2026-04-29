@@ -1298,7 +1298,9 @@ type
     tkCase,
     tkOf,
     tkConst,
-    
+    tkOut,
+    tkConstructor,
+    tkDestructor,
     tkIdent,
     
     tkPlus,
@@ -1399,10 +1401,12 @@ begin
   else if AUpper = 'CONTINUE'       then Result := tkContinue
   else if AUpper = 'CASE'           then Result := tkCase
   else if AUpper = 'OF'             then Result := tkOf
-  else if AUpper = 'CONST'          then Result := tkConst
-  else if AUpper = 'INHERITED'      then Result := tkInherited
+  else if AUpper = 'CONST'       then Result := tkConst
+  else if AUpper = 'CONSTRUCTOR' then Result := tkConstructor
+  else if AUpper = 'DESTRUCTOR'  then Result := tkDestructor
+  else if AUpper = 'INHERITED'   then Result := tkInherited
   else
-    Result := tkIdent;  
+    Result := tkIdent;
 end;
 
 function TLexer.UnescapeString(const ARaw: string): string;
@@ -1495,8 +1499,10 @@ end;  Result.Line := raw.Line;
         else if text = 'CONTINUE' then Result.Kind := tkContinue
         else if text = 'CASE'     then Result.Kind := tkCase
         else if text = 'OF'       then Result.Kind := tkOf
-        else if text = 'CONST'    then Result.Kind := tkConst
-        else                           Result.Kind := tkIdent;
+        else if text = 'CONST'       then Result.Kind := tkConst
+        else if text = 'CONSTRUCTOR' then Result.Kind := tkConstructor
+        else if text = 'DESTRUCTOR'  then Result.Kind := tkDestructor
+        else                              Result.Kind := tkIdent;
         Result.Value := FTok.TokenText;
       end;
 
@@ -3838,7 +3844,8 @@ begin
     
 
     while Check(tkType) or Check(tkVar) or Check(tkProcedure) or
-          Check(tkFunction) or Check(tkConst) do
+          Check(tkFunction) or Check(tkConst) or
+          Check(tkConstructor) or Check(tkDestructor) do
     begin
       if Check(tkType) then
         ParseTypeSection(Result)
@@ -4123,7 +4130,7 @@ begin
         ParseFieldDecl(Result.Fields)
       else if Check(tkFunction) then
         Result.Methods.Add(ParseMethodDecl(True))
-      else if Check(tkProcedure) then
+      else if Check(tkProcedure) or Check(tkConstructor) or Check(tkDestructor) then
         Result.Methods.Add(ParseMethodDecl(False))
       else
         Break;
@@ -4154,7 +4161,8 @@ begin
       Advance;
       Expect(tkRParen);
     end;
-    while Check(tkProcedure) or Check(tkFunction) do
+    while Check(tkProcedure) or Check(tkFunction) or
+          Check(tkConstructor) or Check(tkDestructor) do
     begin
       if Check(tkFunction) then
         Result.Methods.Add(ParseMethodDecl(True))
@@ -4182,13 +4190,17 @@ begin
     Result.Col  := FCurrent.Col;
     if IsFunction then
       Expect(tkFunction)
+    else if Check(tkProcedure) then
+      Advance
+    else if Check(tkConstructor) or Check(tkDestructor) then
+      Advance
     else
       Expect(tkProcedure);
     if not Check(tkIdent) then
       raise EParseError.Create(Format('Expected method name at line %d col %d', FCurrent.Line, FCurrent.Col));
     Result.Name := FCurrent.Value;
     Advance;
-    
+
 
 
     if Check(tkLessThan) and (PeekKind = tkIdent) and
@@ -5259,6 +5271,10 @@ begin
     Result.Col  := FCurrent.Col;
     if IsFunction then
       Expect(tkFunction)
+    else if Check(tkProcedure) then
+      Advance
+    else if Check(tkConstructor) or Check(tkDestructor) then
+      Advance
     else
       Expect(tkProcedure);
     if not Check(tkIdent) then
@@ -5303,7 +5319,8 @@ begin
     Expect(tkIntf);
     if Check(tkType) then
       ParseTypeSection(Result.IntfBlock);
-    while Check(tkProcedure) or Check(tkFunction) do
+    while Check(tkProcedure) or Check(tkFunction) or
+          Check(tkConstructor) or Check(tkDestructor) do
     begin
       if Check(tkFunction) then
         Result.IntfBlock.ProcDecls.Add(ParseForwardDecl(True))
@@ -5311,9 +5328,9 @@ begin
         Result.IntfBlock.ProcDecls.Add(ParseForwardDecl(False));
     end;
 
-    
     Expect(tkImplementation);
-    while Check(tkProcedure) or Check(tkFunction) do
+    while Check(tkProcedure) or Check(tkFunction) or
+          Check(tkConstructor) or Check(tkDestructor) do
     begin
       if Check(tkFunction) then
         Result.ImplBlock.ProcDecls.Add(ParseMethodDecl(True))

@@ -61,6 +61,8 @@ VIRTUAL        = "virtual"        ;
 OVERRIDE       = "override"       ;
 PROCEDURE      = "procedure"      ;
 FUNCTION       = "function"       ;
+CONSTRUCTOR    = "constructor"    ;
+DESTRUCTOR     = "destructor"     ;
 
 (* Context-sensitive soft keywords — IDENT that is treated as a keyword in a
  * specific position but may be used as an identifier elsewhere *)
@@ -239,7 +241,7 @@ MethodDeclList
     ;
 
 MethodDecl
-    = ( PROCEDURE | FUNCTION ) IDENT
+    = ( PROCEDURE | FUNCTION | CONSTRUCTOR | DESTRUCTOR ) IDENT
       [ LESS TypeParamList GREATER ]      (* optional generic type params *)
       [ LPAREN ParamList RPAREN ]
       [ COLON TypeName ]                  (* return type for functions *)
@@ -248,9 +250,9 @@ MethodDecl
       [ Block SEMICOLON ]                 (* body optional — declared without body in intf *)
     ;
 
-(* Standalone procedure/function — top-level or within a block. *)
+(* Standalone procedure/function/constructor/destructor — top-level or within a block. *)
 StandaloneDecl
-    = ( PROCEDURE | FUNCTION ) IDENT
+    = ( PROCEDURE | FUNCTION | CONSTRUCTOR | DESTRUCTOR ) IDENT
       [ DOT IDENT ]                                          (* TTypeName.MethodName — non-generic class impl *)
       [ LESS TypeParamList GREATER DOT IDENT ]               (* TName<T>.MethodName  — generic class impl    *)
       [ LESS TypeParamList GREATER ]                         (* function Identity<T> — generic standalone    *)

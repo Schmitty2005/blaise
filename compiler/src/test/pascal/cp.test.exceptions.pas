@@ -64,6 +64,7 @@ type
     procedure TestSemantic_Raise_ClassExpr_OK;
     procedure TestSemantic_Raise_NonClass_RaisesError;
     procedure TestSemantic_Raise_Bare_OK;
+    procedure TestSemantic_ExceptionSubclass_CreateAndMessage_OK;
 
     { ------------------------------------------------------------------ }
     { Codegen — try/finally                                                }
@@ -100,6 +101,7 @@ type
     { ------------------------------------------------------------------ }
     procedure TestCodegen_TryFinally_ArcRelease_BeforeReraise;
     procedure TestCodegen_TryFinally_ArcRelease_ZerosVar;
+    procedure TestCodegen_ExceptionSubclass_CtorCallWithMessage;
   end;
 
 implementation
@@ -430,6 +432,28 @@ begin
   AnalyseSrc(SrcBareRaise).Free;
 end;
 
+procedure TExceptionTests.TestSemantic_ExceptionSubclass_CreateAndMessage_OK;
+begin
+  { Verify that an Exception base class with a string property and a subclass
+    that inherits it can be declared, instantiated, and raised without semantic
+    errors.  This mirrors the API exposed by rtl/src/main/pascal/sysutils.pas. }
+  AnalyseSrc(
+    'program P;'                                          + LineEnding +
+    'type'                                                + LineEnding +
+    '  Exception = class'                                 + LineEnding +
+    '    FMessage: string;'                               + LineEnding +
+    '    constructor Create(AMessage: string);'           + LineEnding +
+    '    property Message: string read FMessage;'         + LineEnding +
+    '  end;'                                              + LineEnding +
+    '  ECompileError = class(Exception)'                  + LineEnding +
+    '  end;'                                              + LineEnding +
+    'var E: ECompileError;'                               + LineEnding +
+    'begin'                                               + LineEnding +
+    '  E := ECompileError.Create(''compile error'');'     + LineEnding +
+    '  raise E'                                           + LineEnding +
+    'end.').Free;
+end;
+
 { ------------------------------------------------------------------ }
 { Codegen — try/finally                                                }
 { ------------------------------------------------------------------ }
@@ -627,6 +651,31 @@ begin
   PosZero := PosEx('storel 0,', IR, PosFinExc);
   AssertTrue('storel 0 in exception handler (after @fin_exc)', PosZero > 0);
   AssertTrue('storel 0 before _Reraise', PosZero < PosReraise);
+end;
+
+procedure TExceptionTests.TestCodegen_ExceptionSubclass_CtorCallWithMessage;
+var IR: string;
+begin
+  { Verify that constructing an Exception subclass with a message argument
+    emits a constructor call that passes the string argument in the IR. }
+  IR := GenIR(
+    'program P;'                                          + LineEnding +
+    'type'                                                + LineEnding +
+    '  Exception = class'                                 + LineEnding +
+    '    FMessage: string;'                               + LineEnding +
+    '    constructor Create(AMessage: string);'           + LineEnding +
+    '    property Message: string read FMessage;'         + LineEnding +
+    '  end;'                                              + LineEnding +
+    '  ECompileError = class(Exception)'                  + LineEnding +
+    '  end;'                                              + LineEnding +
+    'var E: ECompileError;'                               + LineEnding +
+    'begin'                                               + LineEnding +
+    '  E := ECompileError.Create(''oops'');'              + LineEnding +
+    '  raise E'                                           + LineEnding +
+    'end.');
+  AssertTrue('ctor call present',  Pos('$Exception_Create', IR) > 0);
+  AssertTrue('string arg present', Pos('oops', IR) > 0);
+  AssertTrue('raise RTL call',     Pos('$_Raise', IR) > 0);
 end;
 
 initialization

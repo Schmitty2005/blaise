@@ -310,7 +310,8 @@ begin
     { Accept any number of type/var/procedure/function sections in any order,
       as required when concatenating multiple Pascal units into one file. }
     while Check(tkType) or Check(tkVar) or Check(tkProcedure) or
-          Check(tkFunction) or Check(tkConst) do
+          Check(tkFunction) or Check(tkConst) or
+          Check(tkConstructor) or Check(tkDestructor) do
     begin
       if Check(tkType) then
         ParseTypeSection(Result)
@@ -635,7 +636,7 @@ begin
         ParseFieldDecl(Result.Fields)
       else if Check(tkFunction) then
         Result.Methods.Add(ParseMethodDecl(True))
-      else if Check(tkProcedure) then
+      else if Check(tkProcedure) or Check(tkConstructor) or Check(tkDestructor) then
         Result.Methods.Add(ParseMethodDecl(False))
       else
         Break;
@@ -670,7 +671,8 @@ begin
       Advance;
       Expect(tkRParen);
     end;
-    while Check(tkProcedure) or Check(tkFunction) do
+    while Check(tkProcedure) or Check(tkFunction) or
+          Check(tkConstructor) or Check(tkDestructor) do
     begin
       if Check(tkFunction) then
         Result.Methods.Add(ParseMethodDecl(True))
@@ -698,8 +700,12 @@ begin
     Result.Col  := FCurrent.Col;
     if IsFunction then
       Expect(tkFunction)
+    else if Check(tkProcedure) then
+      Advance
+    else if Check(tkConstructor) or Check(tkDestructor) then
+      Advance
     else
-      Expect(tkProcedure);
+      Expect(tkProcedure);  { will produce a clear error message }
     if not Check(tkIdent) then
       raise EParseError.CreateFmt('Expected method name at line %d col %d',
         [FCurrent.Line, FCurrent.Col]);
@@ -896,6 +902,8 @@ begin
   MD     := ParseMethodDecl(IsFunc);
   ABlock.ProcDecls.Add(MD);
 end;
+
+
 
 function TParser.ParsePropertyDecl: TPropertyDecl;
 begin
@@ -1849,6 +1857,10 @@ begin
     Result.Col  := FCurrent.Col;
     if IsFunction then
       Expect(tkFunction)
+    else if Check(tkProcedure) then
+      Advance
+    else if Check(tkConstructor) or Check(tkDestructor) then
+      Advance
     else
       Expect(tkProcedure);
     if not Check(tkIdent) then
@@ -1897,7 +1909,8 @@ begin
       ParseUsesList(Result.UsedUnits);
     if Check(tkType) then
       ParseTypeSection(Result.IntfBlock);
-    while Check(tkProcedure) or Check(tkFunction) do
+    while Check(tkProcedure) or Check(tkFunction) or
+          Check(tkConstructor) or Check(tkDestructor) do
     begin
       if Check(tkFunction) then
         Result.IntfBlock.ProcDecls.Add(ParseForwardDecl(True))
@@ -1909,7 +1922,8 @@ begin
     Expect(tkImplementation);
     if Check(tkUses) then
       ParseUsesList(Result.UsedUnits);  { implementation-only deps — loaded but not re-exported }
-    while Check(tkProcedure) or Check(tkFunction) do
+    while Check(tkProcedure) or Check(tkFunction) or
+          Check(tkConstructor) or Check(tkDestructor) do
     begin
       if Check(tkFunction) then
         Result.ImplBlock.ProcDecls.Add(ParseMethodDecl(True))

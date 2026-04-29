@@ -69,6 +69,8 @@ type
     tkIn,     { 'in'  keyword — set membership test operator }
     tkConst,
     tkOut,
+    tkConstructor,
+    tkDestructor,
     { Identifier }
     tkIdent,
     { Arithmetic operators }
@@ -185,8 +187,10 @@ begin
   else if AUpper = 'SET'            then Result := tkSet
   else if AUpper = 'IN'             then Result := tkIn
   else if AUpper = 'CONST'          then Result := tkConst
-  else if AUpper = 'OUT'            then Result := tkOut
-  else if AUpper = 'INHERITED'      then Result := tkInherited
+  else if AUpper = 'OUT'         then Result := tkOut
+  else if AUpper = 'CONSTRUCTOR' then Result := tkConstructor
+  else if AUpper = 'DESTRUCTOR'  then Result := tkDestructor
+  else if AUpper = 'INHERITED'   then Result := tkInherited
   else
     Result := tkIdent;  { keyword outside Phase 1 grammar treated as ident }
 end;

@@ -334,6 +334,46 @@ the idiomatic subscript syntax the compiler source already uses.
 
 ---
 
+=== Constructor and Destructor Keywords
+
+==== Decision
+
+Blaise recognises `constructor` and `destructor` as reserved keywords.
+Both are treated as aliases for `procedure` in the method declaration and
+implementation position: the compiler parses and emits them identically to
+`procedure`.  The "constructor" nature of a call is determined at the call
+site (when `TypeName.Create(...)` is parsed), not from the method
+declaration keyword.
+
+==== Rationale
+
+FPC and Delphi use `constructor` and `destructor` as distinct keywords.
+The Blaise RTL (`classes.pas`, `contnrs.pas`, `sysutils.pas`) follows
+FPC conventions so that units can be compiled by either compiler without
+source modification.  Without keyword support the parser treated
+`constructor` as an identifier, causing the next token (`Create`) to be
+misread as the start of a field declaration.
+
+Treating `constructor` as a pure alias for `procedure` is sufficient for
+the current compilation model: object allocation is emitted by the
+call-site codegen (via `_ClassAlloc`) regardless of how the method was
+declared, and `destructor Destroy` is called the same way as any other
+method.
+
+==== Alternatives Rejected
+
+* *Encoding constructor semantics in the declaration* — if the method
+  declaration keyword drove allocation, every constructor override and
+  inherited call would need special handling.  The current call-site
+  model is simpler and consistent with how FPC's codegen works at the
+  IR level.
+
+* *Treating `constructor`/`destructor` as soft keywords* — would require
+  context-sensitive disambiguation in the lexer; reserved-keyword status
+  is unambiguous and matches FPC behaviour.
+
+---
+
 == Memory Management
 
 === Automatic Reference Counting (ARC)
