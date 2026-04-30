@@ -43,6 +43,8 @@ type
     tkFor,
     tkTo,
     tkDownto,
+    tkRepeat,
+    tkUntil,
     tkTry,
     tkFinally,
     tkExcept,
@@ -111,11 +113,16 @@ type
   TLexer = class
   private
     FTok:  TFpgPascalTokeniser;
+    FFilename: string;
     function MapKeyword(const AUpper: string): TTokenKind;
     function UnescapeString(const ARaw: string): string;
+    function DirectiveName(const AText: string): string;
+    procedure SkipToElseOrEndif;
+    procedure SkipToEndif;
   public
-    constructor Create(const ASource: string);
+    constructor Create(const ASource: string; const AFilename: string{$IFDEF FPC} = ''{$ENDIF});
     destructor Destroy; override;
+    property Filename: string read FFilename;
     function Next: TToken;
   end;
 
@@ -129,11 +136,12 @@ begin
   Result := Ord(S[I]);
 end;
 
-constructor TLexer.Create(const ASource: string);
+constructor TLexer.Create(const ASource: string; const AFilename: string{$IFDEF FPC} = ''{$ENDIF});
 begin
   inherited Create;
   FTok := TFpgPascalTokeniser.Create;
   FTok.SetSource(ASource);
+  FFilename := AFilename;
 end;
 
 destructor TLexer.Destroy;
@@ -163,6 +171,8 @@ begin
   else if AUpper = 'FOR'       then Result := tkFor
   else if AUpper = 'TO'        then Result := tkTo
   else if AUpper = 'DOWNTO'   then Result := tkDownto
+  else if AUpper = 'REPEAT'   then Result := tkRepeat
+  else if AUpper = 'UNTIL'    then Result := tkUntil
   else if AUpper = 'TRY'       then Result := tkTry
   else if AUpper = 'FINALLY'   then Result := tkFinally
   else if AUpper = 'EXCEPT'    then Result := tkExcept
@@ -253,15 +263,106 @@ begin
   end;
 end;
 
+// Returns the directive keyword (uppercase) from a raw directive token text.
+// e.g. '($IFDEF FPC)' -> 'IFDEF', '($ENDIF)' -> 'ENDIF'
+// (angle brackets used in comment to avoid premature brace-comment closure)
+function TLexer.DirectiveName(const AText: string): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  I := 3;  // skip opening '{$'
+  while (I <= Length(AText)) and (AText[I] <> '}') and (AText[I] <> ' ') do
+  begin
+    Result := Result + UpCase(AText[I]);
+    I := I + 1;
+  end;
+end;
+
+// Skip tokens from inside a FALSE conditional block until the matching
+// ELSE or ENDIF at depth 1 (handles nesting). Stops after consuming the token.
+procedure TLexer.SkipToElseOrEndif;
+var
+  raw:   TFpgPasToken;
+  depth: Integer;
+  dname: string;
+begin
+  depth := 1;
+  while depth > 0 do
+  begin
+    raw := FTok.NextToken;
+    if raw.Kind = fptkEOF then Break;
+    if raw.Kind = fptkDirective then
+    begin
+      dname := DirectiveName(FTok.TokenText);
+      if (dname = 'IFDEF') or (dname = 'IFNDEF') then
+        Inc(depth)
+      else if dname = 'ENDIF' then
+      begin
+        Dec(depth);
+      end
+      else if (dname = 'ELSE') and (depth = 1) then
+        Break;  // consumed the ELSE — caller continues in the true branch
+    end;
+  end;
+end;
+
+// Skip tokens from inside a TRUE conditional block (at ELSE) until
+// the matching ENDIF at depth 1. Consumes the ENDIF.
+procedure TLexer.SkipToEndif;
+var
+  raw:   TFpgPasToken;
+  depth: Integer;
+  dname: string;
+begin
+  depth := 1;
+  while depth > 0 do
+  begin
+    raw := FTok.NextToken;
+    if raw.Kind = fptkEOF then Break;
+    if raw.Kind = fptkDirective then
+    begin
+      dname := DirectiveName(FTok.TokenText);
+      if (dname = 'IFDEF') or (dname = 'IFNDEF') then
+        Inc(depth)
+      else if dname = 'ENDIF' then
+        Dec(depth);
+    end;
+  end;
+end;
+
 function TLexer.Next: TToken;
 var
   raw:  TFpgPasToken;
   text: string;
+  dname: string;
 begin
-  repeat
+  while True do
+  begin
     raw := FTok.NextToken;
-  until not (raw.Kind in [fptkWhitespace, fptkLineEnding,
-                           fptkComment, fptkDirective]);
+    if raw.Kind in [fptkWhitespace, fptkLineEnding, fptkComment] then
+      Continue;
+    if raw.Kind = fptkDirective then
+    begin
+      text  := FTok.TokenText;
+      dname := DirectiveName(text);
+      if dname = 'IFDEF' then
+      begin
+        { Blaise defines no FPC-specific symbols — always skip the body }
+        SkipToElseOrEndif;
+      end
+      else if dname = 'IFNDEF' then
+      begin
+        { Symbol is never defined in Blaise — always execute the body }
+      end
+      else if dname = 'ELSE' then
+        SkipToEndif   { we were in the true branch; skip the else }
+      ;
+      { ENDIF and all other directives: silently consumed }
+      Continue;
+    end;
+    Break;
+  end;
 
   Result.Line := raw.Line;
   Result.Col  := raw.Column;

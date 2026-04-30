@@ -26,11 +26,6 @@ unit Classes;
 
 interface
 
-const
-  dupAccept = 0;
-  dupIgnore = 1;
-  dupError  = 2;
-
 type
   { ------------------------------------------------------------------ }
   { TStringList                                                          }
@@ -179,7 +174,7 @@ constructor TStringList.Create;
 begin
   Self.FCaseSensitive := True;
   Self.FSorted        := False;
-  Self.FDuplicates    := dupAccept
+  Self.FDuplicates    := 0
 end;
 
 procedure TStringList.Destroy;
@@ -212,7 +207,7 @@ begin
   if Self.FSorted then
   begin
     Self.FindSorted(S, Idx);
-    if (Self.FDuplicates = dupIgnore) and
+    if (Self.FDuplicates = 1) and
        (Idx < Self.FCount) then
     begin
       { Check for exact match at Idx }

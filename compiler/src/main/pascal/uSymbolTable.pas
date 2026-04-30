@@ -146,7 +146,7 @@ type
     FProperties:      TObjectList;  { owned TPropertyInfo }
     FHasDestroyMethod: Boolean;     { True when the class declares a 'Destroy' method }
   public
-    constructor Create(const AName: string; AKind: TTypeKind = tyRecord);
+    constructor Create(const AName: string; AKind: TTypeKind);
     destructor Destroy; override;
     procedure AddField(const AName: string; AType: TTypeDesc);
     function  FindField(const AName: string): TFieldInfo;
@@ -186,8 +186,7 @@ type
   public
     constructor Create(const AName: string);
     destructor Destroy; override;
-    procedure AddMethod(const AName: string;
-                const AReturnTypeName: string = '');
+    procedure AddMethod(const AName: string; const AReturnTypeName: string);
     function  HasMethod(const AName: string): Boolean;
     function  MethodCount: Integer;
     function  MethodName(AIndex: Integer): string;
@@ -419,7 +418,7 @@ end;
 { TRecordTypeDesc                                                     }
 { ------------------------------------------------------------------ }
 
-constructor TRecordTypeDesc.Create(const AName: string; AKind: TTypeKind = tyRecord);
+constructor TRecordTypeDesc.Create(const AName: string; AKind: TTypeKind);
 begin
   inherited Create;
   Kind        := AKind;

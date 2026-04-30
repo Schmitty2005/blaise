@@ -156,7 +156,10 @@ var
   Suffix: string;
 begin
   if SameText(AAttrName, ACanonical) then
-    Exit(True);
+  begin
+    Result := True;
+    Exit;
+  end;
   Suffix := ACanonical + 'Attribute';
   Result := SameText(AAttrName, Suffix);
 end;
@@ -165,10 +168,17 @@ function TSemanticAnalyser.HasWeakAttribute(AAttrs: TStringList): Boolean;
 var
   I: Integer;
 begin
-  if AAttrs = nil then Exit(False);
+  if AAttrs = nil then
+  begin
+    Result := False;
+    Exit;
+  end;
   for I := 0 to AAttrs.Count - 1 do
     if AttrMatches(AAttrs[I], 'Weak') then
-      Exit(True);
+    begin
+      Result := True;
+      Exit;
+    end;
   Result := False;
 end;
 
@@ -1946,9 +1956,14 @@ end;
 
 procedure TSemanticAnalyser.AnalyseStmt(AStmt: TASTStmt);
 var
-  IfS:       TIfStmt;
-  CmpS:      TCompoundStmt;
-  ForS:      TForStmt;
+  IfS:    TIfStmt;
+  CmpS:   TCompoundStmt;
+  ForS:   TForStmt;
+  WS:     TWhileStmt;
+  RS:     TRepeatStmt;
+  TFS:    TTryFinallyStmt;
+  TES:    TTryExceptStmt;
+  RaiseS: TRaiseStmt;
   I:         Integer;
   CondType:  TTypeDesc;
   VarSym:    TSymbol;
@@ -1988,20 +2003,33 @@ begin
   end
   else if AStmt is TWhileStmt then
   begin
-    with TWhileStmt(AStmt) do
-    begin
-      CondType := AnalyseExpr(Condition);
-      if CondType.Kind <> tyBoolean then
-        SemanticError(
-          Format('while condition must be Boolean, got ''%s''', [CondType.Name]),
-          AStmt.Line, AStmt.Col);
-      Inc(FLoopDepth);
-      try
-        AnalyseStmt(Body);
-      finally
-        Dec(FLoopDepth);
-      end;
+    WS := TWhileStmt(AStmt);
+    CondType := AnalyseExpr(WS.Condition);
+    if CondType.Kind <> tyBoolean then
+      SemanticError(
+        Format('while condition must be Boolean, got ''%s''', [CondType.Name]),
+        AStmt.Line, AStmt.Col);
+    Inc(FLoopDepth);
+    try
+      AnalyseStmt(WS.Body);
+    finally
+      Dec(FLoopDepth);
     end;
+  end
+  else if AStmt is TRepeatStmt then
+  begin
+    RS := TRepeatStmt(AStmt);
+    Inc(FLoopDepth);
+    try
+      AnalyseCompoundBody(RS.Body);
+    finally
+      Dec(FLoopDepth);
+    end;
+    CondType := AnalyseExpr(RS.Condition);
+    if CondType.Kind <> tyBoolean then
+      SemanticError(
+        Format('repeat condition must be Boolean, got ''%s''', [CondType.Name]),
+        AStmt.Line, AStmt.Col);
   end
   else if AStmt is TExitStmt then
   begin
@@ -2038,33 +2066,27 @@ begin
   end
   else if AStmt is TTryFinallyStmt then
   begin
-    with TTryFinallyStmt(AStmt) do
-    begin
-      AnalyseCompoundBody(TryBody);
-      AnalyseCompoundBody(FinallyBody);
-    end;
+    TFS := TTryFinallyStmt(AStmt);
+    AnalyseCompoundBody(TFS.TryBody);
+    AnalyseCompoundBody(TFS.FinallyBody);
   end
   else if AStmt is TTryExceptStmt then
   begin
-    with TTryExceptStmt(AStmt) do
-    begin
-      AnalyseCompoundBody(TryBody);
-      AnalyseCompoundBody(ExceptBody);
-    end;
+    TES := TTryExceptStmt(AStmt);
+    AnalyseCompoundBody(TES.TryBody);
+    AnalyseCompoundBody(TES.ExceptBody);
   end
   else if AStmt is TRaiseStmt then
   begin
-    with TRaiseStmt(AStmt) do
+    RaiseS := TRaiseStmt(AStmt);
+    if RaiseS.Expr <> nil then
     begin
-      if Expr <> nil then
-      begin
-        CondType := AnalyseExpr(Expr);
-        if CondType.Kind <> tyClass then
-          SemanticError(
-            Format('raise expression must be a class instance, got ''%s''',
-              [CondType.Name]),
-            AStmt.Line, AStmt.Col);
-      end;
+      CondType := AnalyseExpr(RaiseS.Expr);
+      if CondType.Kind <> tyClass then
+        SemanticError(
+          Format('raise expression must be a class instance, got ''%s''',
+            [CondType.Name]),
+          AStmt.Line, AStmt.Col);
     end;
   end
   else if AStmt is TFieldAssignment then

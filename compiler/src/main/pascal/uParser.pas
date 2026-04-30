@@ -84,6 +84,7 @@ type
     function  ParseStmt: TASTStmt;
     function  ParseIfStmt: TIfStmt;
     function  ParseWhileStmt: TWhileStmt;
+    function  ParseRepeatStmt: TRepeatStmt;
     function  ParseForStmt: TForStmt;
     function  ParseTryStmt: TASTStmt;
     function  ParseRaiseStmt: TRaiseStmt;
@@ -144,14 +145,14 @@ begin
     Advance;  { consume 'array' }
     Expect(tkLBracket);
     if not Check(tkIntLit) then
-      raise EParseError.Create(Format('Expected integer bound at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected integer bound at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     LStr := FCurrent.Value;
     Advance;
     Expect(tkDotDot);
     if not Check(tkIntLit) then
-      raise EParseError.Create(Format('Expected integer bound at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected integer bound at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     HStr := FCurrent.Value;
     Advance;
     Expect(tkRBracket);
@@ -168,8 +169,8 @@ begin
     Exit;
   end;
   if not Check(tkIdent) then
-    raise EParseError.Create(Format('Expected type name at line %d col %d',
-      [FCurrent.Line, FCurrent.Col]));
+    raise EParseError.Create(Format('Expected type name at line %d col %d in %s',
+      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   Result := FCurrent.Value;
   Advance;
   if Check(tkLessThan) then
@@ -178,8 +179,8 @@ begin
     Result := Result + '<';
     if not Check(tkIdent) then
       raise EParseError.Create(Format(
-        'Expected type argument after ''<'' at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+        'Expected type argument after ''<'' at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result := Result + FCurrent.Value;
     Advance;
     while Check(tkComma) do
@@ -187,8 +188,8 @@ begin
       Advance;
       if not Check(tkIdent) then
         raise EParseError.Create(Format(
-          'Expected type argument after '','' at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+          'Expected type argument after '','' at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Result := Result + ',' + FCurrent.Value;
       Advance;
     end;
@@ -201,9 +202,9 @@ procedure TParser.Expect(AKind: TTokenKind);
 begin
   if FCurrent.Kind <> AKind then
     raise EParseError.Create(Format(
-      'Expected token %d but got %d (''%s'') at line %d col %d',
+      'Expected token %d but got %d (''%s'') at line %d col %d in %s',
       [Ord(AKind), Ord(FCurrent.Kind), FCurrent.Value,
-       FCurrent.Line, FCurrent.Col]));
+       FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   Advance;
 end;
 
@@ -229,8 +230,8 @@ begin
     Expect(tkProgram);
 
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected program name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected program name at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.Name := FCurrent.Value;
     Advance;
 
@@ -245,8 +246,8 @@ begin
 
     if not Check(tkEOF) then
       raise EParseError.Create(Format(
-        'Unexpected tokens after program end at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+        'Unexpected tokens after program end at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   except
     Result.Free;
     raise;
@@ -259,16 +260,16 @@ var
 begin
   Expect(tkUses);
   if not Check(tkIdent) then
-    raise EParseError.Create(Format('Expected unit name after ''uses'' at line %d col %d',
-      [FCurrent.Line, FCurrent.Col]));
+    raise EParseError.Create(Format('Expected unit name after ''uses'' at line %d col %d in %s',
+      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   UName := FCurrent.Value;
   Advance;
   while Check(tkDot) do
   begin
     Advance;
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected identifier after ''.'' in unit name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected identifier after ''.'' in unit name at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     UName := UName + '.' + FCurrent.Value;
     Advance;
   end;
@@ -277,16 +278,16 @@ begin
   begin
     Advance;
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected unit name after '','' at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected unit name after '','' at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     UName := FCurrent.Value;
     Advance;
     while Check(tkDot) do
     begin
       Advance;
       if not Check(tkIdent) then
-        raise EParseError.Create(Format('Expected identifier after ''.'' in unit name at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+        raise EParseError.Create(Format('Expected identifier after ''.'' in unit name at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       UName := UName + '.' + FCurrent.Value;
       Advance;
     end;
@@ -359,8 +360,8 @@ begin
   TD.Col  := FCurrent.Col;
   try
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected type name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected type name at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     TD.Name := FCurrent.Value;
     Advance;
     { Check for generic type parameters: TBox<T>, TPair<K,V>, IFoo<T> }
@@ -373,8 +374,8 @@ begin
       try
         if not Check(tkIdent) then
           raise EParseError.Create(Format(
-            'Expected type parameter name at line %d col %d',
-            [FCurrent.Line, FCurrent.Col]));
+            'Expected type parameter name at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
         ParamNames.Add(FCurrent.Value);
         Advance;
         { Optional constraint: T : (class | record | TypeName) }
@@ -387,8 +388,8 @@ begin
           else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
           else
             raise EParseError.Create(Format(
-              'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d',
-              [FCurrent.Line, FCurrent.Col]));
+              'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
         end;
         ParamConstraints.Add(Constraint);
         while Check(tkComma) do
@@ -396,8 +397,8 @@ begin
           Advance;
           if not Check(tkIdent) then
             raise EParseError.Create(Format(
-              'Expected type parameter name at line %d col %d',
-              [FCurrent.Line, FCurrent.Col]));
+              'Expected type parameter name at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
           ParamNames.Add(FCurrent.Value);
           Advance;
           Constraint := '';
@@ -409,8 +410,8 @@ begin
             else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
             else
               raise EParseError.Create(Format(
-                'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d',
-                [FCurrent.Line, FCurrent.Col]));
+                'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d in %s',
+                [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
           end;
           ParamConstraints.Add(Constraint);
         end;
@@ -431,8 +432,8 @@ begin
         begin
           if not Check(tkClass) then
             raise EParseError.Create(Format(
-              'Generic type must be a class or interface at line %d col %d',
-              [FCurrent.Line, FCurrent.Col]));
+              'Generic type must be a class or interface at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
           GD            := TGenericTypeDef.Create;
           GD.Line       := TD.Line;
           GD.Col        := TD.Col;
@@ -462,8 +463,8 @@ begin
         TD.Def := ParseSetDef
       else
         raise EParseError.Create(Format(
-          'Expected ''record'', ''class'', ''interface'', ''('', or ''set'' at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+          'Expected ''record'', ''class'', ''interface'', ''('', or ''set'' at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     end;
     Expect(tkSemicolon);
     ABlock.TypeDecls.Add(TD);
@@ -490,8 +491,8 @@ begin
     begin
       Advance;
       if not Check(tkIntLit) then
-        raise EParseError.Create(Format('Expected integer after minus in const at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+        raise EParseError.Create(Format('Expected integer after minus in const at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       CD.IntVal  := -StrToInt64(FCurrent.Value);
       CD.IsString := False;
       Advance;
@@ -510,8 +511,8 @@ begin
     end
     else
       raise EParseError.Create(Format(
-        'Expected integer or string constant at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+        'Expected integer or string constant at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Expect(tkSemicolon);
     ABlock.ConstDecls.Add(CD);
   end;
@@ -525,16 +526,16 @@ begin
     Result.Col  := FCurrent.Col;
     Expect(tkLParen);
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected enum member at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected enum member at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.Members.Add(FCurrent.Value);
     Advance;
     while Check(tkComma) do
     begin
       Advance;
       if not Check(tkIdent) then
-        raise EParseError.Create(Format('Expected enum member at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+        raise EParseError.Create(Format('Expected enum member at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Result.Members.Add(FCurrent.Value);
       Advance;
     end;
@@ -555,8 +556,8 @@ begin
     Expect(tkOf);
     if not Check(tkIdent) then
       raise EParseError.Create(Format(
-        'Expected base type name after ''set of'' at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+        'Expected base type name after ''set of'' at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.BaseTypeName := FCurrent.Value;
     Advance;
   except
@@ -586,8 +587,8 @@ var
   TypeArgs: string;
 begin
   if not Check(tkIdent) then
-    raise EParseError.Create(Format('Expected identifier at line %d col %d',
-      [FCurrent.Line, FCurrent.Col]));
+    raise EParseError.Create(Format('Expected identifier at line %d col %d in %s',
+      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   Result := FCurrent.Value;
   Advance;
   if Check(tkLessThan) then
@@ -628,9 +629,15 @@ begin
     end;
     { Class body: fields, properties, and methods in any order.  A field
       declaration may be preceded by an attribute list, so accept
-      `[` as a legal field-start token too. }
+      `[` as a legal field-start token too.  Visibility keywords
+      (private/public/protected/published) are silently consumed. }
     repeat
-      if Check(tkIdent) and SameText(FCurrent.Value, 'property') then
+      if Check(tkIdent) and (SameText(FCurrent.Value, 'private') or
+                              SameText(FCurrent.Value, 'public') or
+                              SameText(FCurrent.Value, 'protected') or
+                              SameText(FCurrent.Value, 'published')) then
+        Advance  { skip visibility modifier }
+      else if Check(tkIdent) and SameText(FCurrent.Value, 'property') then
         Result.Properties.Add(ParsePropertyDecl)
       else if Check(tkIdent) or Check(tkLBracket) then
         ParseFieldDecl(Result.Fields)
@@ -646,8 +653,8 @@ begin
       Advance
     else if not (Check(tkSemicolon) or Check(tkEOF)) then
       raise EParseError.Create(Format(
-        'Expected ''end'' in class definition at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+        'Expected ''end'' in class definition at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   except
     Result.Free;
     raise;
@@ -665,8 +672,8 @@ begin
     begin
       Advance;
       if not Check(tkIdent) then
-        raise EParseError.Create(Format('Expected parent interface name at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+        raise EParseError.Create(Format('Expected parent interface name at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Result.ParentName := FCurrent.Value;
       Advance;
       Expect(tkRParen);
@@ -707,8 +714,8 @@ begin
     else
       Expect(tkProcedure);  { will produce a clear error message }
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected method name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected method name at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.Name := FCurrent.Value;
     Advance;
     { Type parameter list: applies to the method itself ('function Identity<T>')
@@ -722,8 +729,8 @@ begin
       try
         Advance;  { consume '<' }
         if not Check(tkIdent) then
-          raise EParseError.Create(Format('Expected type parameter name at line %d col %d',
-            [FCurrent.Line, FCurrent.Col]));
+          raise EParseError.Create(Format('Expected type parameter name at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
         TempParams.Add(FCurrent.Value);
         Advance;
         Constraint := '';
@@ -735,16 +742,16 @@ begin
           else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
           else
             raise EParseError.Create(Format(
-              'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d',
-              [FCurrent.Line, FCurrent.Col]));
+              'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
         end;
         TempConstraints.Add(Constraint);
         while Check(tkComma) do
         begin
           Advance;
           if not Check(tkIdent) then
-            raise EParseError.Create(Format('Expected type parameter name at line %d col %d',
-              [FCurrent.Line, FCurrent.Col]));
+            raise EParseError.Create(Format('Expected type parameter name at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
           TempParams.Add(FCurrent.Value);
           Advance;
           Constraint := '';
@@ -756,8 +763,8 @@ begin
             else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance; end
             else
               raise EParseError.Create(Format(
-                'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d',
-                [FCurrent.Line, FCurrent.Col]));
+                'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d in %s',
+                [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
           end;
           TempConstraints.Add(Constraint);
         end;
@@ -788,8 +795,8 @@ begin
     begin
       Advance;
       if not Check(tkIdent) then
-        raise EParseError.Create(Format('Expected method name after ''.'' at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+        raise EParseError.Create(Format('Expected method name after ''.'' at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Result.OwnerTypeName := Result.Name;
       Result.Name          := FCurrent.Value;
       Advance;
@@ -807,17 +814,44 @@ begin
       Result.ReturnTypeName := ParseTypeName;
     end;
     Expect(tkSemicolon);
-    if Check(tkVirtual) then
+    { Consume method directives: virtual, override, and identifier-form directives
+      such as inline, stdcall, cdecl, abstract, reintroduce, static, assembler, etc. }
+    while True do
     begin
-      Result.IsVirtual := True;
-      Advance;
-      Expect(tkSemicolon);
-    end
-    else if Check(tkOverride) then
-    begin
-      Result.IsOverride := True;
-      Advance;
-      Expect(tkSemicolon);
+      if Check(tkVirtual) then
+      begin
+        Result.IsVirtual := True;
+        Advance;
+        if Check(tkSemicolon) then Advance;
+      end
+      else if Check(tkOverride) then
+      begin
+        Result.IsOverride := True;
+        Advance;
+        if Check(tkSemicolon) then Advance;
+      end
+      else if Check(tkIdent) and
+              (SameText(FCurrent.Value, 'inline')      or
+               SameText(FCurrent.Value, 'stdcall')     or
+               SameText(FCurrent.Value, 'cdecl')       or
+               SameText(FCurrent.Value, 'register')    or
+               SameText(FCurrent.Value, 'pascal')      or
+               SameText(FCurrent.Value, 'safecall')    or
+               SameText(FCurrent.Value, 'abstract')    or
+               SameText(FCurrent.Value, 'reintroduce') or
+               SameText(FCurrent.Value, 'static')      or
+               SameText(FCurrent.Value, 'final')       or
+               SameText(FCurrent.Value, 'assembler')   or
+               SameText(FCurrent.Value, 'forward')     or
+               SameText(FCurrent.Value, 'deprecated')  or
+               SameText(FCurrent.Value, 'platform')    or
+               SameText(FCurrent.Value, 'experimental')) then
+      begin
+        Advance;
+        if Check(tkSemicolon) then Advance;
+      end
+      else
+        Break;
     end;
     { Body is optional — present for standalone impls and inline class methods,
       absent for class forward declarations (no begin/var/type follows) }
@@ -850,16 +884,16 @@ begin
     Names := TStringList.Create;
     try
       if not Check(tkIdent) then
-        raise EParseError.Create(Format('Expected parameter name at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+        raise EParseError.Create(Format('Expected parameter name at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Names.Add(FCurrent.Value);
       Advance;
       while Check(tkComma) do
       begin
         Advance;
         if not Check(tkIdent) then
-          raise EParseError.Create(Format('Expected parameter name at line %d col %d',
-            [FCurrent.Line, FCurrent.Col]));
+          raise EParseError.Create(Format('Expected parameter name at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
         Names.Add(FCurrent.Value);
         Advance;
       end;
@@ -913,8 +947,8 @@ begin
     Result.Col  := FCurrent.Col;
     Advance;  { consume 'property' identifier }
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected property name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected property name at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.Name := FCurrent.Value;
     Advance;
     { Optional index parameter: 'property Name[ParamName: TypeName]: ...' }
@@ -923,8 +957,8 @@ begin
       Advance;  { consume '[' }
       if not Check(tkIdent) then
         raise EParseError.Create(Format(
-          'Expected index parameter name at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+          'Expected index parameter name at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Result.IndexParamName := FCurrent.Value;
       Advance;
       Expect(tkColon);
@@ -938,8 +972,8 @@ begin
     begin
       Advance;
       if not Check(tkIdent) then
-        raise EParseError.Create(Format('Expected read accessor name at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+        raise EParseError.Create(Format('Expected read accessor name at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Result.ReadName := FCurrent.Value;
       Advance;
     end;
@@ -948,8 +982,8 @@ begin
     begin
       Advance;
       if not Check(tkIdent) then
-        raise EParseError.Create(Format('Expected write accessor name at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+        raise EParseError.Create(Format('Expected write accessor name at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Result.WriteName := FCurrent.Value;
       Advance;
     end;
@@ -975,8 +1009,8 @@ begin
     Advance;  { consume [ }
     if not Check(tkIdent) then
       raise EParseError.Create(Format(
-        'Expected attribute name after ''['' at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+        'Expected attribute name after ''['' at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     AAttrs.Add(FCurrent.Value);
     Advance;  { consume attribute name }
     { Optional argument list: (args, ...).  We simply count parens until
@@ -1008,16 +1042,16 @@ begin
   try
     ParseAttributeList(Fld.Attributes);
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected field name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected field name at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Fld.Names.Add(FCurrent.Value);
     Advance;
     while Check(tkComma) do
     begin
       Advance;
       if not Check(tkIdent) then
-        raise EParseError.Create(Format('Expected field name at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+        raise EParseError.Create(Format('Expected field name at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Fld.Names.Add(FCurrent.Value);
       Advance;
     end;
@@ -1052,16 +1086,16 @@ begin
   try
     ParseAttributeList(Decl.Attributes);
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected variable name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected variable name at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Decl.Names.Add(FCurrent.Value);
     Advance;
     while Check(tkComma) do
     begin
       Advance;
       if not Check(tkIdent) then
-        raise EParseError.Create(Format('Expected variable name at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+        raise EParseError.Create(Format('Expected variable name at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Decl.Names.Add(FCurrent.Value);
       Advance;
     end;
@@ -1126,6 +1160,12 @@ begin
   if Check(tkWhile) then
   begin
     Result := ParseWhileStmt;
+    Exit;
+  end;
+
+  if Check(tkRepeat) then
+  begin
+    Result := ParseRepeatStmt;
     Exit;
   end;
 
@@ -1194,8 +1234,8 @@ begin
 
   if not Check(tkIdent) then
     raise EParseError.Create(Format(
-      'Expected statement at line %d col %d',
-      [FCurrent.Line, FCurrent.Col]));
+      'Expected statement at line %d col %d in %s',
+      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
 
   Name := FCurrent.Value;
   Line := FCurrent.Line;
@@ -1243,8 +1283,8 @@ begin
   begin
     Advance;
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected field or method name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected field or method name at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     SecondIdent := FCurrent.Value;
     Advance;
 
@@ -1302,8 +1342,8 @@ begin
         begin
           Advance;
           if not Check(tkIdent) then
-            raise EParseError.Create(Format('Expected field or method name at line %d col %d',
-              [FCurrent.Line, FCurrent.Col]));
+            raise EParseError.Create(Format('Expected field or method name at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
           SecondIdent := FCurrent.Value;
           Advance;
           if Check(tkDot) then
@@ -1328,6 +1368,22 @@ begin
             end;
             Break;
           end;
+        end;
+        { Chained field assignment: A.B.C := value }
+        if Check(tkAssign) then
+        begin
+          Advance;
+          FldAssign           := TFieldAssignment.Create;
+          FldAssign.Line      := Line;
+          FldAssign.Col       := Col;
+          FldAssign.FieldName := MCall.Name;
+          FldAssign.ObjExpr   := MCall.ObjExpr;
+          MCall.ObjExpr       := nil;  { transfer ownership — prevent double-free }
+          MCall.Free;
+          MCall := nil;
+          FldAssign.Expr := ParseExpr;
+          Result := FldAssign;
+          Exit;
         end;
         Result := MCall;
       end
@@ -1363,8 +1419,8 @@ begin
             Advance;
             if not Check(tkIdent) then
               raise EParseError.Create(Format(
-                'Expected identifier after ''.'' at line %d col %d',
-                [FCurrent.Line, FCurrent.Col]));
+                'Expected identifier after ''.'' at line %d col %d in %s',
+                [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
             SecondIdent := FCurrent.Value;
             Advance;
             if Check(tkLParen) then
@@ -1404,8 +1460,8 @@ begin
             Exit;
           end;
           raise EParseError.Create(Format(
-            'Expected method call or assignment after chain at line %d col %d',
-            [FCurrent.Line, FCurrent.Col]));
+            'Expected method call or assignment after chain at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
         end;
         Result := MCall;
       end;
@@ -1453,8 +1509,8 @@ begin
         begin
           Advance;
           if not Check(tkIdent) then
-            raise EParseError.Create(Format('Expected field or method name at line %d col %d',
-              [FCurrent.Line, FCurrent.Col]));
+            raise EParseError.Create(Format('Expected field or method name at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
           SecondIdent := FCurrent.Value;
           Advance;
           if Check(tkLParen) then
@@ -1495,8 +1551,8 @@ begin
           Exit;
         end;
         raise EParseError.Create(Format(
-          'Expected method call after typecast at line %d col %d',
-          [FCurrent.Line, FCurrent.Col]));
+          'Expected method call after typecast at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       end;
       { No '.': it was a plain procedure/function call. Move args to a
         fresh TProcCall using FPC-style Extract (removes without freeing). }
@@ -1534,6 +1590,36 @@ begin
   end;
 end;
 
+function TParser.ParseRepeatStmt: TRepeatStmt;
+var
+  Stmt: TASTStmt;
+begin
+  Result := TRepeatStmt.Create;
+  try
+    Result.Line := FCurrent.Line;
+    Result.Col  := FCurrent.Col;
+    Expect(tkRepeat);
+    Result.Body := TCompoundStmt.Create;
+    Result.Body.Line := FCurrent.Line;
+    Result.Body.Col  := FCurrent.Col;
+    while not (Check(tkUntil) or Check(tkEOF)) do
+    begin
+      Stmt := ParseStmt;
+      if Stmt <> nil then
+        Result.Body.Stmts.Add(Stmt);
+      if Check(tkSemicolon) then
+        Advance
+      else
+        Break;
+    end;
+    Expect(tkUntil);
+    Result.Condition := ParseExpr;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
 function TParser.ParseIfStmt: TIfStmt;
 begin
   Result := TIfStmt.Create;
@@ -1563,8 +1649,8 @@ begin
     Result.Col  := FCurrent.Col;
     Expect(tkFor);
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected loop variable at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected loop variable at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.VarName := FCurrent.Value;
     Advance;
     Expect(tkAssign);
@@ -1581,8 +1667,8 @@ begin
     end
     else
       raise EParseError.Create(Format(
-        'Expected ''to'' or ''downto'' at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+        'Expected ''to'' or ''downto'' at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.EndExpr := ParseExpr;
     Expect(tkDo);
     Result.Body := ParseStmt;
@@ -1673,8 +1759,8 @@ begin
     else
     begin
       raise EParseError.Create(Format(
-        'Expected ''finally'' or ''except'' after try body at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+        'Expected ''finally'' or ''except'' after try body at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     end;
   except
     TryBody.Free;
@@ -1708,8 +1794,8 @@ begin
     Expect(tkInherited);
     if not Check(tkIdent) then
       raise EParseError.Create(Format(
-        'Expected method name after ''inherited'' at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+        'Expected method name after ''inherited'' at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.Name := FCurrent.Value;
     Advance;
     if Check(tkLParen) then
@@ -1864,8 +1950,8 @@ begin
     else
       Expect(tkProcedure);
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected name at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.Name := FCurrent.Value;
     Advance;
     if Check(tkLParen) then
@@ -1897,8 +1983,8 @@ begin
 
     Expect(tkUnit);
     if not Check(tkIdent) then
-      raise EParseError.Create(Format('Expected unit name at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+      raise EParseError.Create(Format('Expected unit name at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.Name := FCurrent.Value;
     Advance;
     Expect(tkSemicolon);
@@ -1907,12 +1993,17 @@ begin
     Expect(tkIntf);
     if Check(tkUses) then
       ParseUsesList(Result.UsedUnits);
-    if Check(tkType) then
-      ParseTypeSection(Result.IntfBlock);
-    while Check(tkProcedure) or Check(tkFunction) or
+    while Check(tkType) or Check(tkVar) or Check(tkConst) or
+          Check(tkProcedure) or Check(tkFunction) or
           Check(tkConstructor) or Check(tkDestructor) do
     begin
-      if Check(tkFunction) then
+      if Check(tkType) then
+        ParseTypeSection(Result.IntfBlock)
+      else if Check(tkVar) then
+        ParseVarBlock(Result.IntfBlock)
+      else if Check(tkConst) then
+        ParseConstBlock(Result.IntfBlock)
+      else if Check(tkFunction) then
         Result.IntfBlock.ProcDecls.Add(ParseForwardDecl(True))
       else
         Result.IntfBlock.ProcDecls.Add(ParseForwardDecl(False));
@@ -1923,10 +2014,17 @@ begin
     if Check(tkUses) then
       ParseUsesList(Result.UsedUnits);  { implementation-only deps — loaded but not re-exported }
     while Check(tkProcedure) or Check(tkFunction) or
-          Check(tkConstructor) or Check(tkDestructor) do
+          Check(tkConstructor) or Check(tkDestructor) or
+          Check(tkVar) or Check(tkConst) or Check(tkType) do
     begin
       if Check(tkFunction) then
         Result.ImplBlock.ProcDecls.Add(ParseMethodDecl(True))
+      else if Check(tkVar) then
+        ParseVarBlock(Result.ImplBlock)
+      else if Check(tkConst) then
+        ParseConstBlock(Result.ImplBlock)
+      else if Check(tkType) then
+        ParseTypeSection(Result.ImplBlock)
       else
         Result.ImplBlock.ProcDecls.Add(ParseMethodDecl(False));
     end;
@@ -1936,8 +2034,8 @@ begin
 
     if not Check(tkEOF) then
       raise EParseError.Create(Format(
-        'Unexpected tokens after unit end at line %d col %d',
-        [FCurrent.Line, FCurrent.Col]));
+        'Unexpected tokens after unit end at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   except
     Result.Free;
     raise;
@@ -2162,15 +2260,15 @@ begin
           { Generic type args must be followed by '.' (type access) or '(' (generic func call) }
           if not (Check(tkDot) or Check(tkLParen)) then
             raise EParseError.Create(Format(
-              'Expected ''.'' or ''('' after generic type arguments at line %d col %d',
-              [FCurrent.Line, FCurrent.Col]));
+              'Expected ''.'' or ''('' after generic type arguments at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
         end;
         if Check(tkDot) then
         begin
           Advance;
           if not Check(tkIdent) then
-            raise EParseError.Create(Format('Expected field or method name at line %d col %d',
-              [FCurrent.Line, FCurrent.Col]));
+            raise EParseError.Create(Format('Expected field or method name at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
           SecondName := FCurrent.Value;
           Advance;
           if Check(tkLParen) then
@@ -2386,8 +2484,8 @@ begin
       end;
   else
     raise EParseError.Create(Format(
-      'Expected expression at line %d col %d',
-      [FCurrent.Line, FCurrent.Col]));
+      'Expected expression at line %d col %d in %s',
+      [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   end;
   { Postfix subscript: Expr[N] — string byte access }
   if Check(tkLBracket) then

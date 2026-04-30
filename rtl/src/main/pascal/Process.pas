@@ -40,7 +40,6 @@ type
     FParameters: TStringList;
     function GetRunning: Boolean;
     function GetExitCode: Integer;
-  public
     constructor Create(AOwner: TObject);
     procedure Destroy;
     procedure Execute;

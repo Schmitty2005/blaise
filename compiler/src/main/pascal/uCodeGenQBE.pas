@@ -62,6 +62,7 @@ type
     procedure EmitStmt(AStmt: TASTStmt);
     procedure EmitIfStmt(AStmt: TIfStmt);
     procedure EmitWhileStmt(AStmt: TWhileStmt);
+    procedure EmitRepeatStmt(AStmt: TRepeatStmt);
     procedure EmitForStmt(AStmt: TForStmt);
     procedure EmitTryFinallyStmt(AStmt: TTryFinallyStmt);
     procedure EmitTryExceptStmt(AStmt: TTryExceptStmt);
@@ -598,6 +599,8 @@ begin
     EmitForStmt(TForStmt(AStmt))
   else if AStmt is TWhileStmt then
     EmitWhileStmt(TWhileStmt(AStmt))
+  else if AStmt is TRepeatStmt then
+    EmitRepeatStmt(TRepeatStmt(AStmt))
   else if AStmt is TIfStmt then
     EmitIfStmt(TIfStmt(AStmt))
   else if AStmt is TCompoundStmt then
@@ -888,6 +891,41 @@ begin
     FContinueLabels.Delete(FContinueLabels.Count - 1);
   end;
   EmitLine(Format('  jmp @%s', [LblCond]));
+
+  { Continuation block }
+  EmitLine('@' + LblEnd);
+end;
+
+procedure TCodeGenQBE.EmitRepeatStmt(AStmt: TRepeatStmt);
+var
+  LblBody: string;
+  LblCond: string;
+  LblEnd:  string;
+  CondTemp: string;
+begin
+  LblBody := AllocLabel('repeat_body');
+  LblCond := AllocLabel('repeat_cond');
+  LblEnd  := AllocLabel('repeat_end');
+
+  { Jump into the body — repeat always executes at least once }
+  EmitLine(Format('  jmp @%s', [LblBody]));
+
+  { Body block }
+  EmitLine('@' + LblBody);
+  FBreakLabels.Add(LblEnd);
+  FContinueLabels.Add(LblCond);
+  try
+    EmitCompoundStmt(AStmt.Body);
+  finally
+    FBreakLabels.Delete(FBreakLabels.Count - 1);
+    FContinueLabels.Delete(FContinueLabels.Count - 1);
+  end;
+  EmitLine(Format('  jmp @%s', [LblCond]));
+
+  { Condition block — true means exit, false means repeat }
+  EmitLine('@' + LblCond);
+  CondTemp := EmitExpr(AStmt.Condition);
+  EmitLine(Format('  jnz %s, @%s, @%s', [CondTemp, LblEnd, LblBody]));
 
   { Continuation block }
   EmitLine('@' + LblEnd);

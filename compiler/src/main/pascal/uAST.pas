@@ -170,6 +170,13 @@ type
     destructor Destroy; override;
   end;
 
+  TRepeatStmt = class(TASTStmt)
+  public
+    Body:      TCompoundStmt;  { owned — statements between repeat and until }
+    Condition: TASTExpr;       { owned — the until condition }
+    destructor Destroy; override;
+  end;
+
   TForStmt = class(TASTStmt)
   public
     VarName:   string;
@@ -633,6 +640,15 @@ destructor TWhileStmt.Destroy;
 begin
   Condition.Free;
   Body.Free;
+  inherited Destroy;
+end;
+
+{ TRepeatStmt }
+
+destructor TRepeatStmt.Destroy;
+begin
+  Body.Free;
+  Condition.Free;
   inherited Destroy;
 end;
 

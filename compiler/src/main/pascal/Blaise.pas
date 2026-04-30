@@ -236,13 +236,12 @@ begin
   Result := True;
 end;
 
-{ Read one chunk from a running process's pipe into a string.
-  Wraps FPC's TStream.Read; replaced by Proc.ReadOutput at step 10. }
 function ReadProcessChunk(AProc: TProcess): string;
+{$IFDEF FPC}
 const
   BufSize = 4096;
 var
-  Buf: array[0..BufSize-1] of Byte;
+  Buf: array[0..4095] of Byte;
   N:   Integer;
 begin
   N := AProc.Output.Read(Buf, BufSize);
@@ -250,6 +249,11 @@ begin
   if N > 0 then
     Result := Copy(string(PChar(@Buf[0])), 1, N);
 end;
+{$ELSE}
+begin
+  Result := AProc.ReadOutput
+end;
+{$ENDIF}
 
 function RunProcess(const AExe: string; AArgs: TStringList;
   out AOutput: string): Integer;
@@ -263,9 +267,6 @@ begin
     Proc.Executable := AExe;
     for I := 0 to AArgs.Count - 1 do
       Proc.Parameters.Add(AArgs[I]);
-    { Do NOT use poWaitOnExit with poUsePipes — if the child fills the pipe
-      buffer before we read, both sides deadlock.  Drain output in a loop. }
-    Proc.Options := [poUsePipes, poStderrToOutPut];
     Proc.Execute;
     AOutput := '';
     repeat
@@ -391,11 +392,16 @@ begin
   try
     Source.LoadFromFile(SourceFile);
   except
+{$IFDEF FPC}
     on E: Exception do
     begin
       WriteLn(StdErr, 'Error reading source: ', E.Message);
       Halt(1);
     end;
+{$ELSE}
+    WriteLn('Error reading source file');
+    Halt(1);
+{$ENDIF}
   end;
 
   Lexer    := nil;
@@ -407,15 +413,20 @@ begin
   Units    := nil;
   try
     try
-      Lexer  := TLexer.Create(Source.Text);
+      Lexer  := TLexer.Create(Source.Text, SourceFile);
       Parser := TParser.Create(Lexer);
       Prog   := Parser.Parse;
     except
+{$IFDEF FPC}
       on E: Exception do
       begin
         WriteLn(StdErr, 'Parse error: ', E.Message);
         Halt(1);
       end;
+{$ELSE}
+      WriteLn('Parse error');
+      Halt(1);
+{$ENDIF}
     end;
 
     try
@@ -430,6 +441,7 @@ begin
       end;
       Semantic.Analyse(Prog);
     except
+{$IFDEF FPC}
       on E: ESemanticError do
       begin
         WriteLn(StdErr, 'Semantic error: ', E.Message);
@@ -445,6 +457,10 @@ begin
         WriteLn(StdErr, 'Circular dependency: ', E.Message);
         Halt(1);
       end;
+{$ELSE}
+      WriteLn('Compiler error');
+      Halt(1);
+{$ENDIF}
     end;
 
     try
@@ -459,11 +475,16 @@ begin
         CG.Generate(Prog);
       IR := CG.GetOutput;
     except
+{$IFDEF FPC}
       on E: Exception do
       begin
         WriteLn(StdErr, 'Code generation error: ', E.Message);
         Halt(1);
       end;
+{$ELSE}
+      WriteLn('Code generation error');
+      Halt(1);
+{$ENDIF}
     end;
   finally
     Units.Free;
@@ -493,11 +514,16 @@ begin
       Source.Free;
     end;
   except
+{$IFDEF FPC}
     on E: Exception do
     begin
       WriteLn(StdErr, 'Error writing IR: ', E.Message);
       Halt(1);
     end;
+{$ELSE}
+    WriteLn('Error writing IR file');
+    Halt(1);
+{$ENDIF}
   end;
 
   CompileToNative(IRFile, OutputFile);

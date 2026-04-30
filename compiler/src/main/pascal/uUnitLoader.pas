@@ -103,7 +103,7 @@ begin
   SL := TStringList.Create;
   try
     SL.LoadFromFile(APath);
-    L := TLexer.Create(SL.Text);
+    L := TLexer.Create(SL.Text, APath);
     try
       P := TParser.Create(L);
       try
