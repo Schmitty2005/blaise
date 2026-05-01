@@ -84,6 +84,7 @@ type
     tkStar,
     tkSlash,    { '/' — future: float division }
     tkDiv,      { 'div' keyword — integer division }
+    tkMod,      { 'mod' keyword — integer modulo }
     { Assignment and equality }
     tkAssign,        { := }
     tkEquals,        { =  — type declarations and equality comparison }
@@ -166,6 +167,7 @@ begin
   else if AUpper = 'PROCEDURE' then Result := tkProcedure
   else if AUpper = 'FUNCTION'  then Result := tkFunction
   else if AUpper = 'DIV'       then Result := tkDiv
+  else if AUpper = 'MOD'       then Result := tkMod
   else if AUpper = 'IF'        then Result := tkIf
   else if AUpper = 'THEN'      then Result := tkThen
   else if AUpper = 'ELSE'      then Result := tkElse

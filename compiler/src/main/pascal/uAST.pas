@@ -113,7 +113,7 @@ type
     destructor Destroy; override;
   end;
 
-  TBinaryOp = (boAdd, boSub, boMul, boDiv, boEQ, boNE, boLT, boGT, boLE, boGE,
+  TBinaryOp = (boAdd, boSub, boMul, boDiv, boMod, boEQ, boNE, boLT, boGT, boLE, boGE,
                boAnd, boOr, boIn, boShl, boShr);
 
   TBinaryExpr = class(TASTExpr)
@@ -597,6 +597,7 @@ begin
     boSub: Result := '-';
     boMul: Result := '*';
     boDiv: Result := 'div';
+    boMod: Result := 'mod';
     boEQ:  Result := '=';
     boNE:  Result := '<>';
     boLT:  Result := '<';

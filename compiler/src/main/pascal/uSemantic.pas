@@ -286,8 +286,8 @@ var
 begin
   if AExpected = AActual then
     Exit;
-  { nil is compatible with any class, interface, pointer, or string type }
-  if (AActual.Kind = tyNil) and (AExpected.Kind in [tyClass, tyInterface, tyPointer, tyString]) then
+  { nil is compatible with any class, interface, pointer, PChar, or string type }
+  if (AActual.Kind = tyNil) and (AExpected.Kind in [tyClass, tyInterface, tyPointer, tyPChar, tyString]) then
     Exit;
   { Two pointer types are compatible when:
       - either is untyped (Pointer), or
@@ -320,15 +320,17 @@ begin
       if RT.ImplementsIntfAt(I) = AExpected then
         Exit;
   end;
-  { Untyped pointer accepts any class/interface/string reference and vice-versa }
+  { Untyped pointer accepts any class/interface/string/PChar reference and vice-versa }
   if (AExpected.Kind = tyPointer) and
      (TPointerTypeDesc(AExpected).BaseType = nil) and
-     (AActual.Kind in [tyClass, tyInterface, tyString, tyPointer]) then
+     (AActual.Kind in [tyClass, tyInterface, tyString, tyPointer, tyPChar]) then
     Exit;
   if (AActual.Kind = tyPointer) and
      (TPointerTypeDesc(AActual).BaseType = nil) and
-     (AExpected.Kind in [tyClass, tyInterface, tyString, tyPointer]) then
+     (AExpected.Kind in [tyClass, tyInterface, tyString, tyPointer, tyPChar]) then
     Exit;
+  { PChar is compatible with PChar }
+  if (AExpected.Kind = tyPChar) and (AActual.Kind = tyPChar) then Exit;
   { Open-array forwarding: both must be tyOpenArray with the same element type }
   if (AExpected.Kind = tyOpenArray) and (AActual.Kind = tyOpenArray) then
   begin
@@ -2392,7 +2394,7 @@ begin
       Format('Undeclared variable ''%s''', [AAssign.Name]),
       AAssign.Line, AAssign.Col);
   end;
-  if not (VarSym.Kind in [skVariable, skVarParameter]) then
+  if not (VarSym.Kind in [skVariable, skVarParameter, skParameter]) then
     SemanticError(
       Format('''%s'' is not a variable', [AAssign.Name]),
       AAssign.Line, AAssign.Col);
@@ -2819,9 +2821,9 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError('PChar requires exactly one argument', AExpr.Line, AExpr.Col);
     ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not (ArgType.Kind in [tyString, tyPChar]) then
+    if not (ArgType.Kind in [tyString, tyPChar, tyPointer]) then
       SemanticError(
-        Format('PChar cast requires a string or PChar expression, got ''%s''',
+        Format('PChar cast requires a string, PChar, or Pointer expression, got ''%s''',
           [ArgType.Name]),
         AExpr.Line, AExpr.Col);
     Result := FTable.TypePChar;
@@ -3960,11 +3962,11 @@ begin
       CoerceToCharOrd(TStringLiteral(ABin.Left));
       LType := ABin.Left.ResolvedType;
     end;
-    { nil can be compared with class, interface, or pointer types }
+    { nil can be compared with class, interface, pointer, or PChar types }
     if not (
       (LType = RType) or
-      ((LType.Kind = tyNil) and (RType.Kind in [tyClass, tyInterface, tyPointer])) or
-      ((RType.Kind = tyNil) and (LType.Kind in [tyClass, tyInterface, tyPointer])) or
+      ((LType.Kind = tyNil) and (RType.Kind in [tyClass, tyInterface, tyPointer, tyPChar])) or
+      ((RType.Kind = tyNil) and (LType.Kind in [tyClass, tyInterface, tyPointer, tyPChar])) or
       ((LType.Kind = tyPointer) and (RType.Kind = tyPointer)) or
       { Class comparisons: allow subtype on either side }
       ((LType.Kind = tyClass) and (RType.Kind = tyClass) and
@@ -3987,13 +3989,13 @@ begin
       Exit;
     end;
 
-    { Pointer arithmetic: Pointer + Integer or Integer + Pointer → Pointer }
-    if (ABin.Op in [boAdd, boSub]) and (LType.Kind = tyPointer) and RType.IsNumeric then
+    { Pointer arithmetic: Pointer/PChar + Integer or Integer + Pointer → same type }
+    if (ABin.Op in [boAdd, boSub]) and (LType.Kind in [tyPointer, tyPChar]) and RType.IsNumeric then
     begin
       Result := LType;
       Exit;
     end;
-    if (ABin.Op = boAdd) and LType.IsNumeric and (RType.Kind = tyPointer) then
+    if (ABin.Op = boAdd) and LType.IsNumeric and (RType.Kind in [tyPointer, tyPChar]) then
     begin
       Result := RType;
       Exit;
@@ -4162,6 +4164,18 @@ begin
     AExpr.ResolvedType := Result;
     Exit;
   end;
+  { PChar byte access: P[I] — 0-based, reads one byte as Integer }
+  if StrType.Kind = tyPChar then
+  begin
+    IdxType := AnalyseExpr(AExpr.IndexExpr);
+    if not IdxType.IsNumeric then
+      SemanticError(
+        Format('PChar subscript index must be numeric, got ''%s''', [IdxType.Name]),
+        AExpr.Line, AExpr.Col);
+    Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
   if not StrType.IsString then
     SemanticError(
       Format('String subscript ''[]'' requires a string expression, got ''%s''',
@@ -4245,6 +4259,17 @@ begin
     SemanticError(
       Format('Undeclared variable ''%s''', [AStmt.ArrayName]),
       AStmt.Line, AStmt.Col);
+  { PChar subscript write: P[I] := Integer — storeb at ptr + I }
+  if Sym.TypeDesc.Kind = tyPChar then
+  begin
+    AStmt.IsGlobal := Sym.IsGlobal;
+    AStmt.ResolvedArrayType := FTable.TypePChar;
+    IdxType := AnalyseExpr(AStmt.IndexExpr);
+    if not IdxType.IsNumeric then
+      SemanticError('PChar subscript index must be numeric', AStmt.Line, AStmt.Col);
+    AnalyseExpr(AStmt.ValueExpr);
+    Exit;
+  end;
   if Sym.TypeDesc.Kind <> tyStaticArray then
     SemanticError(
       Format('''%s'' is not a static array', [AStmt.ArrayName]),

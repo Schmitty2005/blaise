@@ -2172,10 +2172,11 @@ var
   Node:  TBinaryExpr;
 begin
   Result := ParseFactor;
-  while Check(tkStar) or Check(tkSlash) or Check(tkDiv) or Check(tkAnd)
-        or Check(tkShl) or Check(tkShr) do
+  while Check(tkStar) or Check(tkSlash) or Check(tkDiv) or Check(tkMod)
+        or Check(tkAnd) or Check(tkShl) or Check(tkShr) do
   begin
     if      Check(tkStar) then Op := boMul
+    else if Check(tkMod)  then Op := boMod
     else if Check(tkAnd)  then Op := boAnd
     else if Check(tkShl)  then Op := boShl
     else if Check(tkShr)  then Op := boShr

@@ -37,6 +37,7 @@ type
 
     function  AllocTemp: string;
     function  AllocLabel(const APrefix: string): string;
+    function  CoerceArg(const AArgTemp: string; AArgExpr: TASTExpr; const AParamQType: string): string;
     function  EmitStrLit(const AValue: string): string;
     procedure EmitLine(const ALine: string);
     procedure EmitPendingStrLits;
@@ -171,6 +172,23 @@ function TCodeGenQBE.AllocLabel(const APrefix: string): string;
 begin
   Result := Format('%s_%d', [APrefix, FLabelCount]);
   Inc(FLabelCount);
+end;
+
+function TCodeGenQBE.CoerceArg(const AArgTemp: string; AArgExpr: TASTExpr;
+  const AParamQType: string): string;
+var
+  ExtTemp: string;
+begin
+  if (AParamQType = 'l') and (AArgExpr <> nil) and
+     (AArgExpr.ResolvedType <> nil) and
+     (QbeTypeOf(AArgExpr.ResolvedType) = 'w') then
+  begin
+    ExtTemp := AllocTemp;
+    EmitLine(Format('  %s =l extsw %s', [ExtTemp, AArgTemp]));
+    Result := ExtTemp;
+  end
+  else
+    Result := AArgTemp;
 end;
 
 function TCodeGenQBE.EmitStrLit(const AValue: string): string;
@@ -1901,6 +1919,7 @@ begin
     begin
       ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
       QType   := QbeTypeOf(Par.ResolvedType);
+      ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
       ArgLine := ArgLine + Format(', %s %s', [QType, ArgTemp]);
     end;
   end;
@@ -2741,6 +2760,7 @@ begin
       begin
         Par     := TMethodParam(MDecl.Params.Items[I]);
         ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+        ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
         ArgLine := ArgLine + Format(', %s %s',
           [QbeTypeOf(Par.ResolvedType), ArgTemp]);
       end;
@@ -2777,6 +2797,7 @@ begin
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+        ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
         ArgLine := ArgLine + Format('%s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
       end;
     end;
@@ -3150,10 +3171,10 @@ begin
       if SameText(FC.Name,'PChar') then
       begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
-        if TASTExpr(FC.Args.Items[0]).ResolvedType.Kind = tyPChar then
-          Result := L  { PChar(pchar_expr) — identity }
+        case TASTExpr(FC.Args.Items[0]).ResolvedType.Kind of
+          tyPChar, tyPointer:
+            Result := L;  { identity — raw pointer, no offset }
         else
-        begin
           { PChar(str) — pointer to char data: str_ptr + 12 (past ARC header) }
           T := AllocTemp;
           EmitLine(Format('  %s =l add %s, 12', [T, L]));
@@ -3525,16 +3546,23 @@ begin
         Exit;
       end;
 
-      { Type cast TypeName(Expr) — ResolvedDecl is nil; just copy with target QBE type }
+      { Type cast TypeName(Expr) — ResolvedDecl is nil; copy/extend to target QBE type }
       if FC.ResolvedDecl = nil then
       begin
-        ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[0]));
-        T       := AllocTemp;
-        QType   := QbeTypeOf(FC.ResolvedType);
+        ArgTemp  := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T        := AllocTemp;
+        QType    := QbeTypeOf(FC.ResolvedType);
         if QType = 'w' then
           EmitLine(Format('  %s =w copy %s', [T, ArgTemp]))
         else
-          EmitLine(Format('  %s =l copy %s', [T, ArgTemp]));
+        begin
+          { Widening from w to l: sign-extend rather than copy (QBE rejects l copy w) }
+          if (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
+             (QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType) = 'w') then
+            EmitLine(Format('  %s =l extsw %s', [T, ArgTemp]))
+          else
+            EmitLine(Format('  %s =l copy %s', [T, ArgTemp]));
+        end;
         Result := T;
         Exit;
       end;
@@ -3567,6 +3595,7 @@ begin
         begin
           Par     := TMethodParam(MDecl.Params.Items[I]);
           ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
+          ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
           ArgLine := ArgLine + Format(', %s %s',
             [QbeTypeOf(Par.ResolvedType), ArgTemp]);
         end;
@@ -3608,6 +3637,7 @@ begin
         else
         begin
           ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
+          ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]), QbeTypeOf(Par.ResolvedType));
           ArgLine := ArgLine + Format('%s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
         end;
       end;
@@ -4286,12 +4316,11 @@ begin
       Result := T;
       Exit;
     end;
-    { Pointer arithmetic: Pointer +/- Integer — scale offset by sizeof(base) }
+    { Pointer arithmetic: Pointer/PChar +/- Integer — result is same pointer type }
     if (BinExpr.Op in [boAdd, boSub]) and
        (BinExpr.Left.ResolvedType <> nil) and
-       (BinExpr.Left.ResolvedType.Kind = tyPointer) then
+       (BinExpr.Left.ResolvedType.Kind in [tyPointer, tyPChar]) then
     begin
-      { Scale the integer offset to bytes.  QBE pointer/int ops are both l. }
       ArgTemp := AllocTemp;
       EmitLine(Format('  %s =l extsw %s', [ArgTemp, R]));
       if BinExpr.Op = boAdd then
@@ -4390,6 +4419,7 @@ begin
         boSub: Op := 'sub';
         boMul: Op := 'mul';
         boDiv: Op := 'div';
+        boMod: Op := 'rem';
         boAnd: Op := 'and';
         boOr:  Op := 'or';
         boShl: Op := 'shl';
@@ -4406,6 +4436,7 @@ begin
         boSub: Op := 'sub';
         boMul: Op := 'mul';
         boDiv: Op := 'div';
+        boMod: Op := 'rem';
         boEQ:  Op := 'ceqw';
         boNE:  Op := 'cnew';
         boLT:  Op := 'csltw';
@@ -4968,6 +4999,21 @@ begin
     Exit;
   end;
 
+  { PChar byte access: P[I] (0-based) — loadub at ptr + I }
+  if AExpr.StrExpr.ResolvedType.Kind = tyPChar then
+  begin
+    StrPtr  := EmitExpr(AExpr.StrExpr);
+    IdxW    := EmitExpr(AExpr.IndexExpr);
+    IdxL    := AllocTemp;
+    BytePtr := AllocTemp;
+    ByteVal := AllocTemp;
+    EmitLine(Format('  %s =l extuw %s', [IdxL, IdxW]));
+    EmitLine(Format('  %s =l add %s, %s', [BytePtr, StrPtr, IdxL]));
+    EmitLine(Format('  %s =w loadub %s', [ByteVal, BytePtr]));
+    Result := ByteVal;
+    Exit;
+  end;
+
   { String byte access: S[N] (1-based).
     String layout: [refcount(4)][length(4)][capacity(4)][chars...][0]
     S[N] = byte at ptr + 12 + (N - 1) = ptr + N + 11 }
@@ -5063,7 +5109,25 @@ var
   Offset:     string;
   ElemPtr:    string;
   ElemVal:    string;
+  PCharBase:  string;
 begin
+  { PChar subscript write: P[I] := Integer — storeb at ptr + I }
+  if AStmt.ResolvedArrayType.Kind = tyPChar then
+  begin
+    IdxW     := EmitExpr(AStmt.IndexExpr);
+    IdxL     := AllocTemp;
+    ElemPtr  := AllocTemp;
+    ElemVal  := EmitExpr(AStmt.ValueExpr);
+    PCharBase := AllocTemp;
+    if AStmt.IsGlobal then
+      EmitLine(Format('  %s =l loadl $%s', [PCharBase, AStmt.ArrayName]))
+    else
+      EmitLine(Format('  %s =l loadl %%_var_%s', [PCharBase, AStmt.ArrayName]));
+    EmitLine(Format('  %s =l extuw %s', [IdxL, IdxW]));
+    EmitLine(Format('  %s =l add %s, %s', [ElemPtr, PCharBase, IdxL]));
+    EmitLine(Format('  storeb %s, %s', [ElemVal, ElemPtr]));
+    Exit;
+  end;
   SAT      := TStaticArrayTypeDesc(AStmt.ResolvedArrayType);
   ElemType := SAT.ElementType;
   ElemSize := ElemType.RawSize;
