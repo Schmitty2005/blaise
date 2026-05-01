@@ -1,0 +1,79 @@
+#!/bin/sh
+# pasbuild-blaise-compile — Build the Blaise compiler using a Blaise bootstrap binary.
+#
+# Phase: none  (standalone — does not chain after the FPC compile phase)
+#
+# Usage:
+#   pasbuild blaise-compile
+#   BLAISE_BOOTSTRAP=/path/to/blaise pasbuild blaise-compile
+#
+# Bootstrap binary discovery order:
+#   1. BLAISE_BOOTSTRAP environment variable
+#   2. Newest releases/vX.Y.Z/blaise binary in the project tree
+
+set -e
+
+case "$1" in
+  --pasbuild-phase)
+    echo "none"
+    exit 0
+    ;;
+esac
+
+# ---- Locate project directory ------------------------------------------------
+PROJ="${PASBUILD_PROJECT_DIR:-$1}"
+if [ -z "$PROJ" ]; then
+  echo "[blaise-compile] ERROR: project directory not set" >&2
+  exit 1
+fi
+
+# ---- Locate bootstrap binary -------------------------------------------------
+if [ -n "$BLAISE_BOOTSTRAP" ]; then
+  BLAISE="$BLAISE_BOOTSTRAP"
+else
+  BLAISE=$(find "$PROJ/releases" -name "blaise" -type f 2>/dev/null | sort -V | tail -1)
+fi
+
+if [ -z "$BLAISE" ] || [ ! -x "$BLAISE" ]; then
+  echo "[blaise-compile] ERROR: no bootstrap binary found." >&2
+  echo "  Set BLAISE_BOOTSTRAP=/path/to/blaise, or add a binary under releases/vX.Y.Z/blaise" >&2
+  exit 1
+fi
+
+echo "[blaise-compile] Bootstrap : $BLAISE"
+echo "[blaise-compile] Project   : $PROJ"
+
+# ---- Paths -------------------------------------------------------------------
+COMPILER_SRC="$PROJ/compiler/src/main/pascal"
+RTL_SRC="$PROJ/rtl/src/main/pascal"
+RTL_LIB="$PROJ/compiler/target/blaise_rtl.a"
+QBE="$PROJ/vendor/qbe/qbe"
+OUT_IR="$PROJ/compiler/target/blaise.ssa"
+OUT_S="$PROJ/compiler/target/blaise.s"
+OUT_BIN="$PROJ/compiler/target/blaise"
+
+# ---- Step 1: Build RTL -------------------------------------------------------
+echo "[blaise-compile] Building RTL..."
+cd "$PROJ/rtl"
+make --silent
+make install --silent
+cd "$PROJ"
+
+# ---- Step 2: Emit QBE IR -----------------------------------------------------
+echo "[blaise-compile] Emitting IR..."
+"$BLAISE" \
+  --source "$COMPILER_SRC/Blaise.pas" \
+  --unit-path "$COMPILER_SRC" \
+  --unit-path "$RTL_SRC" \
+  --emit-ir > "$OUT_IR"
+
+# ---- Step 3: Assemble --------------------------------------------------------
+echo "[blaise-compile] Assembling..."
+"$QBE" -o "$OUT_S" "$OUT_IR"
+
+# ---- Step 4: Link ------------------------------------------------------------
+echo "[blaise-compile] Linking..."
+gcc -o "$OUT_BIN" "$OUT_S" "$RTL_LIB"
+
+echo "[blaise-compile] Done: $OUT_BIN"
+"$OUT_BIN" --help 2>&1 | head -1
