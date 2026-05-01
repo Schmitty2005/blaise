@@ -26,7 +26,7 @@ uses
   uLexer, uParser, uAST, uSemantic, uCodeGenQBE, uUnitLoader;
 
 const
-  Version = '0.3.0';
+  Version = '0.4.0-dev';
   CompilerName = 'Blaise';
 
 procedure PrintUsage;
