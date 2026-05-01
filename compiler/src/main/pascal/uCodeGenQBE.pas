@@ -3974,6 +3974,23 @@ begin
         Result := T;
       end;
     end
+    else if FldAccess.IsConstant then
+    begin
+      { Class-level constant: TypeName.ConstName — emit as an integer or string literal }
+      if FldAccess.ResolvedType.Kind = tyString then
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_StringRetain(l $%s)',
+          [T, EmitStrLit(FldAccess.ConstString)]));
+        Result := T;
+      end
+      else
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =w copy %d', [T, FldAccess.ConstValue]));
+        Result := T;
+      end;
+    end
     else if FldAccess.IsConstructorCall then
     begin
       { TypeName.Create — allocate zeroed instance on heap.  _ClassAlloc

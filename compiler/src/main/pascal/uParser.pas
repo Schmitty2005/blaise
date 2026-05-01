@@ -65,7 +65,7 @@ type
     function  ParseBlock: TBlock;
     procedure ParseTypeSection(ABlock: TBlock);
     procedure ParseTypeDecl(ABlock: TBlock);
-    procedure ParseConstBlock(ABlock: TBlock);
+    procedure ParseConstBlock(AList: TObjectList);
     function  ParseEnumDef: TEnumTypeDef;
     function  ParseSetDef: TSetTypeDef;
     function  ParseRecordDef: TRecordTypeDef;
@@ -320,7 +320,7 @@ begin
       else if Check(tkVar) then
         ParseVarBlock(Result)
       else if Check(tkConst) then
-        ParseConstBlock(Result)
+        ParseConstBlock(Result.ConstDecls)
       else
         ParseStandaloneDecl(Result);
     end;
@@ -475,7 +475,7 @@ begin
   end;
 end;
 
-procedure TParser.ParseConstBlock(ABlock: TBlock);
+procedure TParser.ParseConstBlock(AList: TObjectList);
 var
   CD: TConstDecl;
 begin
@@ -515,7 +515,7 @@ begin
         'Expected integer or string constant at line %d col %d in %s',
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Expect(tkSemicolon);
-    ABlock.ConstDecls.Add(CD);
+    AList.Add(CD);
   end;
 end;
 
@@ -638,6 +638,10 @@ begin
                               SameText(FCurrent.Value, 'protected') or
                               SameText(FCurrent.Value, 'published')) then
         Advance  { skip visibility modifier }
+      else if Check(tkConst) then
+        ParseConstBlock(Result.ConstDecls)
+      else if Check(tkVar) then
+        Advance  { optional 'var' keyword before field declarations — consume and continue }
       else if Check(tkIdent) and SameText(FCurrent.Value, 'property') then
         Result.Properties.Add(ParsePropertyDecl)
       else if Check(tkIdent) or Check(tkLBracket) then
@@ -857,7 +861,7 @@ begin
     end;
     { Body is optional — present for standalone impls and inline class methods,
       absent for class forward declarations (no begin/var/type follows) }
-    if Check(tkBegin) or Check(tkVar) or Check(tkType) then
+    if Check(tkBegin) or Check(tkVar) or Check(tkType) or Check(tkConst) then
     begin
       Result.Body := ParseBlock;
       Expect(tkSemicolon);
@@ -2007,7 +2011,7 @@ begin
       else if Check(tkVar) then
         ParseVarBlock(Result.IntfBlock)
       else if Check(tkConst) then
-        ParseConstBlock(Result.IntfBlock)
+        ParseConstBlock(Result.IntfBlock.ConstDecls)
       else if Check(tkFunction) then
         Result.IntfBlock.ProcDecls.Add(ParseForwardDecl(True))
       else
@@ -2027,7 +2031,7 @@ begin
       else if Check(tkVar) then
         ParseVarBlock(Result.ImplBlock)
       else if Check(tkConst) then
-        ParseConstBlock(Result.ImplBlock)
+        ParseConstBlock(Result.ImplBlock.ConstDecls)
       else if Check(tkType) then
         ParseTypeSection(Result.ImplBlock)
       else

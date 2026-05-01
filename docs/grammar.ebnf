@@ -120,13 +120,13 @@ Unit
 InterfaceSection
     = INTERFACE
       [ UsesClause ]
-      { ProcSignature }
+      { ConstSection | ProcSignature }
     ;
 
 ImplementationSection
     = IMPLEMENTATION
       [ UsesClause ]
-      { StandaloneDecl }
+      { ConstSection | StandaloneDecl }
     ;
 
 UsesClause
@@ -148,7 +148,7 @@ UnitName
 
 Block
     = [ TypeSection ]
-      { VarSection | StandaloneDecl }
+      { ConstSection | VarSection | StandaloneDecl }
       BEGIN StmtList END
     ;
 
@@ -186,7 +186,7 @@ RecordDef
 
 ClassDef
     = CLASS [ LPAREN GenericName { COMMA GenericName } RPAREN ]
-             FieldList
+             { ConstSection | FieldList }
              MethodDeclList
              END
     ;
@@ -204,7 +204,7 @@ GenericName
 GenericClassDef
     = CLASS LESS TypeParamList GREATER     (* generic template, e.g. class<T> *)
       [ LPAREN IDENT RPAREN ]
-      FieldList
+      { ConstSection | FieldList }
       MethodDeclList
       END
     ;
@@ -323,6 +323,31 @@ ParamType
 TypeParamList
     = IDENT { COMMA IDENT }
     ;
+
+
+(* ═══════════════════════════════════════════════════════════════════════════
+ * CONSTANT SECTION
+ * ═══════════════════════════════════════════════════════════════════════════ *)
+
+ConstSection
+    = CONST ConstDecl { ConstDecl }
+    ;
+
+ConstDecl
+    = IDENT EQUALS ConstExpr SEMICOLON
+    ;
+
+ConstExpr
+    = [ MINUS ] IntLit
+    | StrLit
+    ;
+
+(* ConstExpr covers the constant initialisers currently supported:
+ *   - integer literals, optionally negated
+ *   - string literals
+ * ConstSection may appear in: program/unit Block, InterfaceSection,
+ * ImplementationSection, standalone procedure/function/method bodies,
+ * and class declaration bodies (class-level constants). *)
 
 
 (* ═══════════════════════════════════════════════════════════════════════════

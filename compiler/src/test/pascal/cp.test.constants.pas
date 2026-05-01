@@ -34,6 +34,8 @@ type
     procedure TestIntConstInUnitInterface;
     { Integer constant in unit implementation section is parsed }
     procedure TestIntConstInUnitImpl;
+    { Implementation-section constant is usable in a method body in that unit }
+    procedure TestImplConstUsableInMethodBody;
     { Constant used in assignment }
     procedure TestConstUsedInAssignment;
     { Constant used as WriteLn argument }
@@ -42,6 +44,14 @@ type
     procedure TestMultipleConstsInBlock;
     { Two const blocks in same scope }
     procedure TestTwoConstBlocks;
+    { Local constant inside a standalone procedure }
+    procedure TestLocalConstInProcedure;
+    { Local constant inside a standalone function }
+    procedure TestLocalConstInFunction;
+    { Local constant inside a class method }
+    procedure TestLocalConstInMethod;
+    { Constant in a class declaration section (class-level constant) }
+    procedure TestConstInClassDeclaration;
   end;
 
 implementation
@@ -245,6 +255,36 @@ begin
   end;
 end;
 
+procedure TConstTests.TestImplConstUsableInMethodBody;
+const
+  UnitSrc =
+    'unit Checker;'                + LineEnding +
+    'interface'                    + LineEnding +
+    'function GetLimit: Integer;'  + LineEnding +
+    'implementation'               + LineEnding +
+    'const'                        + LineEnding +
+    '  Limit = 99;'                + LineEnding +
+    'function GetLimit: Integer;'  + LineEnding +
+    'begin'                        + LineEnding +
+    '  Result := Limit'            + LineEnding +
+    'end;'                         + LineEnding +
+    'end.';
+var
+  U:  TUnit;
+  SA: TSemanticAnalyser;
+begin
+  U  := ParseUnit(UnitSrc);
+  SA := TSemanticAnalyser.Create;
+  try
+    { AnalyseUnitForExport raises ESemanticError if Limit is not resolved }
+    SA.AnalyseUnitForExport(U);
+    AssertNotNull('Unit should analyse without error', U);
+  finally
+    SA.Free;
+    U.Free;
+  end;
+end;
+
 procedure TConstTests.TestConstUsedInAssignment;
 var
   IR: string;
@@ -308,6 +348,94 @@ begin
     'end.'
   );
   AssertTrue('IR should be non-empty', IR <> '');
+end;
+
+procedure TConstTests.TestLocalConstInProcedure;
+var
+  IR: string;
+begin
+  IR := GenIR(
+    'program Test;'                + LineEnding +
+    'procedure DoWork;'            + LineEnding +
+    'const Threshold = 7;'         + LineEnding +
+    'var x: Integer;'              + LineEnding +
+    'begin'                        + LineEnding +
+    '  x := Threshold'             + LineEnding +
+    'end;'                         + LineEnding +
+    'begin'                        + LineEnding +
+    '  DoWork'                     + LineEnding +
+    'end.'
+  );
+  AssertTrue('IR should be non-empty', IR <> '');
+  AssertTrue('Local const value should appear in IR', IRContains(IR, '7'));
+end;
+
+procedure TConstTests.TestLocalConstInFunction;
+var
+  IR: string;
+begin
+  IR := GenIR(
+    'program Test;'                + LineEnding +
+    'function Compute: Integer;'   + LineEnding +
+    'const Base = 100;'            + LineEnding +
+    'begin'                        + LineEnding +
+    '  Result := Base'             + LineEnding +
+    'end;'                         + LineEnding +
+    'var r: Integer;'              + LineEnding +
+    'begin'                        + LineEnding +
+    '  r := Compute'               + LineEnding +
+    'end.'
+  );
+  AssertTrue('IR should be non-empty', IR <> '');
+  AssertTrue('Local const value should appear in IR', IRContains(IR, '100'));
+end;
+
+procedure TConstTests.TestLocalConstInMethod;
+var
+  IR: string;
+begin
+  IR := GenIR(
+    'program Test;'                + LineEnding +
+    'type'                         + LineEnding +
+    '  TFoo = class'               + LineEnding +
+    '    function Bar: Integer;'   + LineEnding +
+    '  end;'                       + LineEnding +
+    'function TFoo.Bar: Integer;'  + LineEnding +
+    'const Magic = 55;'            + LineEnding +
+    'begin'                        + LineEnding +
+    '  Result := Magic'            + LineEnding +
+    'end;'                         + LineEnding +
+    'var f: TFoo;'                 + LineEnding +
+    'begin'                        + LineEnding +
+    '  f := TFoo.Create;'          + LineEnding +
+    '  WriteLn(f.Bar);'            + LineEnding +
+    '  f.Free'                     + LineEnding +
+    'end.'
+  );
+  AssertTrue('IR should be non-empty', IR <> '');
+  AssertTrue('Local const value should appear in IR', IRContains(IR, '55'));
+end;
+
+procedure TConstTests.TestConstInClassDeclaration;
+var
+  IR: string;
+begin
+  IR := GenIR(
+    'program Test;'                + LineEnding +
+    'type'                         + LineEnding +
+    '  TFoo = class'               + LineEnding +
+    '  const'                      + LineEnding +
+    '    MaxItems = 100;'          + LineEnding +
+    '  var'                        + LineEnding +
+    '    FCount: Integer;'         + LineEnding +
+    '  end;'                       + LineEnding +
+    'var x: Integer;'              + LineEnding +
+    'begin'                        + LineEnding +
+    '  x := TFoo.MaxItems'         + LineEnding +
+    'end.'
+  );
+  AssertTrue('IR should be non-empty', IR <> '');
+  AssertTrue('Class const value should appear in IR', IRContains(IR, '100'));
 end;
 
 initialization

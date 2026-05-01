@@ -1339,6 +1339,7 @@ var
   MName:      string;
   MSym:       TSymbol;
   Slot:       Integer;
+  CD:         TConstDecl;
 begin
   { Pass 1 — register all type symbols with empty descriptors.
     This allows self-referential field types to resolve in pass 2. }
@@ -1668,6 +1669,30 @@ begin
         if PropDecl.IndexTypeName <> '' then
           PropInfo.IndexTypeDesc := FTable.FindType(PropDecl.IndexTypeName);
         RT.AddProperty(PropInfo);
+      end;
+
+    { Register class-level constants in the global scope — accessible both
+      unqualified (MaxItems) and qualified (TFoo.MaxItems) }
+    if TD.Def is TClassTypeDef then
+      for J := 0 to TClassTypeDef(TD.Def).ConstDecls.Count - 1 do
+      begin
+        CD := TConstDecl(TClassTypeDef(TD.Def).ConstDecls.Items[J]);
+        if CD.IsString then
+          ParType := FTable.TypeString
+        else
+          ParType := FTable.TypeInteger;
+        { Unqualified name — usable inside class methods without prefix }
+        Sym := TSymbol.Create(CD.Name, skConstant, ParType);
+        Sym.ConstValue  := CD.IntVal;
+        Sym.ConstString := CD.StrVal;
+        if not FTable.Define(Sym) then
+          Sym.Free;
+        { Qualified name — usable as TFoo.MaxItems from anywhere }
+        Sym := TSymbol.Create(TD.Name + '.' + CD.Name, skConstant, ParType);
+        Sym.ConstValue  := CD.IntVal;
+        Sym.ConstString := CD.StrVal;
+        if not FTable.Define(Sym) then
+          Sym.Free;
       end;
 
     { Verify class implements all methods of each declared interface }
@@ -3603,6 +3628,7 @@ end;
 function TSemanticAnalyser.AnalyseFieldAccess(AAccess: TFieldAccessExpr): TTypeDesc;
 var
   RecSym:   TSymbol;
+  Sym:      TSymbol;
   RT:       TRecordTypeDesc;
   FldInfo:  TFieldInfo;
   PropInfo: TPropertyInfo;
@@ -3738,10 +3764,23 @@ begin
           [AAccess.RecordName]),
         AAccess.Line, AAccess.Col);
     if not SameText(AAccess.FieldName, 'Create') then
+    begin
+      { Check for a class-level constant registered as TypeName.ConstName }
+      Sym := FTable.Lookup(AAccess.RecordName + '.' + AAccess.FieldName);
+      if (Sym <> nil) and (Sym.Kind = skConstant) then
+      begin
+        AAccess.IsConstant  := True;
+        AAccess.ConstValue  := Sym.ConstValue;
+        AAccess.ConstString := Sym.ConstString;
+        AAccess.ResolvedType := Sym.TypeDesc;
+        Result := Sym.TypeDesc;
+        Exit;
+      end;
       SemanticError(
         Format('Unknown class method ''%s'' on type ''%s''',
           [AAccess.FieldName, AAccess.RecordName]),
         AAccess.Line, AAccess.Col);
+    end;
     AAccess.IsConstructorCall := True;
     AAccess.ResolvedMethod    := FindMethodDecl(TRecordTypeDesc(RecSym.TypeDesc).Name, 'Create');
     Result := RecSym.TypeDesc;

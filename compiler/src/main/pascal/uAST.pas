@@ -82,6 +82,9 @@ type
     FieldName:         string;
     Base:              TASTExpr;       { owned — when non-nil, chained access (e.g. A.B.C) }
     FieldInfo:         TFieldInfo;    { set by uSemantic — nil for constructor calls }
+    IsConstant:        Boolean;       { set by uSemantic — TypeName.ConstName resolves to a class constant }
+    ConstValue:        Int64;         { valid when IsConstant = True }
+    ConstString:       string;        { valid when IsConstant = True and type is tyString }
     IsConstructorCall: Boolean;       { set by uSemantic — TypeName.Create }
     IsClassAccess:     Boolean;       { set by uSemantic — pointer deref needed }
     PropRead:          TPropertyInfo; { non-nil if this is a method-backed property read }
@@ -469,6 +472,7 @@ type
   public
     ParentName:      string;
     ImplementsNames: TStringList;  { owned — names of implemented interfaces }
+    ConstDecls:      TObjectList;  { owned TConstDecl — class-level constants }
     Fields:          TObjectList;  { owned TFieldDecl }
     Methods:         TObjectList;  { owned TMethodDecl }
     Properties:      TObjectList;  { owned TPropertyDecl }
@@ -949,6 +953,7 @@ constructor TClassTypeDef.Create;
 begin
   inherited Create;
   ImplementsNames := TStringList.Create;
+  ConstDecls      := TObjectList.Create(True);
   Fields          := TObjectList.Create(True);
   Methods         := TObjectList.Create(True);
   Properties      := TObjectList.Create(True);
@@ -959,6 +964,7 @@ begin
   Properties.Free;
   Methods.Free;
   Fields.Free;
+  ConstDecls.Free;
   ImplementsNames.Free;
   inherited Destroy;
 end;
