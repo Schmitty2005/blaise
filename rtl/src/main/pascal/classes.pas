@@ -15,8 +15,7 @@ unit Classes;
 //
 // Design notes:
 //   - TObjectList has been moved to the Contnrs unit (uses Contnrs).
-//   - TDuplicates is replaced by Integer constants: dupAccept=0, dupIgnore=1,
-//     dupError=2 (enums are not yet supported in Blaise).
+//   - TDuplicates is a proper Pascal enum (dupAccept, dupIgnore, dupError).
 //   - TStringList stores strings as ^string; ARC is emitted by the compiler
 //     for pointer-dereference writes (EmitPointerWrite). ZeroMem is used to
 //     zero-initialise newly grown string slots so no garbage is ever released.
@@ -26,12 +25,9 @@ unit Classes;
 
 interface
 
-const
-  dupAccept = 0;
-  dupIgnore = 1;
-  dupError  = 2;
-
 type
+  TDuplicates = (dupAccept, dupIgnore, dupError);
+
   { ------------------------------------------------------------------ }
   { TStringList                                                          }
   { ------------------------------------------------------------------ }
@@ -43,7 +39,7 @@ type
     FCapacity:      Integer;
     FCaseSensitive: Boolean;
     FSorted:        Boolean;
-    FDuplicates:    Integer;
+    FDuplicates:    TDuplicates;
     procedure Grow;
     function  Compare(S1: string; S2: string): Integer;
     function  FindSorted(S: string; var Idx: Integer): Boolean;
@@ -68,7 +64,7 @@ type
     property Count:         Integer read FCount;
     property CaseSensitive: Boolean read FCaseSensitive write FCaseSensitive;
     property Sorted:        Boolean read FSorted        write FSorted;
-    property Duplicates:    Integer read FDuplicates    write FDuplicates;
+    property Duplicates:    TDuplicates read FDuplicates write FDuplicates;
     property Text:          string  read GetText        write SetText;
     property Strings[Index: Integer]: string  read Get  write Put;
     property Objects[Index: Integer]: Pointer read GetObject write SetObject;
@@ -179,7 +175,7 @@ constructor TStringList.Create;
 begin
   Self.FCaseSensitive := True;
   Self.FSorted        := False;
-  Self.FDuplicates    := 0
+  Self.FDuplicates    := dupAccept
 end;
 
 procedure TStringList.Destroy;
@@ -212,7 +208,7 @@ begin
   if Self.FSorted then
   begin
     Self.FindSorted(S, Idx);
-    if (Self.FDuplicates = 1) and
+    if (Self.FDuplicates = dupIgnore) and
        (Idx < Self.FCount) then
     begin
       { Check for exact match at Idx }
