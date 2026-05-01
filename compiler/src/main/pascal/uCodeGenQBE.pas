@@ -414,31 +414,31 @@ begin
       VarName := Decl.Names.Strings[J];
       case Decl.ResolvedType.Kind of
         tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum:
-          EmitLine(Format('data $%s = { w 0 }', [VarName]));
+          EmitLine(Format('export data $%s = { w 0 }', [VarName]));
         tySet:
           if TSetTypeDesc(Decl.ResolvedType).BitCount <= 32 then
-            EmitLine(Format('data $%s = { w 0 }', [VarName]))
+            EmitLine(Format('export data $%s = { w 0 }', [VarName]))
           else
-            EmitLine(Format('data $%s = { l 0 }', [VarName]));
+            EmitLine(Format('export data $%s = { l 0 }', [VarName]));
         tyInt64:
-          EmitLine(Format('data $%s = { l 0 }', [VarName]));
+          EmitLine(Format('export data $%s = { l 0 }', [VarName]));
         tyString, tyClass, tyPointer:
-          EmitLine(Format('data $%s = { l 0 }', [VarName]));
+          EmitLine(Format('export data $%s = { l 0 }', [VarName]));
         tyInterface:
           begin
-            EmitLine(Format('data $%s_obj  = { l 0 }', [VarName]));
-            EmitLine(Format('data $%s_itab = { l 0 }', [VarName]));
+            EmitLine(Format('export data $%s_obj  = { l 0 }', [VarName]));
+            EmitLine(Format('export data $%s_itab = { l 0 }', [VarName]));
           end;
         tyRecord:
           begin
             RT := TRecordTypeDesc(Decl.ResolvedType);
             if RT.TotalSize > 0 then
-              EmitLine(Format('data $%s = { z %d }', [VarName, RT.TotalSize]))
+              EmitLine(Format('export data $%s = { z %d }', [VarName, RT.TotalSize]))
             else
-              EmitLine(Format('data $%s = { l 0 }', [VarName]));
+              EmitLine(Format('export data $%s = { l 0 }', [VarName]));
           end;
       else
-        EmitLine(Format('data $%s = { l 0 }', [VarName]));
+        EmitLine(Format('export data $%s = { l 0 }', [VarName]));
       end;
     end;
   end;
@@ -2701,7 +2701,7 @@ end;
 
 procedure TCodeGenQBE.EmitStandaloneDef(ADecl: TMethodDecl);
 begin
-  EmitFuncDef(ADecl, False);
+  EmitFuncDef(ADecl, True);
 end;
 
 procedure TCodeGenQBE.EmitStandaloneDefs(AProg: TProgram);
