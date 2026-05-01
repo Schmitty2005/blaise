@@ -382,39 +382,24 @@ units require only minor adaptation.
 Blaise class system supports the TTestCase inheritance hierarchy and the
 virtual dispatch pattern fptest relies on.
 
-=== PasBuild: Blaise compiler backend
+=== PasBuild: rename `--fpc` to `--compiler`
 
-*What.* Extend PasBuild to support the Blaise compiler as a first-class build
-backend alongside FPC.  This includes:
+*What.* Rename PasBuild's `--fpc <path>` flag to `--compiler <path>`, keeping
+`--fpc` as a deprecated alias.  Update help text and documentation accordingly.
 
-* Renaming `--fpc <path>` to `--compiler <path>` (with `--fpc` kept as a
-  deprecated alias for backwards compatibility).
-* Detecting whether the specified binary is FPC or Blaise (e.g. by invoking
-  it with `--version` and inspecting the output).
-* Constructing Blaise-style command lines (`--source`, `--unit-path`,
-  `--output-dir`) instead of FPC-style ones (`-Mobjfpc`, `-Fu`, `-FE`) when
-  the Blaise backend is active.
-* Skipping FPC-specific introspection queries (`-iV`, `-iTP`, `-iTO`) for the
-  Blaise backend; using Blaise's own `--version` / `--target` output instead.
+*Why it matters.* The Blaise compiler already accepts FPC-style invocations:
+it responds to `-iV`/`-iTP`/`-iTO` probes, maps `-Fu`/`-FE` to its internal
+unit-path and output-dir, and silently ignores `-Mobjfpc`, `-O<n>`, and other
+FPC flags.  So `pasbuild compile --fpc releases/v0.3.0/blaise` already works
+today — the only friction is the misleading flag name.  Renaming it to
+`--compiler` makes the intent clear and removes the implication that only FPC
+binaries are accepted.
 
-*Why it matters.* Currently `pasbuild compile --fpc releases/v0.3.0/blaise`
-fails immediately because PasBuild appends `-Mobjfpc -O1` and similar FPC
-flags to the command line.  Once the Blaise backend is in place, the full
-development cycle — compile, test, fixpoint — runs with no FPC installation
-required.
+*Implementation notes.* Change is confined to `PasBuild.CLI.pas`
+(flag parsing, help text) and `PasBuild.Utils.pas` (stored field name).
+One-line alias: if `--fpc` is seen, treat it identically to `--compiler`.
 
-*Implementation notes.*
-
-* The change is confined to `PasBuild.Utils.pas` (compiler detection,
-  command-line construction) and `PasBuild.Command.Compile.pas`
-  (backend dispatch).
-* Module descriptor files (`pasbuild.json`) may optionally declare a
-  preferred backend (`"compiler": "blaise"`) so that CI and the release
-  pipeline do not require the `--compiler` flag on every invocation.
-
-*Effort.* Small to moderate.  The flag rename and detection logic are
-straightforward; the main effort is mapping PasBuild's internal compile
-options to Blaise's CLI vocabulary.
+*Effort.* Trivial.
 
 == Stream I/O
 
