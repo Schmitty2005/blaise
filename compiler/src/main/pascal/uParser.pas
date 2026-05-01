@@ -836,6 +836,19 @@ begin
         Advance;
         if Check(tkSemicolon) then Advance;
       end
+      else if Check(tkExternal) then
+      begin
+        Result.IsExternal := True;
+        Advance;
+        { optional: name 'c_symbol' }
+        if Check(tkIdent) and SameText(FCurrent.Value, 'name') then
+        begin
+          Advance;
+          Result.ExternalName := FCurrent.Value;
+          Expect(tkStringLit);
+        end;
+        if Check(tkSemicolon) then Advance;
+      end
       else if Check(tkIdent) and
               (SameText(FCurrent.Value, 'inline')      or
                SameText(FCurrent.Value, 'stdcall')     or
@@ -860,8 +873,9 @@ begin
         Break;
     end;
     { Body is optional — present for standalone impls and inline class methods,
-      absent for class forward declarations (no begin/var/type follows) }
-    if Check(tkBegin) or Check(tkVar) or Check(tkType) or Check(tkConst) then
+      absent for class forward declarations, external declarations, etc. }
+    if (not Result.IsExternal) and
+       (Check(tkBegin) or Check(tkVar) or Check(tkType) or Check(tkConst)) then
     begin
       Result.Body := ParseBlock;
       Expect(tkSemicolon);
@@ -1976,7 +1990,20 @@ begin
       Result.ReturnTypeName := ParseTypeName;
     end;
     Expect(tkSemicolon);
-    { Body remains nil — forward declaration }
+    { optional external directive }
+    if Check(tkExternal) then
+    begin
+      Result.IsExternal := True;
+      Advance;
+      if Check(tkIdent) and SameText(FCurrent.Value, 'name') then
+      begin
+        Advance;
+        Result.ExternalName := FCurrent.Value;
+        Expect(tkStringLit);
+      end;
+      if Check(tkSemicolon) then Advance;
+    end;
+    { Body remains nil — forward or external declaration }
   except
     Result.Free;
     raise;

@@ -467,6 +467,7 @@ begin
     begin
       MDecl   := TMethodDecl(AUnit.IntfBlock.ProcDecls.Items[I]);
       ImplIdx := FProcIndex.IndexOf(MDecl.Name);
+      if MDecl.IsExternal then Continue;
       if (ImplIdx < 0) or
          (TMethodDecl(FProcIndex.Objects[ImplIdx]).Body = nil) then
         SemanticError(
@@ -637,6 +638,7 @@ begin
     begin
       MDecl   := TMethodDecl(AUnit.IntfBlock.ProcDecls.Items[I]);
       ImplIdx := FProcIndex.IndexOf(MDecl.Name);
+      if MDecl.IsExternal then Continue;
       if (ImplIdx < 0) or
          (TMethodDecl(FProcIndex.Objects[ImplIdx]).Body = nil) then
         SemanticError(
@@ -1958,7 +1960,8 @@ begin
       end;
     end;
 
-    AnalyseBlock(ADecl.Body);
+    if not ADecl.IsExternal then
+      AnalyseBlock(ADecl.Body);
   finally
     Dec(FScopeDepth);
     FTable.PopScope;

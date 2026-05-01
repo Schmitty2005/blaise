@@ -55,6 +55,7 @@ type
     tkImplementation,
     tkVirtual,
     tkOverride,
+    tkExternal,
     tkIs,
     tkAs,
     tkAnd,
@@ -390,6 +391,7 @@ begin
         text := FTok.TokenTextUpper;
         if      text = 'VIRTUAL'  then Result.Kind := tkVirtual
         else if text = 'OVERRIDE' then Result.Kind := tkOverride
+        else if text = 'EXTERNAL' then Result.Kind := tkExternal
         else if text = 'EXIT'     then Result.Kind := tkExit
         else if text = 'BREAK'    then Result.Kind := tkBreak
         else if text = 'CONTINUE' then Result.Kind := tkContinue

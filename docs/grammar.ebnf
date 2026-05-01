@@ -246,8 +246,19 @@ MethodDecl
       [ LPAREN ParamList RPAREN ]
       [ COLON TypeName ]                  (* return type for functions *)
       SEMICOLON
-      [ VIRTUAL | OVERRIDE ] SEMICOLON
-      [ Block SEMICOLON ]                 (* body optional — declared without body in intf *)
+      { MethodDirective SEMICOLON }
+      [ Block SEMICOLON ]                 (* body absent for forward, external, or abstract decls *)
+    ;
+
+MethodDirective
+    = VIRTUAL
+    | OVERRIDE
+    | ExternalDirective
+    | IDENT                               (* inline, stdcall, cdecl, abstract, reintroduce, … *)
+    ;
+
+ExternalDirective
+    = EXTERNAL [ NAME StrLit ]
     ;
 
 (* Standalone procedure/function/constructor/destructor — top-level or within a block. *)
@@ -259,7 +270,8 @@ StandaloneDecl
       [ LPAREN ParamList RPAREN ]
       [ COLON TypeName ]
       SEMICOLON
-      Block SEMICOLON
+      { MethodDirective SEMICOLON }
+      [ Block SEMICOLON ]                 (* body absent for external declarations *)
     ;
 
 (* Disambiguation of the three IDENT forms above:

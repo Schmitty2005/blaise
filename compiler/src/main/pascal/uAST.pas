@@ -433,6 +433,8 @@ type
     OwnBody:            Boolean;     { False for cloned generic method stubs that share the body }
     IsVirtual:          Boolean;     { declared with 'virtual' directive }
     IsOverride:         Boolean;     { declared with 'override' directive }
+    IsExternal:         Boolean;     { declared with 'external' directive — no body }
+    ExternalName:       string;      { C symbol name from 'external name ''c_foo'''; empty = use Pascal name }
     VTableSlot:         Integer;     { -1 = static; >=0 = vtable index (set by uSemantic) }
     TypeParams:         TStringList; { non-nil = generic function template; owns param names }
     TypeParamConstraints: TStringList; { parallel to TypeParams; '' = unconstrained,

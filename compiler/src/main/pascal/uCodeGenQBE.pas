@@ -2780,7 +2780,10 @@ begin
         ArgLine := ArgLine + Format('%s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
       end;
     end;
-    EmitLine(Format('  call $%s(%s)', [QBEMangle(ACall.Name), ArgLine]));
+    if MDecl.IsExternal and (MDecl.ExternalName <> '') then
+      EmitLine(Format('  call $%s(%s)', [MDecl.ExternalName, ArgLine]))
+    else
+      EmitLine(Format('  call $%s(%s)', [QBEMangle(ACall.Name), ArgLine]));
     Exit;
   end;
 
@@ -3572,7 +3575,10 @@ begin
         Result := T;
         Exit;
       end;
-      FuncName := '$' + QBEMangle(FC.Name);
+      if MDecl.IsExternal and (MDecl.ExternalName <> '') then
+        FuncName := '$' + MDecl.ExternalName
+      else
+        FuncName := '$' + QBEMangle(FC.Name);
       ArgLine  := '';
       for I := 0 to FC.Args.Count - 1 do
       begin
