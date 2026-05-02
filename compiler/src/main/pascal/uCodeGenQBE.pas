@@ -1017,6 +1017,71 @@ begin
     Exit;
   end;
 
+  if AStmt.IsStringIter then
+  begin
+    { ---- String byte-iteration ----
+      String layout: [refcount(4)][length(4)][capacity(4)][data...]
+      0-based index: element = loadub(strptr + 12 + idx)
+      Condition:     idx < loadw(strptr + 4)
+      CollExpr is re-evaluated each iteration (cheap — just a loadl for a variable). }
+    IdxSlot := '%_var_' + AStmt.IdxVarName;
+    LblCond := AllocLabel('forin_cond');
+    LblBody := AllocLabel('forin_body');
+    LblEnd  := AllocLabel('forin_end');
+
+    EmitLine(Format('  storew 0, %s', [IdxSlot]));
+    EmitLine(Format('  jmp @%s', [LblCond]));
+
+    { Condition: idx < string length }
+    EmitLine('@' + LblCond);
+    SelfT := EmitExpr(AStmt.CollExpr);  { string header pointer }
+    OldT  := AllocTemp;
+    OkT   := AllocTemp;
+    IdxW  := AllocTemp;
+    CmpT  := AllocTemp;
+    EmitLine(Format('  %s =l add %s, 4', [OldT, SelfT]));
+    EmitLine(Format('  %s =w loadw %s',  [OkT, OldT]));   { string length }
+    EmitLine(Format('  %s =w loadw %s',  [IdxW, IdxSlot]));
+    EmitLine(Format('  %s =w csltw %s, %s', [CmpT, IdxW, OkT]));
+    EmitLine(Format('  jnz %s, @%s, @%s', [CmpT, LblBody, LblEnd]));
+
+    { Body: load byte at index, assign to loop var, then user body }
+    EmitLine('@' + LblBody);
+    FBreakLabels.Add(LblEnd);
+    FContinueLabels.Add(LblCond);
+    try
+      SelfT   := EmitExpr(AStmt.CollExpr);
+      IdxW    := AllocTemp;
+      IdxL    := AllocTemp;
+      OffL    := AllocTemp;
+      ElemPtr := AllocTemp;
+      CurT    := AllocTemp;
+      EmitLine(Format('  %s =w loadw %s',   [IdxW, IdxSlot]));
+      EmitLine(Format('  %s =l extuw %s',   [IdxL, IdxW]));
+      EmitLine(Format('  %s =l add %s, 12', [OffL, SelfT]));    { skip header }
+      EmitLine(Format('  %s =l add %s, %s', [ElemPtr, OffL, IdxL]));
+      EmitLine(Format('  %s =w loadub %s',  [CurT, ElemPtr]));
+      EmitLine(Format('  storew %s, %s',
+        [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+
+      EmitStmt(AStmt.Body);
+    finally
+      FBreakLabels.Delete(FBreakLabels.Count - 1);
+      FContinueLabels.Delete(FContinueLabels.Count - 1);
+    end;
+
+    { Increment index }
+    IdxW := AllocTemp;
+    NxtW := AllocTemp;
+    EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+    EmitLine(Format('  %s =w add %s, 1', [NxtW, IdxW]));
+    EmitLine(Format('  storew %s, %s', [NxtW, IdxSlot]));
+    EmitLine(Format('  jmp @%s', [LblCond]));
+
+    EmitLine('@' + LblEnd);
+    Exit;
+  end;
+
   { ---- Class enumerator protocol ---- }
   LblCond := AllocLabel('forin_cond');
   LblBody := AllocLabel('forin_body');

@@ -69,6 +69,22 @@ type
     procedure TestCodegen_ArrayForIn_LoadsElement;
     procedure TestCodegen_ArrayForIn_JumpsBackToCond;
     procedure TestCodegen_ArrayForIn_NonZeroBased_AdjustsIndex;
+
+    { ------------------------------------------------------------------ }
+    { Semantic — string                                                    }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_StringForIn_ByteVar_OK;
+    procedure TestSemantic_StringForIn_IntVar_OK;
+    procedure TestSemantic_StringForIn_NonOrdinalVar_RaisesError;
+
+    { ------------------------------------------------------------------ }
+    { Codegen — string                                                     }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_StringForIn_HasForInCondLabel;
+    procedure TestCodegen_StringForIn_HasForInEndLabel;
+    procedure TestCodegen_StringForIn_LoadsByteWithLoadub;
+    procedure TestCodegen_StringForIn_JumpsBackToCond;
+    procedure TestCodegen_StringForIn_UsesLengthFromHeader;
   end;
 
 implementation
@@ -446,6 +462,99 @@ begin
   IR := GenIR(SrcArrayForInNonZero);
   { Non-zero-based array needs a subtraction to compute element offset }
   AssertTrue('sub instruction for offset adjustment', Pos('sub', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Shared sources — string                                              }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcStringForIn =
+    'program P;'                                              + LineEnding +
+    'var'                                                     + LineEnding +
+    '  S: string;'                                            + LineEnding +
+    '  B: Byte;'                                              + LineEnding +
+    'begin'                                                   + LineEnding +
+    '  for B in S do'                                         + LineEnding +
+    '    B := 0'                                              + LineEnding +
+    'end.';
+
+  SrcStringForInIntVar =
+    'program P;'                                              + LineEnding +
+    'var'                                                     + LineEnding +
+    '  S: string;'                                            + LineEnding +
+    '  I: Integer;'                                           + LineEnding +
+    'begin'                                                   + LineEnding +
+    '  for I in S do'                                         + LineEnding +
+    '    I := 0'                                              + LineEnding +
+    'end.';
+
+{ ------------------------------------------------------------------ }
+{ Semantic tests — string                                              }
+{ ------------------------------------------------------------------ }
+
+procedure TForInTests.TestSemantic_StringForIn_ByteVar_OK;
+begin
+  AnalyseSrc(SrcStringForIn).Free;
+end;
+
+procedure TForInTests.TestSemantic_StringForIn_IntVar_OK;
+begin
+  { Integer is ordinal — accepted }
+  AnalyseSrc(SrcStringForInIntVar).Free;
+end;
+
+procedure TForInTests.TestSemantic_StringForIn_NonOrdinalVar_RaisesError;
+begin
+  AnalyseExpectError(
+    'program P;'                                              + LineEnding +
+    'var'                                                     + LineEnding +
+    '  S: string;'                                            + LineEnding +
+    '  P: string;'                                            + LineEnding +
+    'begin'                                                   + LineEnding +
+    '  for P in S do'                                         + LineEnding +
+    '    P := P'                                              + LineEnding +
+    'end.');
+end;
+
+{ ------------------------------------------------------------------ }
+{ Codegen tests — string                                               }
+{ ------------------------------------------------------------------ }
+
+procedure TForInTests.TestCodegen_StringForIn_HasForInCondLabel;
+var IR: string;
+begin
+  IR := GenIR(SrcStringForIn);
+  AssertTrue('forin_cond label present', Pos('forin_cond', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_StringForIn_HasForInEndLabel;
+var IR: string;
+begin
+  IR := GenIR(SrcStringForIn);
+  AssertTrue('forin_end label present', Pos('forin_end', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_StringForIn_LoadsByteWithLoadub;
+var IR: string;
+begin
+  IR := GenIR(SrcStringForIn);
+  AssertTrue('loadub emitted for byte extraction', Pos('loadub', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_StringForIn_JumpsBackToCond;
+var IR: string;
+begin
+  IR := GenIR(SrcStringForIn);
+  AssertTrue('jmp back to forin_cond', Pos('jmp @forin_cond', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_StringForIn_UsesLengthFromHeader;
+var IR: string;
+begin
+  IR := GenIR(SrcStringForIn);
+  { Length read from header at ptr+4: 'add ... 4' }
+  AssertTrue('reads length at ptr+4 from header', Pos(', 4', IR) > 0);
 end;
 
 initialization

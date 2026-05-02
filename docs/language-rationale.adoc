@@ -855,14 +855,26 @@ The synthetic `__enum` variable is injected into the enclosing function's
 local variable scope by the semantic pass so that ARC scope-exit cleanup
 releases the enumerator automatically.
 
+==== What is supported
+
+* Class-based enumerators (Step 7a): any class with `GetEnumerator` /
+  `MoveNext` / `Current` property — covers `TStringList`, `TObjectList`,
+  and user-defined collections.
+* Static arrays (Step 7b): `for X in Arr do` where `Arr: array[L..H] of T`
+  uses index-based iteration; non-zero-based ranges are supported.
+* String byte iteration (Step 7c): `for B in S do` iterates the raw UTF-8
+  bytes of `S`.  The loop variable must be an ordinal type (`Byte`, `Integer`,
+  etc.); each iteration yields one byte via `loadub`.  There is no `Char` type
+  in Blaise — `S[N]` and `for B in S do` both expose bytes, not codepoints.
+  This is consistent with the language-rationale decision documented under
+  _No Char Type_.
+
 ==== What is not yet supported
 
-* Iterating over static arrays (`for X in Arr do`) — deferred; requires
-  a built-in range-iteration path separate from GetEnumerator.
 * Iterating over sets (`for X in [a, b, c] do`) — deferred.
-* Byte-wise iteration over strings (`for B in S do`) — deferred; Blaise has
-  no `Char` type; byte iteration would yield `Byte` values consistent with
-  `S[N]` semantics, but the implementation is not yet present.
+* Generic collection iteration (`for X in List do` where `List: TList<T>`) —
+  requires Step 9b: property handling in `InstantiateGeneric` plus enumerator
+  additions to `generics.collections.pas`.
 
 ==== Alternatives rejected
 
