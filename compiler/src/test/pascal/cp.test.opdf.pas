@@ -161,8 +161,8 @@ var
   Out: string;
 begin
   Out := GenOPDF('program P; begin end.');
-  AssertTrue('recAnsiStr present', Contains(Out, '# recAnsiStr'));
-  AssertTrue('AnsiString name emitted', Contains(Out, '.ascii "AnsiString"'));
+  AssertTrue('recUtf8Str present', Contains(Out, '# recUtf8Str'));
+  AssertTrue('Utf8String name emitted', Contains(Out, '.ascii "Utf8String"'));
 end;
 
 procedure TOPDFTests.TestOPDF_GlobalVar_QuadLabel;

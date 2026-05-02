@@ -52,7 +52,7 @@ type
     procedure EmitEnum(AType: TEnumTypeDesc);
     procedure EmitRecord(AType: TRecordTypeDesc);
     procedure EmitClass(AType: TRecordTypeDesc);
-    procedure EmitAnsiStr;
+    procedure EmitUtf8Str;
     procedure EmitGlobalVar(const AVarName: string; AType: TTypeDesc);
     procedure EmitFunctionScope(AMethod: TMethodDecl; AScopeID: Integer;
                                 ADeclIdx: Integer; const ANextLabel: string);
@@ -91,7 +91,8 @@ implementation
 const
   REC_PRIMITIVE = 1;
   REC_GLOBALVAR = 2;
-  REC_ANSISTR   = 4;
+  REC_ANSISTR   = 4;   { kept for reference; Blaise now emits recUtf8Str instead }
+  REC_UTF8STR   = 23;
   REC_POINTER   = 6;
   REC_ARRAY     = 7;
   REC_RECORD    = 8;
@@ -228,7 +229,7 @@ begin
   end;
   case AType.Kind of
     tyString:
-      Result := 'AnsiString';
+      Result := 'Utf8String';
     tyPointer:
       if TPointerTypeDesc(AType).BaseType = nil then
         Result := 'Pointer'
@@ -301,7 +302,7 @@ begin
     tyInteger, tyInt64, tyUInt32, tyByte, tyBoolean:
       EmitPrimitive(AType);
     tyString:
-      EmitAnsiStr;
+      EmitUtf8Str;
     tyEnum:
       EmitEnum(TEnumTypeDesc(AType));
     tyRecord:
@@ -350,33 +351,31 @@ begin
   EmitStrField(CName);
 end;
 
-procedure TOPDFEmitter.EmitAnsiStr;
+procedure TOPDFEmitter.EmitUtf8Str;
 const
-  CNAME           = 'AnsiString';
+  CNAME    = 'Utf8String';
   { Data-pointer convention: variable holds pointer to char data.
-    Header fields are at negative offsets from the data pointer:
+    The 12-byte header lives before it at negative offsets:
       data_ptr − 12 = RefCount
-      data_ptr −  8 = Length
+      data_ptr −  8 = Length    (byte count = character count for ASCII range)
       data_ptr −  4 = Capacity
-    CodePage and ElementSize are not used by Blaise (UTF-8 only, 1-byte elements). }
-  LEN_OFFSET      = -8;
-  RC_OFFSET       = -12;
-  CODEPAGE_OFFSET = 0;    { not applicable — always UTF-8 }
-  ELEMSIZE_OFFSET = 0;    { not applicable — always 1 byte }
+    Encoding is always UTF-8; no code-page or element-size fields. }
+  RC_OFFSET  = -12;
+  LEN_OFFSET = -8;
+  CAP_OFFSET = -4;
 var
   RecSize: Integer;
 begin
   if HasBeenEmitted(CNAME) then Exit;
   MarkEmitted(CNAME);
-  RecSize := 14 + Length(CNAME);
+  RecSize := 12 + Length(CNAME);   { TDefUtf8String fixed part = 12 bytes }
   L('');
-  L('    # recAnsiStr: AnsiString (Blaise data-pointer layout: data_ptr-12=RC, data_ptr-8=Len, data_ptr+0=chars)');
-  EmitRecHdr(REC_ANSISTR, RecSize);
+  L('    # recUtf8Str: Utf8String (data_ptr-12=RC, data_ptr-8=Len, data_ptr-4=Cap, data_ptr+0=chars)');
+  EmitRecHdr(REC_UTF8STR, RecSize);
   L('    .int  ' + IntToStr(GetOrAllocTypeID(CNAME)) + '  # TypeID');
-  L('    .word ' + IntToStr(LEN_OFFSET)      + '  # LengthOffset');
-  L('    .word ' + IntToStr(RC_OFFSET)       + '  # RefCountOffset');
-  L('    .word ' + IntToStr(CODEPAGE_OFFSET) + '  # CodePageOffset (unused)');
-  L('    .word ' + IntToStr(ELEMSIZE_OFFSET) + '  # ElementSizeOffset (unused)');
+  L('    .word ' + IntToStr(RC_OFFSET)  + '  # RefCountOffset');
+  L('    .word ' + IntToStr(LEN_OFFSET) + '  # LengthOffset');
+  L('    .word ' + IntToStr(CAP_OFFSET) + '  # CapacityOffset');
   EmitStrField(CNAME);
 end;
 
@@ -945,7 +944,7 @@ var
   TDesc: TTypeDesc;
   GI: TGenericInstance;
 begin
-  EmitAnsiStr;
+  EmitUtf8Str;
   if FProgram.SymbolTable <> nil then
   begin
     EmitPrimitive(FProgram.SymbolTable.TypeInteger);
