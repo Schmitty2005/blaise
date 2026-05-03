@@ -332,6 +332,16 @@ type
     Args:         TObjectList;  { owned TASTExpr items }
     ResolvedDecl: TObject;      { TMethodDecl — not owned; set by uSemantic }
     IsImplicitSelfMethod: Boolean; { set by uSemantic — call is on Self }
+    IsIndirectCall:       Boolean; { set by uSemantic — Name resolves to a
+                                     variable of procedural type; codegen
+                                     loads the function pointer and calls
+                                     through it. ResolvedProcType holds
+                                     the signature. }
+    IndirectCallIsGlobal: Boolean; { set by uSemantic — when IsIndirectCall,
+                                     True if the holding variable is a
+                                     program-level global. }
+    ResolvedProcType: TObject;     { TProceduralTypeDesc — not owned;
+                                     valid when IsIndirectCall }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -438,6 +448,20 @@ type
   TRecordTypeDef = class(TASTTypeDef)
   public
     Fields: TObjectList;  { owned TFieldDecl }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+  { Procedural type definition: type T = function(...): X;  or
+                                 type T = procedure(...);
+    Bare procedural pointers — not 'of object' (method pointers) and not
+    'reference to' (anonymous methods); both are out of scope for this
+    iteration. }
+  TProceduralTypeDef = class(TASTTypeDef)
+  public
+    Params:         TObjectList;  { owned TMethodParam }
+    ReturnTypeName: string;       { '' = procedure, non-empty = function }
+    IsFunction:     Boolean;
     constructor Create;
     destructor Destroy; override;
   end;
@@ -979,6 +1003,21 @@ end;
 destructor TRecordTypeDef.Destroy;
 begin
   Fields.Free;
+  inherited Destroy;
+end;
+
+{ TProceduralTypeDef }
+
+constructor TProceduralTypeDef.Create;
+begin
+  inherited Create;
+  Params     := TObjectList.Create(True);
+  IsFunction := False;
+end;
+
+destructor TProceduralTypeDef.Destroy;
+begin
+  Params.Free;
   inherited Destroy;
 end;
 

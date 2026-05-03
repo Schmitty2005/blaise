@@ -178,6 +178,9 @@ TypeDef
     | GenericClassDef
     | InterfaceDef
     | GenericInterfaceDef
+    | EnumDef
+    | SetType
+    | ProceduralType
     ;
 
 RecordDef
@@ -397,6 +400,22 @@ ArrayType
 
 SetType
     = SET OF IDENT
+    ;
+
+(* Bare procedural type — function or procedure pointer.  Stored as a
+ * single 8-byte code pointer (QBE 'l').  Not 'of object' (method pointer)
+ * and not 'reference to' (anonymous method / closure); both deferred
+ * until a use case requires them.  Bare-function pointers are sufficient
+ * for callback APIs such as the punit test framework's TTestRun /
+ * TTestSetup hooks.  Example:
+ *     type
+ *       TIntFn   = function: Integer;
+ *       TStrFn   = function(const S: string): Integer;
+ *       TLogProc = procedure(Level: Integer; const Msg: string);
+ *)
+ProceduralType
+    = ( FUNCTION  [ LPAREN ParamList RPAREN ] COLON TypeName )
+    | ( PROCEDURE [ LPAREN ParamList RPAREN ] )
     ;
 
 (* Set literals use the same bracket notation as array literals.

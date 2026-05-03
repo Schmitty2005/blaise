@@ -70,6 +70,7 @@ type
     function  ParseEnumDef: TEnumTypeDef;
     function  ParseSetDef: TSetTypeDef;
     function  ParseRecordDef: TRecordTypeDef;
+    function  ParseProceduralTypeDef: TProceduralTypeDef;
     function  ParseGenericName: string;  { reads IDENT optionally followed by '<' TypeArgs '>' }
     function  ParseClassDef: TClassTypeDef;
     function  ParseInterfaceDef: TInterfaceTypeDef;
@@ -464,9 +465,11 @@ begin
         TD.Def := ParseEnumDef
       else if Check(tkSet) then
         TD.Def := ParseSetDef
+      else if Check(tkFunction) or Check(tkProcedure) then
+        TD.Def := ParseProceduralTypeDef
       else
         raise EParseError.Create(Format(
-          'Expected ''record'', ''class'', ''interface'', ''('', or ''set'' at line %d col %d in %s',
+          'Expected ''record'', ''class'', ''interface'', ''('', ''set'', ''function'', or ''procedure'' at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     end;
     Expect(tkSemicolon);
@@ -563,6 +566,44 @@ begin
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.BaseTypeName := FCurrent.Value;
     Advance;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+function TParser.ParseProceduralTypeDef: TProceduralTypeDef;
+begin
+  Result := TProceduralTypeDef.Create;
+  try
+    Result.Line := FCurrent.Line;
+    Result.Col  := FCurrent.Col;
+    if Check(tkFunction) then
+    begin
+      Result.IsFunction := True;
+      Advance;
+    end
+    else if Check(tkProcedure) then
+    begin
+      Result.IsFunction := False;
+      Advance;
+    end
+    else
+      raise EParseError.Create(Format(
+        'Expected ''function'' or ''procedure'' at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+    if Check(tkLParen) then
+    begin
+      Advance;  { '(' }
+      if not Check(tkRParen) then
+        ParseParamList(Result.Params);
+      Expect(tkRParen);
+    end;
+    if Result.IsFunction then
+    begin
+      Expect(tkColon);
+      Result.ReturnTypeName := ParseTypeName;
+    end;
   except
     Result.Free;
     raise;

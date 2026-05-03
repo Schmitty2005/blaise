@@ -835,6 +835,70 @@ AND-NOT respectively.  This matches FPC's implementation model.
 
 ---
 
+=== Procedural Types (`function`/`procedure` pointers)
+
+==== Decision
+
+Blaise supports bare procedural types — function and procedure pointers to
+standalone (non-method) functions:
+
+[source,pascal]
+----
+type
+  TIntFn   = function: Integer;
+  TStrFn   = function(const S: string): Integer;
+  TLogProc = procedure(Level: Integer; const Msg: string);
+
+var
+  F: TIntFn;
+begin
+  F := @MyFn;
+  X := F();          // indirect call through F
+end;
+----
+
+A procedural variable is stored as a single QBE `l` (8-byte code pointer).
+`@FuncName` produces a value of the matching procedural type.  An indirect
+call `F(args)` loads the pointer from `F` and emits a QBE indirect call
+through the temporary.
+
+Type compatibility requires return types to match (both nil or both the same
+`TTypeDesc`) and parameter lists to match pairwise on type and on parameter
+mode (`var`/`const`/value).  Parameter names do not participate.
+
+==== Rejected / deferred
+
+- *`function ... of object`* (method pointers) — *deferred.* Method pointers
+  carry both a code pointer and a `Self` pointer (a fat pointer, two QBE `l`
+  slots), and the codegen rules differ.  Will be added when a use case
+  requires it (likely when the bcl.testing fpcunit port lands and needs
+  `procedure of object` for instance test methods).
+- *`reference to function/procedure`* (anonymous methods / closures) —
+  *deferred.* Closures need an environment record carrying captured locals,
+  far beyond what a bare pointer represents.  No current Blaise feature
+  needs them.
+- *Calling-convention markers* (`cdecl`, `stdcall`) on procedural types —
+  *deferred.* The current self-hosting target uses the System V x86_64 ABI
+  uniformly; no use case yet requires non-default conventions on procedural
+  pointers.
+
+==== Rationale
+
+Bare procedural types are sufficient for the immediate use case (porting
+Michael Van Canneyt's punit test framework into the RTL test tree, where
+every test, every Setup/TearDown, and every hook handler is stored as a
+function pointer). Procedural types are a fundamental Pascal language
+feature that would have been needed eventually anyway — for callback APIs
+across the future BCL, signal handlers, comparator functions for sorting,
+and event-style hooks generally.
+
+The `of object` and `reference to` forms are deliberately scoped out of
+this iteration so that the procedural-type work remains a clearly bounded
+~2-3 day extension rather than a multi-week feature.  Their inclusion can
+be staged when concrete needs arise.
+
+---
+
 == File Path Manipulation Built-ins
 
 === Decision

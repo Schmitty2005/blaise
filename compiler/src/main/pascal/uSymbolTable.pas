@@ -37,7 +37,9 @@ type
     tyOpenArray,  { Open-array parameter — two-register ABI: data ptr + high index }
     tyStaticArray, { Fixed-size array: stack-allocated, compile-time bounds }
     tyPChar, { Opaque C pointer for interop: PChar(str) / string(pchar) }
-    tySet    { Bit-set over an enum base type — QBE 'w' (≤32 members) or 'l' (≤64) }
+    tySet,   { Bit-set over an enum base type — QBE 'w' (≤32 members) or 'l' (≤64) }
+    tyProcedural { Bare procedural pointer — QBE 'l'; see TProceduralTypeDesc.
+                   Not 'of object' (method ptr), not 'reference to' (closure). }
   );
 
   TTypeDesc = class
@@ -100,6 +102,32 @@ type
   public
     BaseType: TEnumTypeDesc;  { not owned }
     BitCount: Integer;        { = BaseType.Members.Count }
+  end;
+
+  { One parameter of a procedural type signature. }
+  TProcParamInfo = class
+  public
+    Name:         string;
+    TypeDesc:     TTypeDesc;  { not owned }
+    IsVarParam:   Boolean;
+    IsConstParam: Boolean;
+  end;
+
+  { Procedural (function or procedure) type descriptor.  Storage: a single
+    QBE 'l' (function code pointer).  Used for callback values such as
+    `type T = function: Integer`.  Not for method pointers (those need a
+    second slot for Self) and not for closures (those need an environment). }
+  TProceduralTypeDesc = class(TTypeDesc)
+  public
+    Params:     TObjectList;  { owned TProcParamInfo }
+    ReturnType: TTypeDesc;    { not owned; nil = procedure (no return) }
+    constructor Create(const AName: string);
+    destructor  Destroy; override;
+    { Two procedural types are compatible iff their return types match
+      (both nil or both same TTypeDesc) and their parameter lists match
+      pairwise on type and on parameter mode (var/const/value). Parameter
+      names do not participate. }
+    function    IsCompatibleWith(AOther: TProceduralTypeDesc): Boolean;
   end;
 
   { Field entry inside a record type descriptor. }
@@ -311,6 +339,7 @@ type
     function NewPointerType(const AName: string; ABase: TTypeDesc): TPointerTypeDesc;
     function NewEnumType(const AName: string): TEnumTypeDesc;
     function NewSetType(const AName: string; ABase: TEnumTypeDesc): TSetTypeDesc;
+    function NewProceduralType(const AName: string): TProceduralTypeDesc;
 
     { Creates an open-array type descriptor for element type AElementType.
       Registered in FAllTypes so the table owns the lifetime. }
@@ -773,6 +802,42 @@ begin
   Result := -1;
 end;
 
+constructor TProceduralTypeDesc.Create(const AName: string);
+begin
+  inherited Create;
+  Kind       := tyProcedural;
+  Name       := AName;
+  Params     := TObjectList.Create(True);
+  ReturnType := nil;
+end;
+
+destructor TProceduralTypeDesc.Destroy;
+begin
+  Params.Free;
+  inherited Destroy;
+end;
+
+function TProceduralTypeDesc.IsCompatibleWith(AOther: TProceduralTypeDesc): Boolean;
+var
+  I: Integer;
+  PA, PB: TProcParamInfo;
+begin
+  Result := False;
+  if AOther = nil then Exit;
+  if (ReturnType = nil) <> (AOther.ReturnType = nil) then Exit;
+  if (ReturnType <> nil) and (ReturnType <> AOther.ReturnType) then Exit;
+  if Params.Count <> AOther.Params.Count then Exit;
+  for I := 0 to Params.Count - 1 do
+  begin
+    PA := TProcParamInfo(Params.Items[I]);
+    PB := TProcParamInfo(AOther.Params.Items[I]);
+    if PA.TypeDesc <> PB.TypeDesc then Exit;
+    if PA.IsVarParam <> PB.IsVarParam then Exit;
+    if PA.IsConstParam <> PB.IsConstParam then Exit;
+  end;
+  Result := True;
+end;
+
 { ------------------------------------------------------------------ }
 { TSymbolTable                                                        }
 { ------------------------------------------------------------------ }
@@ -845,6 +910,12 @@ begin
   Result.Name     := AName;
   Result.BaseType := ABase;
   Result.BitCount := ABase.Members.Count;
+  FAllTypes.Add(Result);
+end;
+
+function TSymbolTable.NewProceduralType(const AName: string): TProceduralTypeDesc;
+begin
+  Result := TProceduralTypeDesc.Create(AName);
   FAllTypes.Add(Result);
 end;
 

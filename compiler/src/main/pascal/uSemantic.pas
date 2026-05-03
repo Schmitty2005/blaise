@@ -90,6 +90,7 @@ type
     function  AnalyseAsExpr(AExpr: TAsExpr): TTypeDesc;
     function  AnalyseDerefExpr(AExpr: TDerefExpr): TTypeDesc;
     function  AnalyseAddrOfExpr(AExpr: TAddrOfExpr): TTypeDesc;
+    procedure ResolveProceduralTypeDef(ATD: TTypeDecl);
     function  AnalyseStringSubscriptExpr(AExpr: TStringSubscriptExpr): TTypeDesc;
     function  AnalyseArrayLiteralExpr(AExpr: TArrayLiteralExpr): TTypeDesc;
     function  AnalyseSetLiteralExpr(AExpr: TArrayLiteralExpr; ASetType: TSetTypeDesc): TTypeDesc;
@@ -345,6 +346,14 @@ begin
   begin
     if TOpenArrayTypeDesc(AExpected).ElementType =
        TOpenArrayTypeDesc(AActual).ElementType then
+      Exit;
+  end;
+  { Procedural-type assignability: signatures must match (return type,
+    parameter count, parameter types, parameter modes). }
+  if (AExpected.Kind = tyProcedural) and (AActual.Kind = tyProcedural) then
+  begin
+    if TProceduralTypeDesc(AExpected).IsCompatibleWith(
+         TProceduralTypeDesc(AActual)) then
       Exit;
   end;
   SemanticError(
@@ -1569,9 +1578,22 @@ begin
       end;
       Continue;
     end
+    else if TD.Def is TProceduralTypeDef then
+    begin
+      { Procedural type: register an empty TProceduralTypeDesc; param/return
+        resolution happens in pass 2. }
+      Sym := TSymbol.Create(TD.Name, skType,
+                            FTable.NewProceduralType(TD.Name));
+      if not FTable.Define(Sym) then
+      begin
+        Sym.Free;
+        SemanticError(Format('Duplicate type name ''%s''', [TD.Name]), TD.Line, TD.Col);
+      end;
+      Continue;
+    end
     else
     begin
-      SemanticError('Only record, class, interface, enum, or set type definitions are supported',
+      SemanticError('Only record, class, interface, enum, set, or procedural type definitions are supported',
         TD.Line, TD.Col);
       Continue;
     end;
@@ -1593,6 +1615,14 @@ begin
     if TD.Def is TGenericInterfaceDef then Continue;
     if TD.Def is TEnumTypeDef then Continue;
     if TD.Def is TSetTypeDef then Continue;
+
+    { Procedural types: resolve param + return types now that all
+      type names are registered. }
+    if TD.Def is TProceduralTypeDef then
+    begin
+      ResolveProceduralTypeDef(TD);
+      Continue;
+    end;
 
     { Interface types: register methods and resolve optional parent }
     if TD.Def is TInterfaceTypeDef then
@@ -3315,6 +3345,30 @@ begin
     Exit;
   end;
 
+  { Indirect call through a procedural-typed variable: F() where F is
+    declared 'var F: TIntFn'.  The call dispatches through the function
+    pointer stored in F. }
+  if (Sym.Kind in [skVariable, skParameter, skVarParameter]) and
+     (Sym.TypeDesc <> nil) and (Sym.TypeDesc.Kind = tyProcedural) then
+  begin
+    AExpr.IsIndirectCall       := True;
+    AExpr.IndirectCallIsGlobal := Sym.IsGlobal;
+    AExpr.ResolvedProcType     := Sym.TypeDesc;
+    { Validate arg count + types against the signature. }
+    if AExpr.Args.Count <> TProceduralTypeDesc(Sym.TypeDesc).Params.Count then
+      SemanticError(Format(
+        'Indirect call ''%s'' expects %d argument(s), got %d',
+        [AExpr.Name, TProceduralTypeDesc(Sym.TypeDesc).Params.Count,
+         AExpr.Args.Count]), AExpr.Line, AExpr.Col);
+    for I := 0 to AExpr.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+    Result := TProceduralTypeDesc(Sym.TypeDesc).ReturnType;
+    if Result = nil then
+      Result := FTable.TypeVoid;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   if Sym.Kind <> skFunction then
     SemanticError(
       Format('''%s'' is not a function', [AExpr.Name]),
@@ -4508,8 +4562,48 @@ var
   InnerType: TTypeDesc;
   PtrName: string;
   PT: TPointerTypeDesc;
-  Sym: TSymbol;
+  Sym, FSym: TSymbol;
+  IdentExpr: TIdentExpr;
+  ProcDesc: TProceduralTypeDesc;
+  ProcParam: TProcParamInfo;
+  MD: TMethodDecl;
+  MParam: TMethodParam;
+  Idx, K: Integer;
 begin
+  { @FuncName / @ProcName — if the inner is a bare identifier that
+    resolves to a standalone function or procedure, build a procedural
+    type matching the function's signature and return it.  This must run
+    before AnalyseExpr, which would treat a zero-arg function reference
+    as an implicit call. }
+  if AExpr.Expr is TIdentExpr then
+  begin
+    IdentExpr := TIdentExpr(AExpr.Expr);
+    FSym := FTable.Lookup(IdentExpr.Name);
+    if (FSym <> nil) and (FSym.Kind in [skFunction, skProcedure]) then
+    begin
+      Idx := FProcIndex.IndexOf(IdentExpr.Name);
+      if Idx < 0 then
+        SemanticError(Format('Internal: function ''%s'' not in proc index',
+          [IdentExpr.Name]), AExpr.Line, AExpr.Col);
+      MD := TMethodDecl(FProcIndex.Objects[Idx]);
+      ProcDesc := FTable.NewProceduralType('');
+      for K := 0 to MD.Params.Count - 1 do
+      begin
+        MParam := TMethodParam(MD.Params.Items[K]);
+        ProcParam := TProcParamInfo.Create;
+        ProcParam.Name         := MParam.ParamName;
+        ProcParam.TypeDesc     := MParam.ResolvedType;
+        ProcParam.IsVarParam   := MParam.IsVarParam;
+        ProcParam.IsConstParam := MParam.IsConstParam;
+        ProcDesc.Params.Add(ProcParam);
+      end;
+      ProcDesc.ReturnType := MD.ResolvedReturnType;  { nil for procedure }
+      Result := ProcDesc;
+      IdentExpr.ResolvedType := ProcDesc;
+      AExpr.ResolvedType := Result;
+      Exit;
+    end;
+  end;
   InnerType := AnalyseExpr(AExpr.Expr);
   PtrName := '^' + InnerType.Name;
   Result := FindTypeOrInstantiate(PtrName);
@@ -4521,6 +4615,49 @@ begin
     Result := PT;
   end;
   AExpr.ResolvedType := Result;
+end;
+
+procedure TSemanticAnalyser.ResolveProceduralTypeDef(ATD: TTypeDecl);
+var
+  Def: TProceduralTypeDef;
+  ProcDesc: TProceduralTypeDesc;
+  Sym: TSymbol;
+  K: Integer;
+  MParam: TMethodParam;
+  ProcParam: TProcParamInfo;
+  TSym: TSymbol;
+begin
+  Def := TProceduralTypeDef(ATD.Def);
+  Sym := FTable.Lookup(ATD.Name);
+  if (Sym = nil) or not (Sym.TypeDesc is TProceduralTypeDesc) then
+    SemanticError(Format('Internal: procedural type ''%s'' not registered',
+      [ATD.Name]), ATD.Line, ATD.Col);
+  ProcDesc := TProceduralTypeDesc(Sym.TypeDesc);
+  for K := 0 to Def.Params.Count - 1 do
+  begin
+    MParam := TMethodParam(Def.Params.Items[K]);
+    TSym   := FTable.Lookup(MParam.TypeName);
+    if (TSym = nil) or (TSym.Kind <> skType) then
+      SemanticError(Format(
+        'Unknown parameter type ''%s'' in procedural type ''%s''',
+        [MParam.TypeName, ATD.Name]), ATD.Line, ATD.Col);
+    MParam.ResolvedType := TSym.TypeDesc;
+    ProcParam := TProcParamInfo.Create;
+    ProcParam.Name         := MParam.ParamName;
+    ProcParam.TypeDesc     := TSym.TypeDesc;
+    ProcParam.IsVarParam   := MParam.IsVarParam;
+    ProcParam.IsConstParam := MParam.IsConstParam;
+    ProcDesc.Params.Add(ProcParam);
+  end;
+  if Def.IsFunction then
+  begin
+    TSym := FTable.Lookup(Def.ReturnTypeName);
+    if (TSym = nil) or (TSym.Kind <> skType) then
+      SemanticError(Format(
+        'Unknown return type ''%s'' in procedural type ''%s''',
+        [Def.ReturnTypeName, ATD.Name]), ATD.Line, ATD.Col);
+    ProcDesc.ReturnType := TSym.TypeDesc;
+  end;
 end;
 
 function TSemanticAnalyser.AnalyseStringSubscriptExpr(AExpr: TStringSubscriptExpr): TTypeDesc;

@@ -314,6 +314,13 @@ content; parser treats the result as a `TStringLit` node; no semantic or
 codegen changes beyond what regular string literals already require.
 
 
+=== Procedural types
+
+- of object (method pointers — two-pointer ABI)
+- reference to function/procedure (anonymous methods)
+- cdecl/stdcall calling-convention markers on procedural types
+- Procedural type as a record field (should fall out for free, but I'll add a test)
+- Procedural type as an open-array element (probably works for free)
 
 == Tooling
 

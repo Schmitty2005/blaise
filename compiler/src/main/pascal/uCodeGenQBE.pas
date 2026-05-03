@@ -267,6 +267,7 @@ begin
     tyOpenArray:                            Result := 'l';  { data pointer (high idx is separate) }
     tyStaticArray:                          Result := 'l';  { base pointer to stack buffer }
     tyPChar:                                Result := 'l';  { opaque C pointer }
+    tyProcedural:                           Result := 'l';  { function code pointer }
   else
     Result := 'w';
   end;
@@ -340,9 +341,11 @@ begin
             EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
           end;
 
-        tyPointer:
+        tyPointer, tyProcedural:
           begin
-            { Pointer var (typed or untyped) — allocate one pointer slot, nil-init }
+            { Pointer var (typed/untyped) or procedural var — one pointer
+              slot, nil-init.  Procedural variables hold a function code
+              pointer; storage is identical to a typed/untyped pointer. }
             EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
             EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
           end;
@@ -3933,6 +3936,44 @@ begin
         Exit;
       end;
 
+      { Indirect call through a procedural-typed variable: F() / F(args)
+        where F is declared 'var F: TProcType'.  Load the function pointer
+        from F and call through it.  Must precede the ResolvedDecl=nil
+        type-cast branch below — indirect calls also have ResolvedDecl=nil. }
+      if FC.IsIndirectCall then
+      begin
+        FPtrTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s',
+          [FPtrTemp, VarRef(FC.Name, FC.IndirectCallIsGlobal)]));
+        ArgLine := '';
+        for I := 0 to FC.Args.Count - 1 do
+        begin
+          if ArgLine <> '' then ArgLine := ArgLine + ', ';
+          ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
+          ArgTemp := CoerceArg(ArgTemp, TASTExpr(FC.Args.Items[I]),
+            QbeTypeOf(TProcParamInfo(
+              TProceduralTypeDesc(FC.ResolvedProcType).Params.Items[I]).TypeDesc));
+          ArgLine := ArgLine + Format('%s %s',
+            [QbeTypeOf(TProcParamInfo(
+              TProceduralTypeDesc(FC.ResolvedProcType).Params.Items[I]).TypeDesc),
+             ArgTemp]);
+        end;
+        if TProceduralTypeDesc(FC.ResolvedProcType).ReturnType = nil then
+        begin
+          { procedure call — no result temp }
+          EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+          Result := '';
+        end
+        else
+        begin
+          QType  := QbeTypeOf(TProceduralTypeDesc(FC.ResolvedProcType).ReturnType);
+          T      := AllocTemp;
+          EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FPtrTemp, ArgLine]));
+          Result := T;
+        end;
+        Exit;
+      end;
+
       { Type cast TypeName(Expr) — ResolvedDecl is nil; copy/extend to target QBE type }
       if FC.ResolvedDecl = nil then
       begin
@@ -5509,12 +5550,21 @@ begin
   end;
   if AExpr.Expr is TIdentExpr then
   begin
+    { @FuncName: semantic recorded a tyProcedural ResolvedType when the
+      identifier names a standalone function or procedure.  In that case
+      the address is the function's QBE label, not a stack-variable ref. }
+    if (TIdentExpr(AExpr.Expr).ResolvedType <> nil) and
+       (TIdentExpr(AExpr.Expr).ResolvedType.Kind = tyProcedural) then
+    begin
+      Result := '$' + TIdentExpr(AExpr.Expr).Name;
+      Exit;
+    end;
     Result := VarRef(TIdentExpr(AExpr.Expr).Name,
                      TIdentExpr(AExpr.Expr).IsGlobal);
     Exit;
   end;
   raise ECodeGenError.Create(
-    'address-of (@) is only supported for array subscripts and local variables');
+    'address-of (@) is only supported for array subscripts, locals, and standalone functions');
 end;
 
 procedure TCodeGenQBE.EmitStaticSubscriptAssign(AStmt: TStaticSubscriptAssign);
