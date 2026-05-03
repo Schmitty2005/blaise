@@ -460,7 +460,16 @@ TryFinallyStmt
     ;
 
 TryExceptStmt
-    = TRY StmtList EXCEPT StmtList END
+    = TRY StmtList EXCEPT ExceptBody END
+    ;
+
+ExceptBody
+    = OnClause { ";" OnClause } [ ";" ] [ ELSE StmtList ]
+    | StmtList
+    ;
+
+OnClause
+    = "on" [ IDENT ":" ] TypeRef DO Stmt
     ;
 
 RaiseStmt

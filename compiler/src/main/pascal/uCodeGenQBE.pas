@@ -760,12 +760,17 @@ end;
 
 procedure TCodeGenQBE.EmitTryExceptStmt(AStmt: TTryExceptStmt);
 var
-  LblTry:    string;
-  LblExcept: string;
-  LblEnd:    string;
-  FrameTemp: string;
-  SjrTemp:   string;
-  I:         Integer;
+  LblTry:     string;
+  LblExcept:  string;
+  LblEnd:     string;
+  FrameTemp:  string;
+  SjrTemp:    string;
+  ExcTemp:    string;
+  MatchTemp:  string;
+  LblBody:    string;
+  LblNext:    string;
+  I, J:       Integer;
+  H:          TExceptHandlerClause;
 begin
   LblTry    := AllocLabel('try_body');
   LblExcept := AllocLabel('except_handler');
@@ -789,12 +794,60 @@ begin
   EmitLine('  call $_PopExcFrame()');
   EmitLine(Format('  jmp @%s', [LblEnd]));
 
-  { Exception path: frame still at top (exception set), pop then handle }
+  { Exception path: capture exception before popping frame, then pop }
   EmitLine('@' + LblExcept);
-  EmitLine('  call $_PopExcFrame()');
-  for I := 0 to AStmt.ExceptBody.Stmts.Count - 1 do
-    EmitStmt(TASTStmt(AStmt.ExceptBody.Stmts.Items[I]));
-  EmitLine(Format('  jmp @%s', [LblEnd]));
+
+  if AStmt.Handlers.Count > 0 then
+  begin
+    { Capture current exception while frame is still on the stack (g_exc_top
+      points to our frame, so _CurrentException returns its exception field). }
+    ExcTemp := AllocTemp;
+    EmitLine(Format('  %s =l call $_CurrentException()', [ExcTemp]));
+    EmitLine('  call $_PopExcFrame()');
+
+    for I := 0 to AStmt.Handlers.Count - 1 do
+    begin
+      H := TExceptHandlerClause(AStmt.Handlers[I]);
+      LblBody := AllocLabel('exc_handler_body');
+      LblNext := AllocLabel('exc_handler_next');
+
+      MatchTemp := AllocTemp;
+      EmitLine(Format('  %s =w call $_IsInstance(l %s, l $typeinfo_%s)',
+        [MatchTemp, ExcTemp, H.TypeName]));
+      EmitLine(Format('  jnz %s, @%s, @%s', [MatchTemp, LblBody, LblNext]));
+
+      EmitLine('@' + LblBody);
+      if H.VarName <> '' then
+        EmitLine(Format('  storel %s, %%_var_%s', [ExcTemp, H.VarName]));
+      for J := 0 to H.Body.Stmts.Count - 1 do
+        EmitStmt(TASTStmt(H.Body.Stmts.Items[J]));
+      EmitLine(Format('  jmp @%s', [LblEnd]));
+
+      EmitLine('@' + LblNext);
+    end;
+
+    { No handler matched: run else body (if any), otherwise re-raise }
+    if AStmt.ElseBody <> nil then
+    begin
+      for J := 0 to AStmt.ElseBody.Stmts.Count - 1 do
+        EmitStmt(TASTStmt(AStmt.ElseBody.Stmts.Items[J]));
+      EmitLine(Format('  jmp @%s', [LblEnd]));
+    end
+    else
+    begin
+      { No else: re-raise the unhandled exception }
+      EmitLine(Format('  call $_Reraise(l %s)', [ExcTemp]));
+      EmitLine(Format('  jmp @%s', [LblEnd]));  { unreachable; satisfies QBE SSA }
+    end;
+  end
+  else
+  begin
+    { Plain catch-all body }
+    EmitLine('  call $_PopExcFrame()');
+    for I := 0 to AStmt.ExceptBody.Stmts.Count - 1 do
+      EmitStmt(TASTStmt(AStmt.ExceptBody.Stmts.Items[I]));
+    EmitLine(Format('  jmp @%s', [LblEnd]));
+  end;
 
   EmitLine('@' + LblEnd);
 end;
@@ -809,8 +862,13 @@ begin
     EmitLine(Format('  call $_Raise(l %s)', [ObjTemp]));
   end
   else
-    { Bare re-raise: pass null; RTL retrieves current exception }
-    EmitLine('  call $_Raise(l 0)');
+  begin
+    { Bare re-raise: retrieve the current exception, then call _Reraise.
+      _Raise(0) would incorrectly clear g_current_exception to null. }
+    ObjTemp := AllocTemp;
+    EmitLine(Format('  %s =l call $_CurrentException()', [ObjTemp]));
+    EmitLine(Format('  call $_Reraise(l %s)', [ObjTemp]));
+  end;
 end;
 
 procedure TCodeGenQBE.EmitForStmt(AStmt: TForStmt);

@@ -949,6 +949,60 @@ releases the enumerator automatically.
 
 ---
 
+== Exception Handling
+
+=== Typed `except` Handlers (`on E: TClass do`)
+
+==== Decision
+
+Blaise supports typed exception dispatch inside `except` blocks using the
+`on [Var :] TypeName do Stmt` syntax, matching FPC and Delphi semantics.
+Multiple `on` clauses are checked in order; an optional `else` clause runs if
+no typed handler matches.  A catch-all `except ... end` block (no `on` clauses)
+remains supported for simple cases.
+
+==== Grammar
+
+[source,ebnf]
+----
+TryExceptStmt = TRY StmtList EXCEPT ExceptBody END ;
+ExceptBody    = OnClause { ";" OnClause } [ ";" ] [ ELSE StmtList ]
+              | StmtList ;
+OnClause      = "on" [ IDENT ":" ] TypeRef DO Stmt ;
+----
+
+==== Semantics
+
+* The type after `:` must resolve to a class type; primitive types are rejected
+  by the semantic pass with an error.
+* When a variable binding is present (`on E: EFoo do`), a synthetic local
+  variable of the handler's type is injected into the enclosing function's
+  declaration block so that `EmitVarAllocs` allocates a stack slot at function
+  entry.  The slot is initialised to the current exception pointer at the start
+  of each matched handler body.
+* Handler matching uses `_IsInstance` (the same C helper used by the `is`
+  operator), which walks the vtable TypeInfo parent chain — so `on E: EBase do`
+  correctly catches instances of any subclass of `EBase`.
+* If no `on` clause matches and there is no `else` clause, the exception is
+  re-raised to the enclosing handler via `_Reraise`.
+* Bare `raise` inside a typed handler retrieves the live exception from
+  `g_current_exception` (via `_CurrentException()`) and re-raises it.
+  Using `g_current_exception` (set by `_Raise` at raise time) rather than
+  `g_exc_top->exception` (which reads the _current_ frame's field) is critical
+  for correctness: by the time the handler body runs, `_PopExcFrame` has already
+  unlinked the handler's own frame, so `g_exc_top` either points to an enclosing
+  frame (with `exception = NULL`) or is NULL at the outermost level.
+
+==== Alternatives Rejected
+
+* *Storing exception in the frame before popping* — the frame is on the stack
+  and its lifetime ends with `_PopExcFrame`.  Capturing via `g_current_exception`
+  (a thread-local global) avoids frame lifetime issues.
+* *Requiring `on E: T` to always have a variable binding* — Delphi and FPC
+  both permit the no-binding form `on T do`; Blaise follows suit.
+
+---
+
 == Open Language Questions
 
 These items are under active consideration but not yet decided.

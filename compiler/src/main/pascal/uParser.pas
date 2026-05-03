@@ -87,6 +87,7 @@ type
     function  ParseRepeatStmt: TRepeatStmt;
     function  ParseForStmt: TASTStmt;
     function  ParseTryStmt: TASTStmt;
+    function  ParseExceptHandlerClause: TExceptHandlerClause;
     procedure ParseBodyInto(ATarget: TCompoundStmt; AStop1, AStop2: TTokenKind);
     function  ParseRaiseStmt: TRaiseStmt;
     function  ParseInheritedStmt: TInheritedCallStmt;
@@ -1759,7 +1760,6 @@ var
   TryBody:     TCompoundStmt;
   FinallyBody: TCompoundStmt;
   ExceptBody:  TCompoundStmt;
-  Stmt:        TASTStmt;
   TFS:         TTryFinallyStmt;
   TES:         TTryExceptStmt;
   Line, Col:   Integer;
@@ -1797,20 +1797,47 @@ begin
     else if Check(tkExcept) then
     begin
       Advance;
-      ExceptBody := TCompoundStmt.Create;
+      TES      := TTryExceptStmt.Create;
+      TES.Line := Line;
+      TES.Col  := Col;
+      TES.TryBody := TryBody;
+      TryBody  := nil;
       try
-        ParseBodyInto(ExceptBody, tkEnd, tkEnd);
+        { Typed handler form: 'on [Var :] TypeName do Stmt' }
+        if Check(tkIdent) and SameText(FCurrent.Value, 'on') then
+        begin
+          while Check(tkIdent) and SameText(FCurrent.Value, 'on') do
+          begin
+            TES.Handlers.Add(ParseExceptHandlerClause);
+            if Check(tkSemicolon) then
+              Advance;
+          end;
+          { Optional catch-all else clause }
+          if Check(tkElse) then
+          begin
+            Advance;
+            TES.ElseBody := TCompoundStmt.Create;
+            ParseBodyInto(TES.ElseBody, tkEnd, tkEnd);
+          end;
+        end
+        else
+        begin
+          { Plain catch-all body }
+          ExceptBody := TCompoundStmt.Create;
+          try
+            ParseBodyInto(ExceptBody, tkEnd, tkEnd);
+            TES.ExceptBody := ExceptBody;
+            ExceptBody := nil;
+          except
+            ExceptBody.Free;
+            raise;
+          end;
+        end;
         Expect(tkEnd);
-        TES            := TTryExceptStmt.Create;
-        TES.Line       := Line;
-        TES.Col        := Col;
-        TES.TryBody    := TryBody;
-        TES.ExceptBody := ExceptBody;
-        TryBody    := nil;
-        ExceptBody := nil;
         Result := TES;
+        TES := nil;
       except
-        ExceptBody.Free;
+        TES.Free;
         raise;
       end;
     end
@@ -1822,6 +1849,62 @@ begin
     end;
   except
     TryBody.Free;
+    raise;
+  end;
+end;
+
+{ Parse one 'on [VarName :] TypeName do Stmt' clause.
+  The leading 'on' keyword (as identifier) must be the current token. }
+function TParser.ParseExceptHandlerClause: TExceptHandlerClause;
+var
+  Name1: string;
+  H:     TExceptHandlerClause;
+begin
+  { consume 'on' }
+  Expect(tkIdent);  { value is 'on' — caller already checked }
+  H := TExceptHandlerClause.Create;
+  try
+    if not Check(tkIdent) then
+      raise EParseError.Create(Format(
+        'Expected identifier after ''on'' at line %d col %d in %s',
+        [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+    Name1 := FCurrent.Value;
+    Advance;
+    if Check(tkColon) then
+    begin
+      { 'on VarName : TypeName do' form }
+      Advance;
+      if not Check(tkIdent) then
+        raise EParseError.Create(Format(
+          'Expected type name after '':'' at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      H.VarName  := Name1;
+      H.TypeName := FCurrent.Value;
+      Advance;
+    end
+    else
+    begin
+      { 'on TypeName do' form — no variable binding }
+      H.VarName  := '';
+      H.TypeName := Name1;
+    end;
+    Expect(tkDo);
+    H.Body := TCompoundStmt.Create;
+    { Handler body is a single statement (Delphi/FPC standard) }
+    if Check(tkBegin) then
+    begin
+      Advance;
+      ParseBodyInto(H.Body, tkEnd, tkEnd);
+      Expect(tkEnd);
+    end
+    else
+    begin
+      { Single statement }
+      H.Body.Stmts.Add(ParseStmt);
+    end;
+    Result := H;
+  except
+    H.Free;
     raise;
   end;
 end;

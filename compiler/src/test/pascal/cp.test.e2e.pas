@@ -161,6 +161,14 @@ type
     { ------------------------------------------------------------------ }
     procedure TestRun_ProcessBuiltins_CapturesOutput;
     procedure TestRun_ProcessBuiltins_ExitCode;
+    { ------------------------------------------------------------------ }
+    { Typed except handlers (Step 8)                                      }
+    { ------------------------------------------------------------------ }
+    procedure TestRun_TypedExcept_CorrectHandlerMatched;
+    procedure TestRun_TypedExcept_SubclassMatchesParentHandler;
+    procedure TestRun_TypedExcept_UnmatchedReraises;
+    procedure TestRun_TypedExcept_BareRaisePropagatesToOuter;
+    procedure TestRun_TypedExcept_ElseBodyRunsWhenNoMatch;
   end;
 
 implementation
@@ -2233,6 +2241,149 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcProcessBuiltinsExitCode, Output, RCode, []));
   AssertEquals('program exit code 0', 0, RCode);
   AssertEquals('true exits with 0', '0', Trim(Output));
+end;
+
+{ ------------------------------------------------------------------ }
+{ Typed except handlers — shared source base                         }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcExcBase2 =
+    'program P;'                                      + LineEnding +
+    'type'                                            + LineEnding +
+    '  Exception = class'                             + LineEnding +
+    '    FMessage: string;'                           + LineEnding +
+    '    property Message: string read FMessage;'     + LineEnding +
+    '  end;'                                          + LineEnding +
+    '  EFoo = class(Exception) end;'                  + LineEnding +
+    '  EBar = class(EFoo) end;'                       + LineEnding;
+
+  SrcTypedExceptCorrect =
+    SrcExcBase2 +
+    'var X: Integer;'                                 + LineEnding +
+    'begin'                                           + LineEnding +
+    '  X := 0;'                                       + LineEnding +
+    '  try'                                           + LineEnding +
+    '    raise EFoo.Create'                           + LineEnding +
+    '  except'                                        + LineEnding +
+    '    on E: EFoo do X := 42;'                      + LineEnding +
+    '    on E: Exception do X := 1'                   + LineEnding +
+    '  end;'                                          + LineEnding +
+    '  WriteLn(X)'                                    + LineEnding +
+    'end.';
+
+  SrcTypedExceptSubclass =
+    SrcExcBase2 +
+    'var X: Integer;'                                 + LineEnding +
+    'begin'                                           + LineEnding +
+    '  X := 0;'                                       + LineEnding +
+    '  try'                                           + LineEnding +
+    '    raise EBar.Create'                           + LineEnding +
+    '  except'                                        + LineEnding +
+    '    on E: EFoo do X := 7'                        + LineEnding +
+    '  end;'                                          + LineEnding +
+    '  WriteLn(X)'                                    + LineEnding +
+    'end.';
+
+  SrcTypedExceptElseRun =
+    SrcExcBase2 +
+    'var X: Integer;'                                 + LineEnding +
+    'begin'                                           + LineEnding +
+    '  X := 0;'                                       + LineEnding +
+    '  try'                                           + LineEnding +
+    '    raise EFoo.Create'                           + LineEnding +
+    '  except'                                        + LineEnding +
+    '    on E: EBar do X := 9'                        + LineEnding +
+    '    else X := 5'                                 + LineEnding +
+    '  end;'                                          + LineEnding +
+    '  WriteLn(X)'                                    + LineEnding +
+    'end.';
+
+  SrcTypedExceptBareRaise =
+    SrcExcBase2 +
+    'var X: Integer;'                                 + LineEnding +
+    'begin'                                           + LineEnding +
+    '  X := 0;'                                       + LineEnding +
+    '  try'                                           + LineEnding +
+    '    try'                                         + LineEnding +
+    '      raise EFoo.Create'                         + LineEnding +
+    '    except'                                      + LineEnding +
+    '      on E: EFoo do'                             + LineEnding +
+    '      begin'                                     + LineEnding +
+    '        X := 1;'                                 + LineEnding +
+    '        raise'                                   + LineEnding +
+    '      end'                                       + LineEnding +
+    '    end'                                         + LineEnding +
+    '  except'                                        + LineEnding +
+    '    on E: EFoo do X := 2'                        + LineEnding +
+    '  end;'                                          + LineEnding +
+    '  WriteLn(X)'                                    + LineEnding +
+    'end.';
+
+  SrcTypedExceptUnmatched =
+    SrcExcBase2 +
+    'var X: Integer;'                                 + LineEnding +
+    'begin'                                           + LineEnding +
+    '  X := 0;'                                       + LineEnding +
+    '  try'                                           + LineEnding +
+    '    try'                                         + LineEnding +
+    '      raise EFoo.Create'                         + LineEnding +
+    '    except'                                      + LineEnding +
+    '      on E: EBar do X := 9'                      + LineEnding +
+    '    end'                                         + LineEnding +
+    '  except'                                        + LineEnding +
+    '    on E: EFoo do X := 3'                        + LineEnding +
+    '  end;'                                          + LineEnding +
+    '  WriteLn(X)'                                    + LineEnding +
+    'end.';
+
+{ ------------------------------------------------------------------ }
+{ Typed except handler — E2E tests                                   }
+{ ------------------------------------------------------------------ }
+
+procedure TE2ETests.TestRun_TypedExcept_CorrectHandlerMatched;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptCorrect, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('EFoo handler ran', '42', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_TypedExcept_SubclassMatchesParentHandler;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptSubclass, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('EBar matches EFoo handler', '7', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_TypedExcept_UnmatchedReraises;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptUnmatched, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('unmatched inner re-raises to outer', '3', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_TypedExcept_BareRaisePropagatesToOuter;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptBareRaise, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('bare raise propagated to outer handler', '2', Trim(Output));
+end;
+
+procedure TE2ETests.TestRun_TypedExcept_ElseBodyRunsWhenNoMatch;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptElseRun, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('else body ran when no handler matched', '5', Trim(Output));
 end;
 
 initialization

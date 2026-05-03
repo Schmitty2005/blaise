@@ -102,6 +102,39 @@ type
     procedure TestCodegen_TryFinally_ArcRelease_BeforeReraise;
     procedure TestCodegen_TryFinally_ArcRelease_ZerosVar;
     procedure TestCodegen_ExceptionSubclass_CtorCallWithMessage;
+
+    { ------------------------------------------------------------------ }
+    { Parser — typed except handlers (on E: TClass do)                   }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_TypedExcept_HasOneHandler;
+    procedure TestParse_TypedExcept_HandlerTypeName;
+    procedure TestParse_TypedExcept_HandlerVarName;
+    procedure TestParse_TypedExcept_HandlerBodyStmtCount;
+    procedure TestParse_TypedExcept_TwoHandlers;
+    procedure TestParse_TypedExcept_WithElseBody;
+    procedure TestParse_TypedExcept_NoVarBinding;
+
+    { ------------------------------------------------------------------ }
+    { Semantic — typed except handlers                                    }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_TypedExcept_SingleHandler_OK;
+    procedure TestSemantic_TypedExcept_TwoHandlers_OK;
+    procedure TestSemantic_TypedExcept_NonClassType_RaisesError;
+    procedure TestSemantic_TypedExcept_WithElse_OK;
+    procedure TestSemantic_TypedExcept_HandlerVarUsableInBody;
+
+    { ------------------------------------------------------------------ }
+    { Codegen — typed except handlers                                     }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_TypedExcept_CallsIsInstance;
+    procedure TestCodegen_TypedExcept_TwoHandlers_TwoIsInstanceCalls;
+    procedure TestCodegen_TypedExcept_ElseBodyPresent;
+    procedure TestCodegen_TypedExcept_UsesCurrentException;
+
+    { ------------------------------------------------------------------ }
+    { Codegen — bare raise in except handler                              }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_BareRaise_InTypedHandler_CallsReraise;
   end;
 
 implementation
@@ -676,6 +709,267 @@ begin
   AssertTrue('ctor call present',  Pos('$Exception_Create', IR) > 0);
   AssertTrue('string arg present', Pos('oops', IR) > 0);
   AssertTrue('raise RTL call',     Pos('$_Raise', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Shared source — typed except handlers                              }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcExcBase =
+    'program P;'                                      + LineEnding +
+    'type'                                            + LineEnding +
+    '  Exception = class'                             + LineEnding +
+    '    FMessage: string;'                           + LineEnding +
+    '    constructor Create(AMessage: string);'       + LineEnding +
+    '    property Message: string read FMessage;'     + LineEnding +
+    '  end;'                                          + LineEnding +
+    '  EFoo = class(Exception) end;'                  + LineEnding +
+    '  EBar = class(Exception) end;'                  + LineEnding;
+
+  SrcTypedExceptSingle =
+    SrcExcBase +
+    'var X: Integer;'                                 + LineEnding +
+    'begin'                                           + LineEnding +
+    '  try'                                           + LineEnding +
+    '    X := 1'                                      + LineEnding +
+    '  except'                                        + LineEnding +
+    '    on E: EFoo do'                               + LineEnding +
+    '      X := 42'                                   + LineEnding +
+    '  end'                                           + LineEnding +
+    'end.';
+
+  SrcTypedExceptTwo =
+    SrcExcBase +
+    'var X: Integer;'                                 + LineEnding +
+    'begin'                                           + LineEnding +
+    '  try'                                           + LineEnding +
+    '    X := 1'                                      + LineEnding +
+    '  except'                                        + LineEnding +
+    '    on E: EFoo do'                               + LineEnding +
+    '      X := 42;'                                  + LineEnding +
+    '    on E: EBar do'                               + LineEnding +
+    '      X := 99'                                   + LineEnding +
+    '  end'                                           + LineEnding +
+    'end.';
+
+  SrcTypedExceptWithElse =
+    SrcExcBase +
+    'var X: Integer;'                                 + LineEnding +
+    'begin'                                           + LineEnding +
+    '  try'                                           + LineEnding +
+    '    X := 1'                                      + LineEnding +
+    '  except'                                        + LineEnding +
+    '    on E: EFoo do'                               + LineEnding +
+    '      X := 42'                                   + LineEnding +
+    '    else'                                        + LineEnding +
+    '      X := 0'                                    + LineEnding +
+    '  end'                                           + LineEnding +
+    'end.';
+
+  SrcTypedExceptNoVar =
+    SrcExcBase +
+    'var X: Integer;'                                 + LineEnding +
+    'begin'                                           + LineEnding +
+    '  try'                                           + LineEnding +
+    '    X := 1'                                      + LineEnding +
+    '  except'                                        + LineEnding +
+    '    on EFoo do'                                  + LineEnding +
+    '      X := 42'                                   + LineEnding +
+    '  end'                                           + LineEnding +
+    'end.';
+
+{ ------------------------------------------------------------------ }
+{ Parser — typed except handlers                                     }
+{ ------------------------------------------------------------------ }
+
+procedure TExceptionTests.TestParse_TypedExcept_HasOneHandler;
+var Prog: TProgram; TES: TTryExceptStmt;
+begin
+  Prog := ParseSrc(SrcTypedExceptSingle);
+  try
+    TES := TTryExceptStmt(Prog.Block.Stmts[0]);
+    AssertEquals('one handler', 1, TES.Handlers.Count);
+  finally Prog.Free; end;
+end;
+
+procedure TExceptionTests.TestParse_TypedExcept_HandlerTypeName;
+var Prog: TProgram; TES: TTryExceptStmt; H: TExceptHandlerClause;
+begin
+  Prog := ParseSrc(SrcTypedExceptSingle);
+  try
+    TES := TTryExceptStmt(Prog.Block.Stmts[0]);
+    H := TExceptHandlerClause(TES.Handlers[0]);
+    AssertEquals('handler type EFoo', 'EFoo', H.TypeName);
+  finally Prog.Free; end;
+end;
+
+procedure TExceptionTests.TestParse_TypedExcept_HandlerVarName;
+var Prog: TProgram; TES: TTryExceptStmt; H: TExceptHandlerClause;
+begin
+  Prog := ParseSrc(SrcTypedExceptSingle);
+  try
+    TES := TTryExceptStmt(Prog.Block.Stmts[0]);
+    H := TExceptHandlerClause(TES.Handlers[0]);
+    AssertEquals('handler var E', 'E', H.VarName);
+  finally Prog.Free; end;
+end;
+
+procedure TExceptionTests.TestParse_TypedExcept_HandlerBodyStmtCount;
+var Prog: TProgram; TES: TTryExceptStmt; H: TExceptHandlerClause;
+begin
+  Prog := ParseSrc(SrcTypedExceptSingle);
+  try
+    TES := TTryExceptStmt(Prog.Block.Stmts[0]);
+    H := TExceptHandlerClause(TES.Handlers[0]);
+    AssertEquals('handler body 1 stmt', 1, H.Body.Stmts.Count);
+  finally Prog.Free; end;
+end;
+
+procedure TExceptionTests.TestParse_TypedExcept_TwoHandlers;
+var Prog: TProgram; TES: TTryExceptStmt;
+begin
+  Prog := ParseSrc(SrcTypedExceptTwo);
+  try
+    TES := TTryExceptStmt(Prog.Block.Stmts[0]);
+    AssertEquals('two handlers', 2, TES.Handlers.Count);
+  finally Prog.Free; end;
+end;
+
+procedure TExceptionTests.TestParse_TypedExcept_WithElseBody;
+var Prog: TProgram; TES: TTryExceptStmt;
+begin
+  Prog := ParseSrc(SrcTypedExceptWithElse);
+  try
+    TES := TTryExceptStmt(Prog.Block.Stmts[0]);
+    AssertNotNull('else body present', TES.ElseBody);
+    AssertEquals('else body 1 stmt', 1, TES.ElseBody.Stmts.Count);
+  finally Prog.Free; end;
+end;
+
+procedure TExceptionTests.TestParse_TypedExcept_NoVarBinding;
+var Prog: TProgram; TES: TTryExceptStmt; H: TExceptHandlerClause;
+begin
+  Prog := ParseSrc(SrcTypedExceptNoVar);
+  try
+    TES := TTryExceptStmt(Prog.Block.Stmts[0]);
+    H := TExceptHandlerClause(TES.Handlers[0]);
+    AssertEquals('no-var handler: empty VarName', '', H.VarName);
+    AssertEquals('no-var handler: TypeName is EFoo', 'EFoo', H.TypeName);
+  finally Prog.Free; end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Semantic — typed except handlers                                   }
+{ ------------------------------------------------------------------ }
+
+procedure TExceptionTests.TestSemantic_TypedExcept_SingleHandler_OK;
+begin
+  AnalyseSrc(SrcTypedExceptSingle).Free;
+end;
+
+procedure TExceptionTests.TestSemantic_TypedExcept_TwoHandlers_OK;
+begin
+  AnalyseSrc(SrcTypedExceptTwo).Free;
+end;
+
+procedure TExceptionTests.TestSemantic_TypedExcept_NonClassType_RaisesError;
+begin
+  AnalyseExpectError(
+    'program P;'                             + LineEnding +
+    'var X: Integer;'                        + LineEnding +
+    'begin'                                  + LineEnding +
+    '  try'                                  + LineEnding +
+    '    X := 1'                             + LineEnding +
+    '  except'                               + LineEnding +
+    '    on E: Integer do'                   + LineEnding +
+    '      X := 0'                           + LineEnding +
+    '  end'                                  + LineEnding +
+    'end.');
+end;
+
+procedure TExceptionTests.TestSemantic_TypedExcept_WithElse_OK;
+begin
+  AnalyseSrc(SrcTypedExceptWithElse).Free;
+end;
+
+procedure TExceptionTests.TestSemantic_TypedExcept_HandlerVarUsableInBody;
+begin
+  { Handler variable E should be in scope and usable inside the handler body. }
+  AnalyseSrc(
+    SrcExcBase +
+    'var X: Integer;'                                     + LineEnding +
+    'begin'                                               + LineEnding +
+    '  try'                                               + LineEnding +
+    '    X := 1'                                          + LineEnding +
+    '  except'                                            + LineEnding +
+    '    on E: EFoo do'                                   + LineEnding +
+    '      X := 0'                                        + LineEnding +
+    '  end'                                               + LineEnding +
+    'end.').Free;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Codegen — typed except handlers                                    }
+{ ------------------------------------------------------------------ }
+
+procedure TExceptionTests.TestCodegen_TypedExcept_CallsIsInstance;
+var IR: string;
+begin
+  IR := GenIR(SrcTypedExceptSingle);
+  AssertTrue('_IsInstance call for EFoo', Pos('$_IsInstance', IR) > 0);
+  AssertTrue('typeinfo_EFoo referenced', Pos('typeinfo_EFoo', IR) > 0);
+end;
+
+procedure TExceptionTests.TestCodegen_TypedExcept_TwoHandlers_TwoIsInstanceCalls;
+var IR: string; N: Integer; Idx: Integer;
+begin
+  IR := GenIR(SrcTypedExceptTwo);
+  N := 0; Idx := 1;
+  while True do
+  begin
+    Idx := PosEx('$_IsInstance', IR, Idx);
+    if Idx = 0 then Break;
+    Inc(N); Inc(Idx);
+  end;
+  AssertTrue('two _IsInstance calls for two handlers', N >= 2);
+end;
+
+procedure TExceptionTests.TestCodegen_TypedExcept_ElseBodyPresent;
+var IR: string;
+begin
+  IR := GenIR(SrcTypedExceptWithElse);
+  { The else body assigns 0 to X }
+  AssertTrue('else body (copy 0) in IR', Pos('copy 0', IR) > 0);
+end;
+
+procedure TExceptionTests.TestCodegen_TypedExcept_UsesCurrentException;
+var IR: string;
+begin
+  IR := GenIR(SrcTypedExceptSingle);
+  { Handler must call _CurrentException to get the live exception object }
+  AssertTrue('_CurrentException called', Pos('$_CurrentException', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Codegen — bare raise in except handler                             }
+{ ------------------------------------------------------------------ }
+
+procedure TExceptionTests.TestCodegen_BareRaise_InTypedHandler_CallsReraise;
+var IR: string;
+begin
+  IR := GenIR(
+    SrcExcBase +
+    'var X: Integer;'                                     + LineEnding +
+    'begin'                                               + LineEnding +
+    '  try'                                               + LineEnding +
+    '    X := 1'                                          + LineEnding +
+    '  except'                                            + LineEnding +
+    '    on E: EFoo do'                                   + LineEnding +
+    '      raise'                                         + LineEnding +
+    '  end'                                               + LineEnding +
+    'end.');
+  AssertTrue('bare raise calls _Reraise', Pos('call $_Reraise', IR) > 0);
 end;
 
 initialization

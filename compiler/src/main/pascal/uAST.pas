@@ -222,10 +222,26 @@ type
     destructor Destroy; override;
   end;
 
+  { One 'on [VarName :] TypeName do Stmt' arm inside a try/except block.
+    VarName is empty when the source uses the no-binding form 'on TFoo do'. }
+  TExceptHandlerClause = class
+  public
+    VarName:  string;         { bound variable name, or '' }
+    TypeName: string;         { exception class name }
+    Body:     TCompoundStmt;  { owned }
+    destructor Destroy; override;
+  end;
+
   TTryExceptStmt = class(TASTStmt)
   public
     TryBody:    TCompoundStmt;  { owned }
+    { Typed handlers (on E: T do): non-empty when the except block contains
+      'on' clauses.  Mutually exclusive with ExceptBody. }
+    Handlers:   TObjectList;    { owned list of TExceptHandlerClause }
+    ElseBody:   TCompoundStmt;  { owned; catch-all after typed handlers, or nil }
+    { Plain catch-all body: non-nil only when the except block has no 'on' clauses. }
     ExceptBody: TCompoundStmt;  { owned }
+    constructor Create;
     destructor Destroy; override;
   end;
 
@@ -714,11 +730,27 @@ begin
   inherited Destroy;
 end;
 
+{ TExceptHandlerClause }
+
+destructor TExceptHandlerClause.Destroy;
+begin
+  Body.Free;
+  inherited Destroy;
+end;
+
 { TTryExceptStmt }
+
+constructor TTryExceptStmt.Create;
+begin
+  inherited Create;
+  Handlers := TObjectList.Create(True);
+end;
 
 destructor TTryExceptStmt.Destroy;
 begin
   TryBody.Free;
+  Handlers.Free;
+  ElseBody.Free;
   ExceptBody.Free;
   inherited Destroy;
 end;

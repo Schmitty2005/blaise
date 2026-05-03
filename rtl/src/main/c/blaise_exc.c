@@ -78,12 +78,14 @@ void _Raise(void* obj) {
 }
 
 /*
- * _CurrentException — return the live exception object from the current frame.
- * Called from an except/finally handler on the exception path, before
- * _PopExcFrame, to capture the exception pointer for re-raise.
+ * _CurrentException — return the live exception object.
+ * Called from an except handler to capture the exception pointer.
+ * Uses g_current_exception (set by _Raise) rather than g_exc_top->exception
+ * so that bare re-raise inside a typed handler continues to work after
+ * _PopExcFrame has already unwound the handler's own frame.
  */
 void* _CurrentException(void) {
-    return g_exc_top ? g_exc_top->exception : NULL;
+    return g_current_exception;
 }
 
 /*

@@ -2076,6 +2076,7 @@ var
   RS:     TRepeatStmt;
   TFS:    TTryFinallyStmt;
   TES:    TTryExceptStmt;
+  H:      TExceptHandlerClause;
   RaiseS: TRaiseStmt;
   I:         Integer;
   CondType:  TTypeDesc;
@@ -2378,7 +2379,50 @@ begin
   begin
     TES := TTryExceptStmt(AStmt);
     AnalyseCompoundBody(TES.TryBody);
-    AnalyseCompoundBody(TES.ExceptBody);
+    if TES.Handlers.Count > 0 then
+    begin
+      for I := 0 to TES.Handlers.Count - 1 do
+      begin
+        H := TExceptHandlerClause(TES.Handlers[I]);
+        CondType := FindTypeOrInstantiate(H.TypeName);
+        if CondType = nil then
+          SemanticError(
+            Format('Unknown exception type ''%s''', [H.TypeName]),
+            AStmt.Line, AStmt.Col);
+        if CondType.Kind <> tyClass then
+          SemanticError(
+            Format('Exception handler type must be a class, got ''%s''', [H.TypeName]),
+            AStmt.Line, AStmt.Col);
+        if H.VarName <> '' then
+        begin
+          { Inject a synthetic local so EmitVarAllocs allocates a stack slot. }
+          if FCurrentLocalBlock <> nil then
+          begin
+            SynthDecl := TVarDecl.Create;
+            SynthDecl.Names.Add(H.VarName);
+            SynthDecl.TypeName    := H.TypeName;
+            SynthDecl.ResolvedType := CondType;
+            SynthDecl.IsGlobal    := False;
+            FCurrentLocalBlock.Decls.Add(SynthDecl);
+          end;
+          FTable.PushScope;
+          try
+            VarSym := TSymbol.Create(H.VarName, skVariable, CondType);
+            if not FTable.Define(VarSym) then
+              VarSym.Free;
+            AnalyseCompoundBody(H.Body);
+          finally
+            FTable.PopScope;
+          end;
+        end
+        else
+          AnalyseCompoundBody(H.Body);
+      end;
+      if TES.ElseBody <> nil then
+        AnalyseCompoundBody(TES.ElseBody);
+    end
+    else
+      AnalyseCompoundBody(TES.ExceptBody);
   end
   else if AStmt is TRaiseStmt then
   begin
