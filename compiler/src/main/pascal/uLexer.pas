@@ -24,6 +24,7 @@ type
     tkEOF,
     { Literals }
     tkIntLit,
+    tkFloatLit,
     tkStringLit,
     { Keywords }
     tkProgram,
@@ -410,7 +411,14 @@ begin
 
     fptkNumber:
       begin
-        Result.Kind  := tkIntLit;
+        { Float if text contains '.' or 'e'/'E' (decimal point or exponent).
+          Hex/binary/octal literals never have those, so this is unambiguous. }
+        if (Pos('.', FTok.TokenText) > 0) or
+           (Pos('e', FTok.TokenText) > 0) or
+           (Pos('E', FTok.TokenText) > 0) then
+          Result.Kind := tkFloatLit
+        else
+          Result.Kind := tkIntLit;
         Result.Value := FTok.TokenText;
       end;
 

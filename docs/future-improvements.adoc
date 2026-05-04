@@ -322,6 +322,274 @@ codegen changes beyond what regular string literals already require.
 - Procedural type as a record field (should fall out for free, but I'll add a test)
 - Procedural type as an open-array element (probably works for free)
 
+== Language — Features Required to Complete the punit Port
+
+The following features were identified as missing from Blaise while porting
+`/data/devel/fpc-3.3.1/src/packages/fcl-base/tests/punit.pp` to
+`rtl/src/test/pascal/punit.pas`.  Each one has a concrete workaround in the
+current port, noted below, so none is a blocker; they are collected here so
+they can be prioritised alongside other language work.
+
+Items marked *Status: implemented* have since been added to the compiler.
+
+=== Dynamic arrays with `SetLength`
+
+*What.* Support local variables of type `array of T` whose length can be set
+at runtime via `SetLength(A, N)`, with element access via `A[I]`.
+
+*Why it matters.* `SetLength` is the idiomatic Pascal way to build variadic
+collections.  In punit it is used for the `TSuiteArray` hook argument passed
+to `TRunStartHandler` — a list of suites being run, built and freed per run.
+Any future Blaise code that wants a heap-backed list without pulling in the
+full `TList<T>` generic will hit the same gap.
+
+*Current workaround in punit.* `TSuiteArray` was replaced with `PSuiteArray =
+Pointer` (a raw `GetMem` block).  `TRunStartHandler` signature changed from
+`procedure(const Suites: TSuiteArray)` to `procedure(Count: Integer; Suites:
+PSuiteArray)`.  Helper functions `BlockGet` / `BlockSet` access pointer slots
+by pointer arithmetic.  This works but is unidiomatic and requires manual
+memory management at every call site.
+
+*Implementation notes.* Dynamic arrays need: a heap-backed header (length +
+capacity + ARC refcount), `SetLength` as a compiler built-in that calls into
+the RTL to realloc the backing store, and bounds-checked index emission in
+the codegen.  The ARC model already in place for strings is the natural
+template.
+
+*Effort.* Significant — new type kind, RTL support, codegen changes.
+
+=== `TObject.ClassType` and `TObject.ClassName`
+
+*Status: partially implemented.*  `ClassName` is implemented — the typeinfo
+record now carries a class-name string pointer at slot 2 (offset 16), and
+`.ClassName` on any class instance loads it at runtime.  `ClassType` (returning
+a `TClass` metaclass reference) is still deferred; it requires a metaclass type
+and vtable slot.
+
+*What.* Virtual methods on `TObject` that return the runtime class of an
+object: `ClassType` returns the `TClass` metaclass reference;
+`ClassName` returns the class name as a string.
+
+*Why it matters.* Exception handling idioms rely on `E.ClassType` to
+identify the actual exception class raised.  In punit it is used in
+`RunTestHandler` (comparing the raised exception class against the expected
+one set by `ExpectException`) and in `AssertException`.  More broadly, any
+framework or diagnostic code that needs to print or compare runtime types
+needs these methods.
+
+*Current workaround in punit.* Both methods are absent: `RunTestHandler`
+tracks only `ExcRaised: Boolean` (was an exception raised at all).
+`AssertException` verifies that *an* exception was raised but skips class
+identity.  Exception mismatch messages in `RunTestHandler` show pointer
+hex values rather than class names.  These are functional limitations — a
+test that registers `ExpectException(EFoo)` will pass even if `EBar` is
+raised instead.
+
+*Implementation notes.* Requires vmt slots for the class name string pointer
+and class parent pointer.  `ClassName` can be a class method that reads the
+name from the vmt.  `ClassType` can return `Self` when called on a metaclass
+or the class pointer from the object header.  The codegen already emits
+`$typeinfo_<ClassName>` records; this feature reuses that infrastructure.
+
+*Effort.* Moderate — vmt extension, class method dispatch, RTL additions.
+
+=== `TObject.InheritsFrom`
+
+*What.* A class method on `TObject` that walks the parent-class chain and
+returns `True` if the receiver class is equal to or descends from the
+argument class.
+
+*Why it matters.* In punit this is needed by `AssertInheritsFrom`, which
+tests that one object's class is a subclass of another.  More generally it is
+a prerequisite for any `is`-operator implementation and for pattern matching
+on exception hierarchies.
+
+*Current workaround in punit.* `AssertInheritsFrom` is absent from the Blaise
+punit port.
+
+*Implementation notes.* Requires the parent-class pointer in the vmt (already
+partially present in the typeinfo struct) and a loop or recursive call that
+walks the chain comparing pointers.  Closely related to implementing the `is`
+operator and typed `on E: TFoo do` exception matching by inheritance rather
+than exact type.
+
+*Effort.* Small once `ClassType` vmt slots are in place.
+
+=== `Str()` intrinsic — numeric to string conversion
+
+*Status: partially implemented.*  Integer and Int64 conversions are covered by
+the existing `IntToStr` / `Int64ToStr` built-ins.  Float→string is provided by
+the new `DoubleToStr` / `SingleToStr` built-ins.  The FPC-style `Str(X, S)` var-
+parameter form is still absent.
+
+
+
+*What.* The FPC/Pascal `Str(X, S)` intrinsic writes the string representation
+of a numeric value `X` (integer or float) into the `var` string parameter `S`.
+
+*Why it matters.* It is the traditional Pascal way to convert a number to a
+string without pulling in `SysUtils`.  Used throughout punit's `SysTimeString`
+helper and the float assertion overloads.
+
+*Current workaround in punit.* Integer conversions replaced with `IntToStr()`
+and `Int64ToStr()` (already Blaise built-ins).  Float→string is deferred:
+`AssertEquals(Double)` displays `<float>` in failure messages rather than
+the actual values.
+
+*Implementation notes.* For integers, `Str` is a thin wrapper over `IntToStr`
+/ `Int64ToStr` and can be emitted identically.  For floating-point, full
+`Str(Double, S)` requires either a libc `snprintf` call or a Blaise RTL
+float-formatting function.  The two entry points can be handled separately:
+the integer form is trivial; the float form can wait until the RTL has
+`Double`-to-string support.
+
+*Effort.* Trivial for integers (alias existing built-ins); moderate for floats
+(RTL formatting function).
+
+=== `Abs()` built-in for numeric types
+
+*Status: implemented.*  `Abs()` is now a compiler built-in.  For `Integer` and
+`Int64` it calls `_AbsInt` / `_AbsInt64` in the C RTL; for `Double` / `Single`
+it calls `fabs` / `fabsf` from libc directly.
+
+
+
+*What.* Standard Pascal intrinsic that returns the absolute value of an
+integer or floating-point argument.
+
+*Why it matters.* Used in punit's floating-point `AssertEquals` to compute
+`|expected - actual| < delta`.
+
+*Current workaround in punit.* Replaced with an explicit double-sided
+comparison: `(a - b < delta) and (b - a < delta)`.  This is correct but
+verbose.
+
+*Implementation notes.* A simple codegen branch: if the argument type is
+`tyInteger` emit `abssw`; for `tyInt64` emit `absl`; for `tyDouble` / float
+emit `absd` or `abss`.  QBE has native `abs` instructions for all four.
+
+*Effort.* Trivial.
+
+=== `New()` and `Dispose()` built-ins for typed pointers
+
+*What.* `New(P)` allocates `SizeOf(P^)` bytes and returns a typed pointer;
+`Dispose(P)` frees it.  Both are traditional Pascal alternatives to manual
+`GetMem` / `FreeMem` with explicit `SizeOf`.
+
+*Why it matters.* In the original punit every record allocation uses `New` and
+every deallocation uses `Dispose`.  Without them the port must call
+`GetMem(SizeOf(TFoo))` and `ZeroMem` manually, and the developer must remember
+to `FreeMem` at every exit path.
+
+*Current workaround in punit.* All uses replaced with `GetMem(SizeOf(T))` +
+`ZeroMem(ptr, SizeOf(T))` + `FreeMem(ptr)`.
+
+*Implementation notes.* `New(P)` is a thin wrapper over `GetMem(SizeOf(P^))`
+with the type deduced from the pointer's declared type at the call site.
+`Dispose(P)` calls `FreeMem(P)` after invoking the destructor if the pointed-to
+type is a class (for record pointers, no destructor call is needed under ARC
+provided string fields have been properly finalised first).
+
+*Effort.* Small — semantic pass extracts element type, codegen emits the
+appropriate `malloc` / `free` sequence.
+
+=== `Default(T)` expression
+
+*What.* `Default(T)` returns the zero value for any type `T` — zero for
+integers, empty string for strings, nil for pointers and classes, and so on.
+Commonly used to reset a record variable to its initial state.
+
+*Why it matters.* In the original punit it is used to re-initialise
+`TResultRecord` and `TRunSummary` records before each test run.
+
+*Current workaround in punit.* Replaced with `ZeroMem(@rec, SizeOf(rec))`.
+This is correct for records whose managed fields (strings, interface refs) are
+already nil, but for a record mid-lifetime it bypasses ARC cleanup of any
+non-nil string fields.  For punit's specific use (zeroing a freshly allocated
+or just-finalised record) this is safe; for general use it is not.
+
+*Implementation notes.* The semantic pass resolves the type argument; the
+codegen emits a `ZeroMem` (or a field-by-field assignment for managed types
+where ARC release must precede zeroing).
+
+*Effort.* Small for unmanaged types; moderate for records containing managed
+fields (requires field-by-field ARC release before memset).
+
+=== `Finalize()` procedure for managed records
+
+*What.* `Finalize(V)` releases all ARC-managed fields inside a record variable
+`V` (strings, interface references, object references) without freeing the
+record's own memory.  Used before `FreeMem` when the record was heap-allocated.
+
+*Why it matters.* In the original punit it is called on `TResultRecord^` before
+`FreeMem` to release the `TestMessage: string` field.  Without it, heap-
+allocated records that contain strings leak the string's reference count.
+
+*Current workaround in punit.* The `Finalize` calls were dropped.  In Blaise,
+ARC on assignment should automatically manage string fields inside records, so
+the string is released when the record's string field is overwritten or when the
+last reference to the containing heap block is released.  The correctness of
+this assumption depends on the ARC implementation for record fields — if the
+codegen does not insert `_StringRelease` when a record pointer is freed via
+`FreeMem`, there will be a string leak.
+
+*Implementation notes.* `Finalize(V)` is a compiler built-in that walks the
+fields of the record type and emits the appropriate ARC release calls for each
+managed field.  The implementation mirrors what the codegen already does for
+local record variables at scope exit.
+
+*Effort.* Small to moderate — shares infrastructure with ARC scope-exit emit.
+
+== BCL Packages — Numeric Types
+
+=== `Currency` and `BigDecimal` as BCL packages
+
+*What.* Two numeric types useful in financial and high-precision contexts that
+were deliberately omitted from the Blaise primitive type set:
+
+* `Currency` — a fixed-point decimal type represented as a 64-bit integer
+  scaled by 10,000.  Exact decimal arithmetic with four decimal places;
+  fast (integer operations), bounded range (~±922 trillion).  Equivalent to
+  Delphi's `Currency` type.
+
+* `BigDecimal` — arbitrary-precision decimal arithmetic, heap-allocated.
+  Exact representation of any decimal value; no rounding error.  Equivalent
+  to Java's `java.math.BigDecimal`.
+
+*Why deferred.* Both are library-level concerns, not compiler primitives.  The
+string-type consolidation precedent (all string variants → a single `string`)
+applies equally here: the proliferation of `Currency`, `Comp`, `Extended`, and
+`Real` came from hardware limitations and legacy concerns that no longer apply.
+Blaise's two float primitives (`Double` and `Single`) cover the vast majority
+of numeric use cases.
+
+*Where they belong.* Once the BCL (`packages/`) exists:
+
+* `bcl.numerics.fixed` — `TFixedDecimal` (Currency semantics, operator
+  overloading, 4 decimal places).
+* `bcl.numerics.bigdecimal` — `TBigDecimal` (arbitrary precision, operator
+  overloading).
+
+With operator overloading, both types will look like builtins from user code:
+
+[source,pascal]
+----
+uses bcl.numerics.fixed;
+var Price, Tax: TFixedDecimal;
+begin
+  Price := TFixedDecimal.FromStr('19.99');
+  Tax   := Price * TFixedDecimal.FromStr('0.20');
+  WriteLn(Tax.ToString);   { '4.0000' }
+end.
+----
+
+*Migration path from FPC.* The migration analyser (future phase) will flag
+`Currency` and `Comp` types and suggest `TFixedDecimal` or `TBigDecimal` as
+replacements.  `Extended` maps to `Double` with a precision-loss warning.
+
+*Effort.* Medium — primarily RTL/BCL work once operator overloading is in place.
+No compiler changes needed.
+
 == Tooling
 
 === Native Blaise test framework (fptest port)

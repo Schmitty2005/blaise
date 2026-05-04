@@ -1459,6 +1459,8 @@ begin
     CD := TConstDecl(ABlock.ConstDecls.Items[I]);
     if CD.IsString then
       TD := FTable.TypeString
+    else if CD.IsFloat then
+      TD := FTable.TypeDouble
     else
       TD := FTable.TypeInteger;
     Sym              := TSymbol.Create(CD.Name, skConstant, TD);
@@ -1504,6 +1506,11 @@ var
   MSym:       TSymbol;
   Slot:       Integer;
   CD:         TConstDecl;
+  AliasDef:   TTypeAliasDef;
+  AliasName:  string;
+  AliasDesc:  TTypeDesc;
+  BaseName:   string;
+  BaseType:   TTypeDesc;
 begin
   { Pass 1 — register all type symbols with empty descriptors.
     This allows self-referential field types to resolve in pass 2. }
@@ -1591,9 +1598,48 @@ begin
       end;
       Continue;
     end
+    else if TD.Def is TTypeAliasDef then
+    begin
+      { Type alias or pointer alias: resolve the named type and register
+        a new symbol pointing at either the base type (simple alias) or
+        a fresh TPointerTypeDesc (pointer alias '^T'). }
+      AliasDef  := TTypeAliasDef(TD.Def);
+      AliasName := AliasDef.TypeName;
+      if (Length(AliasName) > 0) and (AliasName[1] = '^') then
+      begin
+        { Pointer alias: ^BaseName — base may not be registered yet
+          (forward reference); leave BaseType nil for now (untyped
+          pointer semantics — safe for punit's usage pattern). }
+        BaseName := Copy(AliasName, 2, Length(AliasName) - 1);
+        BaseSym  := FTable.Lookup(BaseName);
+        BaseType := nil;
+        if (BaseSym <> nil) and (BaseSym.Kind = skType) then
+          BaseType := BaseSym.TypeDesc;
+        AliasDesc := FTable.NewPointerType(TD.Name, BaseType);
+      end
+      else
+      begin
+        { Simple alias: resolve to the existing type descriptor. }
+        BaseSym := FTable.Lookup(AliasName);
+        if (BaseSym = nil) or (BaseSym.Kind <> skType) then
+        begin
+          SemanticError(Format('Unknown type ''%s'' in type alias', [AliasName]),
+            TD.Line, TD.Col);
+          Continue;
+        end;
+        AliasDesc := BaseSym.TypeDesc;
+      end;
+      Sym := TSymbol.Create(TD.Name, skType, AliasDesc);
+      if not FTable.Define(Sym) then
+      begin
+        Sym.Free;
+        SemanticError(Format('Duplicate type name ''%s''', [TD.Name]), TD.Line, TD.Col);
+      end;
+      Continue;
+    end
     else
     begin
-      SemanticError('Only record, class, interface, enum, set, or procedural type definitions are supported',
+      SemanticError('Only record, class, interface, enum, set, procedural, or type alias definitions are supported',
         TD.Line, TD.Col);
       Continue;
     end;
@@ -1610,11 +1656,12 @@ begin
   begin
     TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
 
-    { Generic templates, enum, and set types need no pass-2 processing — skip }
+    { Generic templates, enum, set, and type alias need no pass-2 processing }
     if TD.Def is TGenericTypeDef then Continue;
     if TD.Def is TGenericInterfaceDef then Continue;
     if TD.Def is TEnumTypeDef then Continue;
     if TD.Def is TSetTypeDef then Continue;
+    if TD.Def is TTypeAliasDef then Continue;
 
     { Procedural types: resolve param + return types now that all
       type names are registered. }
@@ -3463,6 +3510,38 @@ begin
     Exit;
   end;
 
+  if SameText(AExpr.Name, 'DoubleToStr') or SameText(AExpr.Name, 'SingleToStr') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'StrToDouble') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('StrToDouble requires exactly one argument', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    Result := FTable.TypeDouble;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'Abs') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('Abs requires exactly one argument', AExpr.Line, AExpr.Col);
+    Result := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    if not Result.IsNumeric then
+      SemanticError(Format('Abs requires a numeric argument, got ''%s''', [Result.Name]),
+        AExpr.Line, AExpr.Col);
+    AExpr.ResolvedType := Result;  { return type matches argument type }
+    Exit;
+  end;
+
   if SameText(AExpr.Name, 'StrToInt') then
   begin
     if AExpr.Args.Count <> 1 then
@@ -3955,6 +4034,8 @@ begin
     Result := FTable.TypeNil
   else if AExpr is TIntLiteral then
     Result := FTable.TypeInteger
+  else if AExpr is TFloatLiteral then
+    Result := FTable.TypeDouble   { float literals default to Double }
   else if AExpr is TStringLiteral then
     Result := FTable.TypeString
   else if AExpr is TIdentExpr then
@@ -4099,6 +4180,14 @@ begin
           [AAccess.FieldName, BaseType.Name]),
         AAccess.Line, AAccess.Col);
     AAccess.IsClassAccess := BaseType.Kind = tyClass;
+    { Built-in class intrinsics available on any class instance }
+    if SameText(AAccess.FieldName, 'ClassName') and (BaseType.Kind = tyClass) then
+    begin
+      AAccess.IsClassNameAccess := True;
+      AAccess.ResolvedType := FTable.TypeString;
+      Result := FTable.TypeString;
+      Exit;
+    end;
     RT      := TRecordTypeDesc(BaseType);
     FldInfo := RT.FindField(AAccess.FieldName);
     if FldInfo = nil then
@@ -4263,6 +4352,15 @@ begin
   AAccess.IsClassAccess := RecSym.TypeDesc.Kind = tyClass;
   AAccess.IsGlobal      := RecSym.IsGlobal;
 
+  { Built-in class intrinsics }
+  if SameText(AAccess.FieldName, 'ClassName') and (RecSym.TypeDesc.Kind = tyClass) then
+  begin
+    AAccess.IsClassNameAccess := True;
+    AAccess.ResolvedType := FTable.TypeString;
+    Result := FTable.TypeString;
+    Exit;
+  end;
+
   RT      := TRecordTypeDesc(RecSym.TypeDesc);
   FldInfo := RT.FindField(AAccess.FieldName);
   if FldInfo = nil then
@@ -4422,6 +4520,11 @@ begin
     { nil can be compared with class, interface, pointer, or PChar types }
     if not (
       (LType = RType) or
+      { Float comparisons: Single/Double are compatible with each other }
+      (LType.IsFloat and RType.IsFloat) or
+      { Integer/float mixing in comparisons is allowed (integer promotes) }
+      (LType.IsFloat and RType.IsNumeric) or
+      (RType.IsFloat and LType.IsNumeric) or
       ((LType.Kind = tyNil) and (RType.Kind in [tyClass, tyInterface, tyPointer, tyPChar])) or
       ((RType.Kind = tyNil) and (LType.Kind in [tyClass, tyInterface, tyPointer, tyPChar])) or
       ((LType.Kind = tyPointer) and (RType.Kind = tyPointer)) or
@@ -4486,8 +4589,21 @@ begin
         Format('Right operand of ''%s'' must be numeric, got ''%s''',
           [BinaryOpName(ABin.Op), RType.Name]),
         ABin.Line, ABin.Col);
-    CheckTypesMatch(LType, RType, 'binary expression', ABin.Line, ABin.Col);
-    Result := LType;
+    { Float promotion: if either side is float, result is float.
+      Double wins over Single; any integer mixed with float promotes to Double. }
+    if LType.IsFloat or RType.IsFloat then
+    begin
+      if (LType.Kind = tyDouble) or (RType.Kind = tyDouble) or
+         (not LType.IsFloat) or (not RType.IsFloat) then
+        Result := FTable.TypeDouble
+      else
+        Result := FTable.TypeSingle;  { Single op Single → Single }
+    end
+    else
+    begin
+      CheckTypesMatch(LType, RType, 'binary expression', ABin.Line, ABin.Col);
+      Result := LType;
+    end;
   end;
 end;
 

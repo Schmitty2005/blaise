@@ -354,6 +354,7 @@ var
   TD:               TTypeDecl;
   GD:               TGenericTypeDef;
   GID:              TGenericInterfaceDef;
+  AD:               TTypeAliasDef;
   ParamNames:       TStringList;
   ParamConstraints: TStringList;
   IsGeneric:        Boolean;
@@ -467,9 +468,17 @@ begin
         TD.Def := ParseSetDef
       else if Check(tkFunction) or Check(tkProcedure) then
         TD.Def := ParseProceduralTypeDef
+      else if Check(tkCaret) or Check(tkIdent) then
+      begin
+        { Pointer alias: type PFoo = ^TFoo;
+          Simple alias:  type TMyInt = Integer;  (ident rhs) }
+        AD := TTypeAliasDef.Create;
+        AD.TypeName := Self.ParseTypeName;
+        TD.Def := AD;
+      end
       else
         raise EParseError.Create(Format(
-          'Expected ''record'', ''class'', ''interface'', ''('', ''set'', ''function'', or ''procedure'' at line %d col %d in %s',
+          'Expected ''record'', ''class'', ''interface'', ''('', ''set'', ''function'', ''procedure'', or type name at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     end;
     Expect(tkSemicolon);
@@ -496,11 +505,26 @@ begin
     if Check(tkMinus) then
     begin
       Advance;
-      if not Check(tkIntLit) then
-        raise EParseError.Create(Format('Expected integer after minus in const at line %d col %d in %s',
-          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-      CD.IntVal  := -StrToInt64(FCurrent.Value);
-      CD.IsString := False;
+      if Check(tkFloatLit) then
+      begin
+        CD.StrVal  := '-' + FCurrent.Value;
+        CD.IsFloat := True;
+        Advance;
+      end
+      else
+      begin
+        if not Check(tkIntLit) then
+          raise EParseError.Create(Format('Expected numeric literal after minus in const at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        CD.IntVal   := -StrToInt64(FCurrent.Value);
+        CD.IsString := False;
+        Advance;
+      end;
+    end
+    else if Check(tkFloatLit) then
+    begin
+      CD.StrVal  := FCurrent.Value;
+      CD.IsFloat := True;
       Advance;
     end
     else if Check(tkIntLit) then
@@ -517,7 +541,7 @@ begin
     end
     else
       raise EParseError.Create(Format(
-        'Expected integer or string constant at line %d col %d in %s',
+        'Expected numeric or string constant at line %d col %d in %s',
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Expect(tkSemicolon);
     AList.Add(CD);
@@ -2355,6 +2379,7 @@ end;
 function TParser.ParseFactor: TASTExpr;
 var
   IntNode:    TIntLiteral;
+  FloatNode:  TFloatLiteral;
   StrNode:    TStringLiteral;
   NilNode:    TNilLiteral;
   IdNode:     TIdentExpr;
@@ -2424,6 +2449,15 @@ begin
         IntNode.Value := StrToInt64(FCurrent.Value);
         Advance;
         Result := IntNode;
+      end;
+    tkFloatLit:
+      begin
+        FloatNode       := TFloatLiteral.Create;
+        FloatNode.Line  := FCurrent.Line;
+        FloatNode.Col   := FCurrent.Col;
+        FloatNode.Value := FCurrent.Value;
+        Advance;
+        Result := FloatNode;
       end;
     tkStringLit:
       begin

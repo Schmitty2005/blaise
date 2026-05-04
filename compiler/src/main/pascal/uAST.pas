@@ -38,6 +38,11 @@ type
     Value: Int64;
   end;
 
+  TFloatLiteral = class(TASTExpr)
+  public
+    Value: string;   { raw text e.g. '3.14' or '1.5E-3'; parsed at codegen }
+  end;
+
   TStringLiteral = class(TASTExpr)
   public
     Value: string;
@@ -95,6 +100,7 @@ type
     IsMethodCall:      Boolean;       { set by uSemantic — FieldName is a zero-arg method }
     ResolvedMethod:    TObject;       { TMethodDecl — not owned; set when IsMethodCall }
     IsGlobal:          Boolean;       { set by uSemantic — RecordName is a program-level global }
+    IsClassNameAccess: Boolean;       { set by uSemantic — .ClassName built-in on a class instance }
     PropIndexExpr: TASTExpr;  { owned — non-nil = indexed property read (e.g. List.Items[i]) }
     destructor Destroy; override;
   end;
@@ -420,6 +426,13 @@ type
   { Abstract base for type definitions. }
   TASTTypeDef = class(TASTNode);
 
+  { Type alias / pointer-type alias: type PFoo = ^TFoo; or type TMyInt = Integer;
+    TypeName holds the right-hand side as parsed by ParseTypeName, e.g. '^TFoo'. }
+  TTypeAliasDef = class(TASTTypeDef)
+  public
+    TypeName: string;
+  end;
+
   { Set type definition: type TOptions = set of TEnum; }
   TSetTypeDef = class(TASTTypeDef)
   public
@@ -614,13 +627,14 @@ type
     destructor Destroy; override;
   end;
 
-  { Constant declaration: const Name = Value; — integer or string literal }
+  { Constant declaration: const Name = Value; }
   TConstDecl = class(TASTNode)
   public
-    Name:    string;
-    IntVal:  Int64;    { used when IsString = False }
-    StrVal:  string;   { used when IsString = True }
+    Name:     string;
+    IntVal:   Int64;    { used when kind = integer }
+    StrVal:   string;   { used when IsString = True or IsFloat = True (raw text) }
     IsString: Boolean;
+    IsFloat:  Boolean;  { set when the rhs is a float literal }
   end;
 
   { ------------------------------------------------------------------ }

@@ -38,8 +38,10 @@ type
     tyStaticArray, { Fixed-size array: stack-allocated, compile-time bounds }
     tyPChar, { Opaque C pointer for interop: PChar(str) / string(pchar) }
     tySet,   { Bit-set over an enum base type — QBE 'w' (≤32 members) or 'l' (≤64) }
-    tyProcedural { Bare procedural pointer — QBE 'l'; see TProceduralTypeDesc.
+    tyProcedural, { Bare procedural pointer — QBE 'l'; see TProceduralTypeDesc.
                    Not 'of object' (method ptr), not 'reference to' (closure). }
+    tyDouble,    { 64-bit IEEE 754 float — QBE 'd' }
+    tySingle     { 32-bit IEEE 754 float — QBE 's' }
   );
 
   TTypeDesc = class
@@ -47,6 +49,7 @@ type
     Kind: TTypeKind;
     Name: string;
     function IsNumeric: Boolean;
+    function IsFloat: Boolean;
     function IsString: Boolean;
     function IsOrdinal: Boolean;
     function IsRecord: Boolean;
@@ -299,6 +302,8 @@ type
     FTypeString:  TTypeDesc;
     FTypeVoid:    TTypeDesc;
     FTypeNil:     TTypeDesc;
+    FTypeDouble:  TTypeDesc;
+    FTypeSingle:  TTypeDesc;
     FTypePointer: TPointerTypeDesc;  { untyped Pointer }
     FTypePChar:   TTypeDesc;         { opaque C pointer }
 
@@ -365,6 +370,8 @@ type
     property TypeNil:     TTypeDesc    read FTypeNil;
     property TypePointer: TPointerTypeDesc read FTypePointer;
     property TypePChar:   TTypeDesc        read FTypePChar;
+    property TypeDouble:  TTypeDesc        read FTypeDouble;
+    property TypeSingle:  TTypeDesc        read FTypeSingle;
   end;
 
 implementation
@@ -375,7 +382,12 @@ implementation
 
 function TTypeDesc.IsNumeric: Boolean;
 begin
-  Result := Kind in [tyInteger, tyInt64, tyUInt32, tyByte, tyEnum];
+  Result := Kind in [tyInteger, tyInt64, tyUInt32, tyByte, tyEnum, tyDouble, tySingle];
+end;
+
+function TTypeDesc.IsFloat: Boolean;
+begin
+  Result := Kind in [tyDouble, tySingle];
 end;
 
 function TTypeDesc.IsString: Boolean;
@@ -398,7 +410,8 @@ begin
   case Kind of
     tyByte, tyBoolean: Result := 1;
     tyInteger, tyUInt32, tyEnum: Result := 4;
-    tyInt64, tyString, tyClass, tyPointer, tyNil: Result := 8;
+    tyInt64, tyString, tyClass, tyPointer, tyNil, tyDouble: Result := 8;
+    tySingle: Result := 4;
     tyRecord: Result := TRecordTypeDesc(Self).TotalSize;
     tySet: if TSetTypeDesc(Self).BitCount <= 32 then Result := 4 else Result := 8;
     tyStaticArray:
@@ -419,6 +432,8 @@ begin
     tyString:            Result := 8;  { pointer size on 64-bit }
     tyRecord:            Result := TRecordTypeDesc(Self).TotalSize;
     tyNil:               Result := 8;
+    tyDouble:            Result := 8;
+    tySingle:            Result := 4;
     tySet: if TSetTypeDesc(Self).BitCount <= 32 then Result := 4 else Result := 8;
     tyStaticArray:
       Result := (TStaticArrayTypeDesc(Self).HighBound -
@@ -972,6 +987,8 @@ begin
   FTypeNil     := NewType(tyNil,     'nil');
   FTypePointer := NewPointerType('Pointer', nil);  { untyped pointer }
   FTypePChar   := NewType(tyPChar, 'PChar');
+  FTypeDouble  := NewType(tyDouble, 'Double');
+  FTypeSingle  := NewType(tySingle, 'Single');
 
   { Register type names as skType symbols in global scope }
   Define(TSymbol.Create('Integer', skType, FTypeInteger));
@@ -984,6 +1001,8 @@ begin
   Define(TSymbol.Create('string',  skType, FTypeString));
   Define(TSymbol.Create('Pointer', skType, FTypePointer));
   Define(TSymbol.Create('PChar',   skType, FTypePChar));
+  Define(TSymbol.Create('Double',  skType, FTypeDouble));
+  Define(TSymbol.Create('Single',  skType, FTypeSingle));
 
   { TObject — root of the class hierarchy; no fields, no parent }
   TObjectDesc := NewClassType('TObject');
@@ -1049,7 +1068,13 @@ begin
   Define(Sym);
   Sym := TSymbol.Create('IntToStr',  skFunction, FTypeString);
   Define(Sym);
-  Sym := TSymbol.Create('Int64ToStr', skFunction, FTypeString);
+  Sym := TSymbol.Create('Int64ToStr',  skFunction, FTypeString);
+  Define(Sym);
+  Sym := TSymbol.Create('DoubleToStr', skFunction, FTypeString);
+  Define(Sym);
+  Sym := TSymbol.Create('SingleToStr', skFunction, FTypeString);
+  Define(Sym);
+  Sym := TSymbol.Create('StrToDouble', skFunction, FTypeDouble);
   Define(Sym);
   Sym := TSymbol.Create('StrToInt',  skFunction, FTypeInteger);
   Define(Sym);
@@ -1067,6 +1092,8 @@ begin
   Define(Sym);
   Sym := TSymbol.Create('UpCase',      skFunction, FTypeString);
   Define(Sym);
+  { Abs — absolute value; return type matches argument type (resolved in semantic) }
+  Sym := TSymbol.Create('Abs', skFunction, FTypeInteger); Define(Sym);
   { Inc/Dec — in-place increment/decrement (var param, 1 or 2 args) }
   Sym := TSymbol.Create('Inc', skProcedure, nil); Define(Sym);
   Sym := TSymbol.Create('Dec', skProcedure, nil); Define(Sym);

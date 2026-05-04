@@ -25,6 +25,7 @@ C_SRCS = $(SRC_DIR)/blaise_arc_class.c \
          $(SRC_DIR)/blaise_exc.c \
          $(SRC_DIR)/blaise_weak.c \
          $(SRC_DIR)/blaise_str_fmt.c \
+         $(SRC_DIR)/blaise_float.c \
          $(SRC_DIR)/blaise_io.c \
          $(SRC_DIR)/blaise_process.c \
          $(SRC_DIR)/blaise_sys_posix.c

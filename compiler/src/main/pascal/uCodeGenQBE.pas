@@ -40,6 +40,9 @@ type
     function  AllocLabel(const APrefix: string): string;
     function  CoerceArg(const AArgTemp: string; AArgExpr: TASTExpr; const AParamQType: string): string;
     function  EmitStrLit(const AValue: string): string;
+    { Emit a class-name string literal as a data-section label expression.
+      Returns '$__cn_ClassName + 12' which can be embedded in another data item. }
+    function  EmitClassNameRef(const AClassName: string): string;
     procedure EmitLine(const ALine: string);
     procedure EmitPendingStrLits;
     procedure EmitDataSection;
@@ -92,7 +95,7 @@ type
       instance referenced by AExpr.  Used by chained field access to traverse
       base nodes without loading record aggregates as scalars. }
     function  EmitInstancePtr(AExpr: TASTExpr): string;
-    function  FieldPtr(const ARecordVar: string; AOffset: Integer): string;
+    function  FieldPtr(const ARecordVar: string; AOffset: Integer; AIsGlobal: Boolean = False): string;
     { Returns the QBE address token for a variable: '$Name' for globals,
       '%_var_Name' for locals. }
     function  VarRef(const AName: string; AIsGlobal: Boolean): string;
@@ -208,6 +211,21 @@ begin
   Result := T;
 end;
 
+function TCodeGenQBE.EmitClassNameRef(const AClassName: string): string;
+{ Emit a dedicated immortal string data item for the class name and return
+  a QBE data-section expression '$__cn_Name + 12' that resolves to the
+  Blaise string data pointer.  QBE supports label+offset relocations in the
+  data section so this can be inlined into another data item. }
+var
+  Mangled: string;
+begin
+  Mangled := QBEMangle(AClassName);
+  { immortal ARC string: refcnt=-1, length, capacity, data, NUL }
+  EmitLine(Format('data $__cn_%s = { w -1, w %d, w %d, b "%s", b 0 }',
+    [Mangled, Length(AClassName), Length(AClassName), AClassName]));
+  Result := '$__cn_' + Mangled + ' + 12';
+end;
+
 procedure TCodeGenQBE.EmitLine(const ALine: string);
 begin
   FOutput.Add(ALine);
@@ -268,6 +286,8 @@ begin
     tyStaticArray:                          Result := 'l';  { base pointer to stack buffer }
     tyPChar:                                Result := 'l';  { opaque C pointer }
     tyProcedural:                           Result := 'l';  { function code pointer }
+    tyDouble:                               Result := 'd';  { 64-bit float }
+    tySingle:                               Result := 's';  { 32-bit float }
   else
     Result := 'w';
   end;
@@ -357,6 +377,18 @@ begin
             EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
           end;
 
+        tyDouble:
+          begin
+            EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
+            EmitLine(Format('  stored d_0, %%_var_%s', [VarName]));
+          end;
+
+        tySingle:
+          begin
+            EmitLine(Format('  %%_var_%s =l alloc4 1', [VarName]));
+            EmitLine(Format('  stores s_0, %%_var_%s', [VarName]));
+          end;
+
         tySet:
           begin
             { Set var: 32-bit bitmask for ≤32 members, 64-bit for 33–64 }
@@ -435,6 +467,10 @@ begin
           EmitLine(Format('export data $%s = { l 0 }', [VarName]));
         tyString, tyClass, tyPointer:
           EmitLine(Format('export data $%s = { l 0 }', [VarName]));
+        tyDouble:
+          EmitLine(Format('export data $%s = { d 0 }', [VarName]));
+        tySingle:
+          EmitLine(Format('export data $%s = { s 0 }', [VarName]));
         tyInterface:
           begin
             EmitLine(Format('export data $%s_obj  = { l 0 }', [VarName]));
@@ -1611,9 +1647,30 @@ begin
   else
   begin
     { Use LHS type (if known) for the store instruction, so that assigning a
-      small int to an Int64 variable uses storel rather than storew. }
+      small int to an Int64 or Double variable uses the correct instruction. }
     if (AAssign.ResolvedLhsType <> nil) and
-       (QbeTypeOf(AAssign.ResolvedLhsType) = 'l') then
+       (AAssign.ResolvedLhsType.Kind = tyDouble) then
+    begin
+      { Double := integer/single — promote rhs to double }
+      ValTemp := EmitExpr(AAssign.Expr);
+      if (AAssign.Expr.ResolvedType <> nil) and
+         (QbeTypeOf(AAssign.Expr.ResolvedType) = 'w') then
+      begin
+        ExtTemp := AllocTemp;
+        EmitLine(Format('  %s =d swtof %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end
+      else if (AAssign.Expr.ResolvedType <> nil) and
+              (AAssign.Expr.ResolvedType.Kind = tySingle) then
+      begin
+        ExtTemp := AllocTemp;
+        EmitLine(Format('  %s =d exts %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end;
+      EmitLine(Format('  stored %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    end
+    else if (AAssign.ResolvedLhsType <> nil) and
+            (QbeTypeOf(AAssign.ResolvedLhsType) = 'l') then
     begin
       ValTemp := EmitExpr(AAssign.Expr);
       if QbeTypeOf(AAssign.Expr.ResolvedType) = 'w' then
@@ -1628,8 +1685,12 @@ begin
     begin
       QType   := QbeTypeOf(AAssign.Expr.ResolvedType);
       ValTemp := EmitExpr(AAssign.Expr);
-      if QType = 'w' then StoreInstr := 'storew'
-                     else StoreInstr := 'storel';
+      case QType of
+        'w': StoreInstr := 'storew';
+        'd': StoreInstr := 'stored';
+        's': StoreInstr := 'stores';
+      else   StoreInstr := 'storel';
+      end;
       EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     end;
   end;
@@ -1745,18 +1806,18 @@ begin
   raise ECodeGenError.Create('EmitInstancePtr: unsupported base expression');
 end;
 
-function TCodeGenQBE.FieldPtr(const ARecordVar: string; AOffset: Integer): string;
+function TCodeGenQBE.FieldPtr(const ARecordVar: string; AOffset: Integer; AIsGlobal: Boolean = False): string;
 var
   PtrTemp: string;
+  Base:    string;
 begin
+  Base := VarRef(ARecordVar, AIsGlobal);
   if AOffset = 0 then
-  begin
-    Result := Format('%%_var_%s', [ARecordVar]);
-  end
+    Result := Base
   else
   begin
     PtrTemp := AllocTemp;
-    EmitLine(Format('  %s =l add %%_var_%s, %d', [PtrTemp, ARecordVar, AOffset]));
+    EmitLine(Format('  %s =l add %s, %d', [PtrTemp, Base, AOffset]));
     Result := PtrTemp;
   end;
 end;
@@ -2141,7 +2202,7 @@ begin
       Ptr := PtrTemp;
   end
   else
-    Ptr := FieldPtr(AAssign.RecordName, AAssign.FieldInfo.Offset);
+    Ptr := FieldPtr(AAssign.RecordName, AAssign.FieldInfo.Offset, AAssign.IsGlobal);
 
   IsStr := AAssign.FieldInfo.TypeDesc.IsString;
   IsArc := IsStr or (AAssign.FieldInfo.TypeDesc.Kind = tyClass);
@@ -2661,7 +2722,11 @@ var
   ImplStr:   string;
   MName:     string;
 begin
-  EmitLine('data $typeinfo_TObject = { l 0, l 0 }');
+  { typeinfo layout: { l parent, l impllist, l nameptr }
+    Slot 0 (offset  0): parent typeinfo pointer (0 = root)
+    Slot 1 (offset  8): impllist pointer (0 = no interfaces)
+    Slot 2 (offset 16): pointer to class name string literal }
+  EmitLine('data $typeinfo_TObject = { l 0, l 0, l ' + EmitClassNameRef('TObject') + ' }');
 
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
@@ -2679,7 +2744,8 @@ begin
     else
       ImplStr := '0';
     EmitLine('data $typeinfo_' + TD.Name +
-             ' = { l ' + ParentStr + ', l ' + ImplStr + ' }');
+             ' = { l ' + ParentStr + ', l ' + ImplStr +
+             ', l ' + EmitClassNameRef(TD.Name) + ' }');
   end;
 
   { Generic instances }
@@ -2693,7 +2759,8 @@ begin
     else
       ParentStr := '0';
     ImplStr := '0';
-    EmitLine('data $typeinfo_' + MName + ' = { l ' + ParentStr + ', l ' + ImplStr + ' }');
+    EmitLine('data $typeinfo_' + MName + ' = { l ' + ParentStr + ', l ' + ImplStr +
+             ', l ' + EmitClassNameRef(GI.TypeName) + ' }');
   end;
 
   EmitLine('');
@@ -3681,6 +3748,49 @@ begin
         Exit;
       end;
 
+      if SameText(FC.Name,'DoubleToStr') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_DoubleToStr(d %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name,'SingleToStr') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_SingleToStr(s %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name,'StrToDouble') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =d call $_StrToDouble(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name,'Abs') then
+      begin
+        L   := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T   := AllocTemp;
+        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
+        case QType of
+          'w': EmitLine(Format('  %s =w call $_AbsInt(w %s)',   [T, L]));
+          'l': EmitLine(Format('  %s =l call $_AbsInt64(l %s)', [T, L]));
+          'd': EmitLine(Format('  %s =d call $fabs(d %s)',      [T, L]));
+          's': EmitLine(Format('  %s =s call $fabsf(s %s)',     [T, L]));
+        else   EmitLine(Format('  %s =w call $_AbsInt(w %s)',   [T, L]));
+        end;
+        Result := T;
+        Exit;
+      end;
+
       if SameText(FC.Name,'StrToInt') then
       begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
@@ -4234,6 +4344,14 @@ begin
     EmitLine(Format('  %s =w copy %s', [T, IntToStr(TIntLiteral(AExpr).Value)]));
     Result := T;
   end
+  else if AExpr is TFloatLiteral then
+  begin
+    T := AllocTemp;
+    { QBE float literal syntax: d_3.14 for double, s_3.14 for single.
+      The type is always Double for unadorned float literals. }
+    EmitLine(Format('  %s =d copy d_%s', [T, TFloatLiteral(AExpr).Value]));
+    Result := T;
+  end
   else if AExpr is TStringLiteral then
   begin
     if TStringLiteral(AExpr).IsCharCoerce then
@@ -4256,6 +4374,35 @@ begin
   else if AExpr is TFieldAccessExpr then
   begin
     FldAccess := TFieldAccessExpr(AExpr);
+
+    { Built-in: Obj.ClassName — load vtable ptr → typeinfo ptr → name slot (offset 16) }
+    if FldAccess.IsClassNameAccess then
+    begin
+      { Step 1: load the class instance pointer }
+      if FldAccess.Base <> nil then
+        L := EmitExpr(FldAccess.Base)
+      else
+        begin
+          T := AllocTemp;
+          EmitLine(Format('  %s =l loadl %s',
+            [T, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+          L := T;
+        end;
+      { Step 2: load vtable pointer from instance[0] }
+      T := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [T, L]));
+      { Step 3: load typeinfo from vtable[0] }
+      Ptr := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [Ptr, T]));
+      { Step 4: load nameptr from typeinfo[16] (third slot) }
+      T := AllocTemp;
+      EmitLine(Format('  %s =l add %s, 16', [T, Ptr]));
+      Ptr := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [Ptr, T]));
+      Result := Ptr;
+      Exit;
+    end;
+
     { Chained access: compute base storage pointer, then load the field from
       (base_ptr + offset) using the field's QBE type. }
     if FldAccess.Base <> nil then
@@ -4532,7 +4679,7 @@ begin
         raise ECodeGenError.Create(Format(
           'Field access ''%s.%s'' has no resolved field info',
           [FldAccess.RecordName, FldAccess.FieldName]));
-      Ptr   := FieldPtr(FldAccess.RecordName, FldAccess.FieldInfo.Offset);
+      Ptr   := FieldPtr(FldAccess.RecordName, FldAccess.FieldInfo.Offset, FldAccess.IsGlobal);
       QType := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       T     := AllocTemp;
       if QType = 'w' then LoadInstr := 'loadw'
@@ -4624,6 +4771,11 @@ begin
         StrLabel := EmitStrLit(TIdentExpr(AExpr).ConstString);
         EmitLine(Format('  %s =l copy %s', [T, StrLabel]));
       end
+      else if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyDouble) then
+        { Float constant stored as text in ConstString }
+        EmitLine(Format('  %s =d copy d_%s', [T, TIdentExpr(AExpr).ConstString]))
+      else if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tySingle) then
+        EmitLine(Format('  %s =s copy s_%s', [T, TIdentExpr(AExpr).ConstString]))
       else if (AExpr.ResolvedType <> nil) and
               (QbeTypeOf(AExpr.ResolvedType) = 'l') then
         EmitLine(Format('  %s =l copy %s', [T, IntToStr(TIdentExpr(AExpr).ConstValue)]))
@@ -4650,21 +4802,20 @@ begin
       Result := VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal);
       Exit;
     end
-    else if TIdentExpr(AExpr).IsGlobal then
-    begin
-      { Global program-level variable: address is $Name in data section }
-      if (AExpr.ResolvedType <> nil) and (QbeTypeOf(AExpr.ResolvedType) = 'w') then
-        EmitLine(Format('  %s =w loadw $%s', [T, TIdentExpr(AExpr).Name]))
-      else
-        EmitLine(Format('  %s =l loadl $%s', [T, TIdentExpr(AExpr).Name]));
-    end
-    else if (AExpr.ResolvedType <> nil) and (QbeTypeOf(AExpr.ResolvedType) = 'l') then
-    begin
-      EmitLine(Format('  %s =l loadl %%_var_%s', [T, TIdentExpr(AExpr).Name]));
-    end
     else
     begin
-      EmitLine(Format('  %s =w loadw %%_var_%s', [T, TIdentExpr(AExpr).Name]));
+      QType := QbeTypeOf(AExpr.ResolvedType);
+      case QType of
+        'w': EmitLine(Format('  %s =w loadw %s',
+               [T, VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal)]));
+        'd': EmitLine(Format('  %s =d loadd %s',
+               [T, VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal)]));
+        's': EmitLine(Format('  %s =s loads %s',
+               [T, VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal)]));
+      else
+        EmitLine(Format('  %s =l loadl %s',
+          [T, VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal)]));
+      end;
     end;
     Result := T;
   end
@@ -4889,6 +5040,72 @@ begin
         Op := 'add';
       end;
       EmitLine(Format('  %s =l %s %s, %s', [T, Op, L, R]));
+    end
+    { Float arithmetic/comparison: QBE uses d/s typed instructions.
+      Integer operands mixed with float are promoted via exts/extd. }
+    else if (BinExpr.ResolvedType <> nil) and BinExpr.ResolvedType.IsFloat then
+    begin
+      { Promote integer operands to double if needed }
+      if (BinExpr.Left.ResolvedType <> nil) and
+         not BinExpr.Left.ResolvedType.IsFloat then
+      begin
+        ArgTemp := AllocTemp;
+        EmitLine(Format('  %s =d swtof %s', [ArgTemp, L]));
+        L := ArgTemp;
+      end;
+      if (BinExpr.Right.ResolvedType <> nil) and
+         not BinExpr.Right.ResolvedType.IsFloat then
+      begin
+        ArgTemp := AllocTemp;
+        EmitLine(Format('  %s =d swtof %s', [ArgTemp, R]));
+        R := ArgTemp;
+      end;
+      case BinExpr.Op of
+        boAdd: Op := 'add';
+        boSub: Op := 'sub';
+        boMul: Op := 'mul';
+        boDiv: Op := 'div';
+      else    Op := 'add';
+      end;
+      EmitLine(Format('  %s =d %s %s, %s', [T, Op, L, R]));
+    end
+    else if BinExpr.ResolvedType.Kind = tyBoolean then
+    begin
+      { Float comparison — at least one operand is float }
+      if (BinExpr.Left.ResolvedType <> nil) and BinExpr.Left.ResolvedType.IsFloat then
+      begin
+        { Both already evaluated; coerce integer side if needed }
+        if (BinExpr.Right.ResolvedType <> nil) and
+           not BinExpr.Right.ResolvedType.IsFloat then
+        begin
+          ArgTemp := AllocTemp;
+          EmitLine(Format('  %s =d swtof %s', [ArgTemp, R]));
+          R := ArgTemp;
+        end;
+        case BinExpr.Op of
+          boEQ: Op := 'ceqd';
+          boNE: Op := 'cned';
+          boLT: Op := 'cltd';
+          boGT: Op := 'cgtd';
+          boLE: Op := 'cled';
+          boGE: Op := 'cged';
+        else    Op := 'ceqd';
+        end;
+        EmitLine(Format('  %s =w %s %s, %s', [T, Op, L, R]));
+      end
+      else
+      begin
+        case BinExpr.Op of
+          boEQ:  Op := 'ceqw';
+          boNE:  Op := 'cnew';
+          boLT:  Op := 'csltw';
+          boGT:  Op := 'csgtw';
+          boLE:  Op := 'cslew';
+          boGE:  Op := 'csgew';
+        else     Op := 'ceqw';
+        end;
+        EmitLine(Format('  %s =w %s %s, %s', [T, Op, L, R]));
+      end;
     end
     else
     begin
