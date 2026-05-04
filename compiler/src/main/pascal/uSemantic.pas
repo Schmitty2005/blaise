@@ -3350,6 +3350,13 @@ begin
     end;
     AAssign.IsClassAccess := ObjType.Kind = tyClass;
     AAssign.FieldInfo     := FldInfo;
+    { Set-literal RHS into a tySet field — analyse with set context. }
+    if (FldInfo.TypeDesc.Kind = tySet) and (AAssign.Expr is TArrayLiteralExpr) then
+    begin
+      AnalyseSetLiteralExpr(TArrayLiteralExpr(AAssign.Expr),
+        TSetTypeDesc(FldInfo.TypeDesc));
+      Exit;
+    end;
     ExprType := AnalyseExpr(AAssign.Expr);
     CheckTypesMatch(FldInfo.TypeDesc, ExprType, 'field assignment',
       AAssign.Line, AAssign.Col);
@@ -3473,6 +3480,13 @@ begin
   end;
 
   AAssign.FieldInfo := FldInfo;
+  { Set-literal RHS into a tySet field — analyse with set context. }
+  if (FldInfo.TypeDesc.Kind = tySet) and (AAssign.Expr is TArrayLiteralExpr) then
+  begin
+    AnalyseSetLiteralExpr(TArrayLiteralExpr(AAssign.Expr),
+      TSetTypeDesc(FldInfo.TypeDesc));
+    Exit;
+  end;
   ExprType := AnalyseExpr(AAssign.Expr);
   CheckTypesMatch(FldInfo.TypeDesc, ExprType, 'field assignment',
     AAssign.Line, AAssign.Col);
@@ -3759,9 +3773,10 @@ begin
       if Par.IsVarParam then
       begin
         { Var argument must be an L-value: simple ident, field access,
-          or pointer-deref-then-field (e.g. P^.Field). }
+          pointer-deref-then-field (P^.F), or pointer deref (P^). }
         if not ((TASTExpr(ACall.Args.Items[I]) is TIdentExpr) or
-                (TASTExpr(ACall.Args.Items[I]) is TFieldAccessExpr)) then
+                (TASTExpr(ACall.Args.Items[I]) is TFieldAccessExpr) or
+                (TASTExpr(ACall.Args.Items[I]) is TDerefExpr)) then
           SemanticError(
             Format('var argument %d of ''%s'' must be a variable',
               [I + 1, ACall.Name]),
@@ -3817,6 +3832,41 @@ begin
                ArgType.Name]),
             ACall.Line, ACall.Col);
       end;
+    end
+    else
+    if SameText(ACall.Name, 'Delete') then
+    begin
+      { Delete(var S: string; Idx, Count: Integer) — string mutator. }
+      if ACall.Args.Count <> 3 then
+        SemanticError('Delete requires exactly 3 arguments',
+          ACall.Line, ACall.Col);
+      ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[0]));
+      if (ArgType = nil) or (ArgType.Kind <> tyString) then
+        SemanticError('First argument of ''Delete'' must be a string variable',
+          ACall.Line, ACall.Col);
+      if not ((TASTExpr(ACall.Args.Items[0]) is TIdentExpr) or
+              (TASTExpr(ACall.Args.Items[0]) is TFieldAccessExpr)) then
+        SemanticError('First argument of ''Delete'' must be an assignable string',
+          ACall.Line, ACall.Col);
+      AnalyseExpr(TASTExpr(ACall.Args.Items[1]));
+      AnalyseExpr(TASTExpr(ACall.Args.Items[2]));
+    end
+    else
+    if SameText(ACall.Name, 'SetLength') then
+    begin
+      { SetLength(var S: string; N: Integer) — string truncate/grow. }
+      if ACall.Args.Count <> 2 then
+        SemanticError('SetLength requires exactly 2 arguments',
+          ACall.Line, ACall.Col);
+      ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[0]));
+      if (ArgType = nil) or (ArgType.Kind <> tyString) then
+        SemanticError('First argument of ''SetLength'' must be a string variable',
+          ACall.Line, ACall.Col);
+      if not ((TASTExpr(ACall.Args.Items[0]) is TIdentExpr) or
+              (TASTExpr(ACall.Args.Items[0]) is TFieldAccessExpr)) then
+        SemanticError('First argument of ''SetLength'' must be an assignable string',
+          ACall.Line, ACall.Col);
+      AnalyseExpr(TASTExpr(ACall.Args.Items[1]));
     end
     else
     begin
@@ -4061,6 +4111,24 @@ begin
       SemanticError('IntToStr requires exactly one argument', AExpr.Line, AExpr.Col);
     AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
     Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'Assigned') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('Assigned requires exactly one argument',
+        AExpr.Line, AExpr.Col);
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    if (ArgType = nil) or
+       not (ArgType.Kind in [tyPointer, tyPChar, tyClass, tyInterface,
+                             tyString, tyProcedural]) then
+      SemanticError(
+        Format('Assigned requires a pointer/class/interface/proc argument, got ''%s''',
+          [ArgType.Name]),
+        AExpr.Line, AExpr.Col);
+    Result := FTable.TypeBoolean;
     AExpr.ResolvedType := Result;
     Exit;
   end;
@@ -4739,6 +4807,13 @@ begin
       Result := FTable.TypeString;
       Exit;
     end;
+    if SameText(AAccess.FieldName, 'ClassType') and (BaseType.Kind = tyClass) then
+    begin
+      AAccess.IsClassTypeAccess := True;
+      AAccess.ResolvedType := FTable.TypePointer;  { TClass = Pointer for now }
+      Result := FTable.TypePointer;
+      Exit;
+    end;
     RT      := TRecordTypeDesc(BaseType);
     FldInfo := RT.FindField(AAccess.FieldName);
     if FldInfo = nil then
@@ -4909,6 +4984,13 @@ begin
     AAccess.IsClassNameAccess := True;
     AAccess.ResolvedType := FTable.TypeString;
     Result := FTable.TypeString;
+    Exit;
+  end;
+  if SameText(AAccess.FieldName, 'ClassType') and (RecSym.TypeDesc.Kind = tyClass) then
+  begin
+    AAccess.IsClassTypeAccess := True;
+    AAccess.ResolvedType := FTable.TypePointer;
+    Result := FTable.TypePointer;
     Exit;
   end;
 

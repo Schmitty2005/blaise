@@ -1024,6 +1024,7 @@ begin
   Define(TSymbol.Create('string',  skType, FTypeString));
   Define(TSymbol.Create('Pointer', skType, FTypePointer));
   Define(TSymbol.Create('PChar',   skType, FTypePChar));
+  Define(TSymbol.Create('TClass',  skType, FTypePointer));  { class metareference; placeholder until tyMetaClass lands }
   Define(TSymbol.Create('Double',  skType, FTypeDouble));
   Define(TSymbol.Create('Single',  skType, FTypeSingle));
 
@@ -1120,6 +1121,12 @@ begin
   { Inc/Dec — in-place increment/decrement (var param, 1 or 2 args) }
   Sym := TSymbol.Create('Inc', skProcedure, nil); Define(Sym);
   Sym := TSymbol.Create('Dec', skProcedure, nil); Define(Sym);
+  { Delete(var S: string; Idx, Count: Integer) — string mutator }
+  Sym := TSymbol.Create('Delete', skProcedure, nil); Define(Sym);
+  { SetLength(var S: string; N: Integer) — string truncate/grow }
+  Sym := TSymbol.Create('SetLength', skProcedure, nil); Define(Sym);
+  { Assigned(P): Boolean — True if P <> nil; accepts pointer/class/proc types }
+  Sym := TSymbol.Create('Assigned', skFunction, FTypeBoolean); Define(Sym);
   { Memory utilities }
   Sym := TSymbol.Create('ZeroMem', skProcedure, nil); Define(Sym);
   { CLI arguments }

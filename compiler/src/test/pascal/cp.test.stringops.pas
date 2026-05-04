@@ -93,6 +93,16 @@ type
     procedure TestSemantic_StringSubscript_NonStringError;
     procedure TestSemantic_StringSubscript_MultiByteCharError;
     procedure TestCodegen_StringSubscript_HashLiteralCoerce;
+
+    { ------------------------------------------------------------------ }
+    { Delete / SetLength                                                  }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_Delete_OK;
+    procedure TestSemantic_Delete_NonStringError;
+    procedure TestCodegen_Delete_CallsRTL;
+    procedure TestSemantic_SetLength_OK;
+    procedure TestSemantic_SetLength_NonStringError;
+    procedure TestCodegen_SetLength_CallsRTL;
   end;
 
 implementation
@@ -730,6 +740,59 @@ begin
   IR := GenIR(Src);
   AssertTrue('loadub for subscript', IRContains(IR, 'loadub'));
   AssertTrue('copy 45 for #45',      IRContains(IR, 'copy 45'));
+end;
+
+{ ------------------------------------------------------------------ }
+{ Delete / SetLength                                                   }
+{ ------------------------------------------------------------------ }
+
+procedure TStringOpsTests.TestSemantic_Delete_OK;
+begin
+  SemanticOK(
+    'program P; var S: string;'           + LineEnding +
+    'begin S := ''hello''; Delete(S, 2, 3) end.');
+end;
+
+procedure TStringOpsTests.TestSemantic_Delete_NonStringError;
+begin
+  SemanticError(
+    'program P; var N: Integer;'          + LineEnding +
+    'begin Delete(N, 1, 1) end.');
+end;
+
+procedure TStringOpsTests.TestCodegen_Delete_CallsRTL;
+var IR: string;
+begin
+  IR := GenIR(
+    'program P; var S: string;'           + LineEnding +
+    'begin S := ''hello''; Delete(S, 2, 3) end.');
+  AssertTrue('emits _StringDelete call', IRContains(IR, 'call $_StringDelete('));
+  AssertTrue('addrefs result',           IRContains(IR, 'call $_StringAddRef'));
+  AssertTrue('releases old value',       IRContains(IR, 'call $_StringRelease'));
+end;
+
+procedure TStringOpsTests.TestSemantic_SetLength_OK;
+begin
+  SemanticOK(
+    'program P; var S: string;'           + LineEnding +
+    'begin S := ''hello''; SetLength(S, 3) end.');
+end;
+
+procedure TStringOpsTests.TestSemantic_SetLength_NonStringError;
+begin
+  SemanticError(
+    'program P; var N: Integer;'          + LineEnding +
+    'begin SetLength(N, 5) end.');
+end;
+
+procedure TStringOpsTests.TestCodegen_SetLength_CallsRTL;
+var IR: string;
+begin
+  IR := GenIR(
+    'program P; var S: string;'           + LineEnding +
+    'begin S := ''hello''; SetLength(S, 3) end.');
+  AssertTrue('emits _StringSetLength call',
+    IRContains(IR, 'call $_StringSetLength('));
 end;
 
 initialization

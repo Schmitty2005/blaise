@@ -47,6 +47,8 @@ procedure _libc_free(Ptr: Pointer);           external name 'free';
 function  _StringLength(S: Pointer): Integer;
 function  _StringPos(Sub, S: Pointer): Integer;
 function  _StringCopy(S: Pointer; From, Count: Integer): Pointer;
+function  _StringDelete(S: Pointer; Idx, Count: Integer): Pointer;
+function  _StringSetLength(S: Pointer; N: Integer): Pointer;
 function  _StringUpperCase(S: Pointer): Pointer;
 function  _StringLowerCase(S: Pointer): Pointer;
 function  _StringTrim(S: Pointer): Pointer;
@@ -222,6 +224,71 @@ begin
     Data := StrData(S);
     MemCopy(StrData(Result), Data + Start, Count);
   end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ _StringDelete(S, Idx, Count) : string                                }
+{                                                                      }
+{ Returns a new string with Count characters removed starting at Idx   }
+{ (1-based).  Out-of-range Idx or non-positive Count returns a copy of }
+{ the input.  Caller owns the returned string (RefCount = 0); callers  }
+{ that overwrite a var-string slot must release the old value first    }
+{ and addref the result, exactly as for _StringCopy.                   }
+{ ------------------------------------------------------------------ }
+
+function _StringDelete(S: Pointer; Idx, Count: Integer): Pointer;
+var
+  SLen, Start, RemoveCount, NewLen: Integer;
+  Data, ResData: PChar;
+begin
+  SLen := StrLen(S);
+  if (Idx < 1) or (Idx > SLen) or (Count <= 0) then
+  begin
+    Result := StrAlloc(SLen);
+    if (Result <> nil) and (SLen > 0) then
+      MemCopy(StrData(Result), StrData(S), SLen);
+    Exit;
+  end;
+  Start := Idx - 1;
+  RemoveCount := Count;
+  if Start + RemoveCount > SLen then
+    RemoveCount := SLen - Start;
+  NewLen := SLen - RemoveCount;
+  Result := StrAlloc(NewLen);
+  if Result = nil then Exit;
+  Data    := StrData(S);
+  ResData := StrData(Result);
+  if Start > 0 then
+    MemCopy(ResData, Data, Start);
+  if NewLen - Start > 0 then
+    MemCopy(ResData + Start, Data + Start + RemoveCount, NewLen - Start);
+end;
+
+{ ------------------------------------------------------------------ }
+{ _StringSetLength(S, N) : string                                      }
+{                                                                      }
+{ Returns a new string of length N.  Truncates if N <= old length;     }
+{ pads with NUL bytes if N is larger.  Caller owns the result.         }
+{ ------------------------------------------------------------------ }
+
+function _StringSetLength(S: Pointer; N: Integer): Pointer;
+var
+  OldLen, CopyLen, I: Integer;
+  Data, ResData:      PChar;
+begin
+  if N < 0 then N := 0;
+  Result := StrAlloc(N);
+  if (Result = nil) or (N = 0) then Exit;
+  if S = nil then OldLen := 0 else OldLen := StrLen(S);
+  if OldLen < N then CopyLen := OldLen else CopyLen := N;
+  ResData := StrData(Result);
+  if CopyLen > 0 then
+  begin
+    Data := StrData(S);
+    MemCopy(ResData, Data, CopyLen);
+  end;
+  for I := CopyLen to N - 1 do
+    ResData[I] := #0;
 end;
 
 { ------------------------------------------------------------------ }

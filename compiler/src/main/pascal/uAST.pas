@@ -101,6 +101,7 @@ type
     ResolvedMethod:    TObject;       { TMethodDecl — not owned; set when IsMethodCall }
     IsGlobal:          Boolean;       { set by uSemantic — RecordName is a program-level global }
     IsClassNameAccess: Boolean;       { set by uSemantic — .ClassName built-in on a class instance }
+    IsClassTypeAccess: Boolean;       { set by uSemantic — .ClassType built-in: returns metaclass (typeinfo ptr) }
     PropIndexExpr: TASTExpr;  { owned — non-nil = indexed property read (e.g. List.Items[i]) }
     destructor Destroy; override;
   end;

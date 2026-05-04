@@ -69,6 +69,14 @@ type
     procedure TestCodegen_IsExpr_PassesTypeInfoLabel;
     procedure TestCodegen_AsExpr_CallsIsInstance;
     procedure TestCodegen_AsExpr_CallsRaiseOnFail;
+
+    { ------------------------------------------------------------------ }
+    { ClassType / TClass intrinsic                                         }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_ClassType_OK;
+    procedure TestSemantic_ClassType_ResolvesToPointer;
+    procedure TestSemantic_TClass_AliasIsPointer;
+    procedure TestCodegen_ClassType_LoadsTypeInfo;
   end;
 
 implementation
@@ -385,6 +393,69 @@ begin
   IR := GenIR(SrcAsExpr);
   AssertTrue('as calls _Raise_InvalidCast on fail',
     Pos('call $_Raise_InvalidCast', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ ClassType / TClass intrinsic                                         }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcClassType =
+    'program P;'                                  + LineEnding +
+    'type'                                        + LineEnding +
+    '  TFoo = class end;'                         + LineEnding +
+    'var F: TFoo; CT: Pointer;'                   + LineEnding +
+    'begin'                                       + LineEnding +
+    '  F := TFoo.Create;'                         + LineEnding +
+    '  CT := F.ClassType'                         + LineEnding +
+    'end.';
+
+procedure TTypeTestTests.TestSemantic_ClassType_OK;
+var P: TProgram;
+begin
+  P := AnalyseSrc(SrcClassType);
+  P.Free;
+end;
+
+procedure TTypeTestTests.TestSemantic_ClassType_ResolvesToPointer;
+var
+  P: TProgram;
+  Assign: TAssignment;
+  Access: TFieldAccessExpr;
+begin
+  P := AnalyseSrc(SrcClassType);
+  try
+    { last stmt is the assignment to CT }
+    Assign := TAssignment(P.Block.Stmts[1]);
+    Access := TFieldAccessExpr(Assign.Expr);
+    AssertTrue('IsClassTypeAccess set', Access.IsClassTypeAccess);
+    AssertEquals('resolved type kind = tyPointer',
+      Ord(tyPointer), Ord(Access.ResolvedType.Kind));
+  finally
+    P.Free;
+  end;
+end;
+
+procedure TTypeTestTests.TestSemantic_TClass_AliasIsPointer;
+var P: TProgram;
+begin
+  { TClass declared as a built-in alias of Pointer — using it for a
+    var declaration must succeed. }
+  P := AnalyseSrc(
+    'program P; var C: TClass;'                   + LineEnding +
+    'begin C := nil end.');
+  P.Free;
+end;
+
+procedure TTypeTestTests.TestCodegen_ClassType_LoadsTypeInfo;
+var IR: string;
+begin
+  IR := GenIR(SrcClassType);
+  { Two indirections: instance → vtable → typeinfo.  We don't pin
+    the exact temp numbers but we can assert the access path is
+    actually emitted (loadl appearing in the assignment). }
+  AssertTrue('codegen emits loadl chain for ClassType',
+    Pos('loadl', IR) > 0);
 end;
 
 initialization

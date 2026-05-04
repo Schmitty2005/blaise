@@ -82,6 +82,12 @@ type
     procedure EmitInheritedCall(ACall: TInheritedCallStmt);
     procedure EmitCaseStmt(AStmt: TCaseStmt);
     procedure EmitProcCall(ACall: TProcCall);
+    { Helper for string-mutator built-ins (Delete, SetLength).
+      ARtlName is the RTL function (e.g. '_StringDelete') and
+      AExtraArgCount is the number of trailing Integer args after the
+      string. Emits ARC-correct release-old/addref-new/store sequence. }
+    procedure EmitStringMutator(ACall: TProcCall;
+      const ARtlName: string; AExtraArgCount: Integer);
     procedure EmitPointerWrite(AStmt: TPointerWriteStmt);
     procedure EmitStaticSubscriptAssign(AStmt: TStaticSubscriptAssign);
     procedure EmitWrite(ACall: TProcCall; ANewline: Boolean);
@@ -105,6 +111,11 @@ type
       its local slot contains a pointer — emit loadl to obtain the original
       caller's address.  For plain locals/globals VarRef suffices. }
     function  EmitVarArgAddr(AIdent: TIdentExpr): string;
+    { Generalised L-value address: handles TIdentExpr (delegates to
+      EmitVarArgAddr), TDerefExpr (P^ — yields the pointer value as the
+      address), and TFieldAccessExpr (R.F or P^.F — base address +
+      field offset).  Used for var-argument passing. }
+    function  EmitLValueAddr(AExpr: TASTExpr): string;
     { Emit a record-returning function/method call with an explicit sret address.
       The callee receives ASretAddr as its first (hidden) parameter and writes
       the result there instead of returning it.  Handles TFuncCallExpr,
@@ -1875,6 +1886,51 @@ begin
     Result := VarRef(AIdent.Name, AIdent.IsGlobal);
 end;
 
+function TCodeGenQBE.EmitLValueAddr(AExpr: TASTExpr): string;
+var
+  Deref:    TDerefExpr;
+  FldAcc:   TFieldAccessExpr;
+  BaseAddr: string;
+  RT:       TRecordTypeDesc;
+  FldInfo:  TFieldInfo;
+  T:        string;
+begin
+  if AExpr is TIdentExpr then
+  begin
+    Result := EmitVarArgAddr(TIdentExpr(AExpr));
+    Exit;
+  end;
+  if AExpr is TDerefExpr then
+  begin
+    { P^ as L-value: the pointer's value IS the address. }
+    Deref := TDerefExpr(AExpr);
+    Result := EmitExpr(Deref.Expr);
+    Exit;
+  end;
+  if AExpr is TFieldAccessExpr then
+  begin
+    FldAcc := TFieldAccessExpr(AExpr);
+    if FldAcc.Base <> nil then
+      BaseAddr := EmitInstancePtr(FldAcc.Base)
+    else
+      BaseAddr := VarRef(FldAcc.RecordName, FldAcc.IsGlobal);
+    if (FldAcc.ResolvedType <> nil) and
+       (FldAcc.FieldInfo <> nil) and (FldAcc.FieldInfo.Offset > 0) then
+    begin
+      RT := nil;
+      FldInfo := FldAcc.FieldInfo;
+      T := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d',
+        [T, BaseAddr, FldInfo.Offset]));
+      Result := T;
+    end
+    else
+      Result := BaseAddr;
+    Exit;
+  end;
+  raise ECodeGenError.Create('Unsupported L-value form for var argument');
+end;
+
 function TCodeGenQBE.IsRecordCall(AExpr: TASTExpr): Boolean;
 var
   MDecl: TMethodDecl;
@@ -2006,7 +2062,7 @@ begin
       Par := TMethodParam(MDecl.Params.Items[I]);
       if Par.IsVarParam then
         ArgLine := ArgLine + Format(', l %s',
-          [EmitVarArgAddr(TIdentExpr(TASTExpr(FCallExpr.Args.Items[I])))])
+          [EmitLValueAddr(TASTExpr(FCallExpr.Args.Items[I]))])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(FCallExpr.Args.Items[I]));
@@ -2030,7 +2086,7 @@ begin
       Par := TMethodParam(MDecl.Params.Items[I]);
       if Par.IsVarParam then
         ArgLine := ArgLine + Format(', l %s',
-          [EmitVarArgAddr(TIdentExpr(TASTExpr(MCallExpr.Args.Items[I])))])
+          [EmitLValueAddr(TASTExpr(MCallExpr.Args.Items[I]))])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
@@ -2323,7 +2379,7 @@ begin
       Par := TMethodParam(MDecl.Params.Items[I]);
       if Par.IsVarParam then
         ArgLine := ArgLine + Format(', l %s',
-          [EmitVarArgAddr(TIdentExpr(TASTExpr(ACall.Args.Items[I])))])
+          [EmitLValueAddr(TASTExpr(ACall.Args.Items[I]))])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
@@ -2409,7 +2465,7 @@ begin
     Par := TMethodParam(MDecl.Params.Items[I]);
     if Par.IsVarParam then
       ArgLine := ArgLine + Format(', l %s',
-        [EmitVarArgAddr(TIdentExpr(TASTExpr(ACall.Args.Items[I])))])
+        [EmitLValueAddr(TASTExpr(ACall.Args.Items[I]))])
     else
     begin
       ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
@@ -3325,7 +3381,7 @@ begin
       end
       else if Par.IsVarParam then
         ArgLine := ArgLine + Format('l %s',
-          [EmitVarArgAddr(TIdentExpr(TASTExpr(ACall.Args.Items[I])))])
+          [EmitLValueAddr(TASTExpr(ACall.Args.Items[I]))])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
@@ -3483,9 +3539,57 @@ begin
     ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[0]));
     EmitLine(Format('  call $_ProcessFree(l %s)', [ArgTemp]));
   end
+  else if UCaseName = 'DELETE' then
+  begin
+    { Delete(var S; Idx, Count) — string mutator. Emits:
+        new := _StringDelete(loadl(addr), idx, count);
+        addref new; release old; store new. }
+    EmitStringMutator(ACall, '_StringDelete', 2);
+  end
+  else if UCaseName = 'SETLENGTH' then
+  begin
+    { SetLength(var S; N) — string mutator. }
+    EmitStringMutator(ACall, '_StringSetLength', 1);
+  end
   else
     raise ECodeGenError.Create(Format(
       'Unknown procedure ''%s'' at line %d', [ACall.Name, ACall.Line]));
+end;
+
+procedure TCodeGenQBE.EmitStringMutator(ACall: TProcCall;
+  const ARtlName: string; AExtraArgCount: Integer);
+var
+  Addr:     string;
+  OldTemp:  string;
+  NewTemp:  string;
+  ArgLine:  string;
+  Extra:    string;
+  I:        Integer;
+begin
+  { Address of the string slot (works for plain idents, var params,
+    implicit-Self fields).  Field-access targets (R.F or P^.F) are not
+    supported here — semantic enforces the L-value forms we accept. }
+  if TASTExpr(ACall.Args.Items[0]) is TIdentExpr then
+    Addr := EmitVarArgAddr(TIdentExpr(TASTExpr(ACall.Args.Items[0])))
+  else
+    raise ECodeGenError.Create(
+      'String mutator on non-ident receiver not yet supported');
+
+  OldTemp := AllocTemp;
+  EmitLine(Format('  %s =l loadl %s', [OldTemp, Addr]));
+
+  ArgLine := Format('l %s', [OldTemp]);
+  for I := 1 to AExtraArgCount do
+  begin
+    Extra := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+    ArgLine := ArgLine + Format(', w %s', [Extra]);
+  end;
+
+  NewTemp := AllocTemp;
+  EmitLine(Format('  %s =l call $%s(%s)', [NewTemp, ARtlName, ArgLine]));
+  EmitLine(Format('  call $_StringAddRef(l %s)', [NewTemp]));
+  EmitLine(Format('  call $_StringRelease(l %s)', [OldTemp]));
+  EmitLine(Format('  storel %s, %s', [NewTemp, Addr]));
 end;
 
 procedure TCodeGenQBE.EmitPointerWrite(AStmt: TPointerWriteStmt);
@@ -3764,6 +3868,16 @@ begin
         R := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_StringSameText(l %s, l %s)', [T, L, R]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name,'Assigned') then
+      begin
+        { Assigned(P) ≡ P <> nil — emit a pointer comparison. }
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w cnel %s, 0', [T, L]));
         Result := T;
         Exit;
       end;
@@ -4223,7 +4337,7 @@ begin
         end
         else if Par.IsVarParam then
           ArgLine := ArgLine + Format('l %s',
-            [EmitVarArgAddr(TIdentExpr(TASTExpr(FC.Args.Items[I])))])
+            [EmitLValueAddr(TASTExpr(FC.Args.Items[I]))])
         else
         begin
           ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
@@ -4355,7 +4469,7 @@ begin
       Par := TMethodParam(MDecl.Params.Items[I]);
       if Par.IsVarParam then
         ArgLine := ArgLine + Format(', l %s',
-          [EmitVarArgAddr(TIdentExpr(TASTExpr(MCallExpr.Args.Items[I])))])
+          [EmitLValueAddr(TASTExpr(MCallExpr.Args.Items[I]))])
       else
       begin
         ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
@@ -4449,6 +4563,29 @@ begin
       { Step 4: load nameptr from typeinfo[16] (third slot) }
       T := AllocTemp;
       EmitLine(Format('  %s =l add %s, 16', [T, Ptr]));
+      Ptr := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [Ptr, T]));
+      Result := Ptr;
+      Exit;
+    end;
+
+    { Built-in: Obj.ClassType — returns the typeinfo pointer (the value
+      stored at vtable[0]).  Two indirections: instance → vtable → typeinfo. }
+    if FldAccess.IsClassTypeAccess then
+    begin
+      if FldAccess.Base <> nil then
+        L := EmitExpr(FldAccess.Base)
+      else
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s',
+          [T, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+        L := T;
+      end;
+      { vtable pointer at instance[0] }
+      T := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [T, L]));
+      { typeinfo pointer at vtable[0] }
       Ptr := AllocTemp;
       EmitLine(Format('  %s =l loadl %s', [Ptr, T]));
       Result := Ptr;
