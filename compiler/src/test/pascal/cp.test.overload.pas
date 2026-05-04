@@ -46,6 +46,26 @@ type
 
     { Codegen: call sites resolve to the correct mangled name based on arg count }
     procedure TestCodegen_CallSite_ResolvesByArity;
+
+    { Phase B — type-distinct resolution }
+
+    { Two same-arity overloads distinguished only by parameter type }
+    procedure TestSemantic_TypeDistinct_BothRegistered;
+
+    { Codegen: per-type mangled names use the type-code scheme }
+    procedure TestCodegen_TypeDistinct_DistinctQBENames;
+
+    { Resolution: exact-type match preferred over widening (Integer
+      argument selects Integer overload, not Double overload) }
+    procedure TestCodegen_ExactMatch_BeatsWidening;
+
+    { Resolution: when no exact match, widening is taken (Integer argument
+      selects Double overload when no Integer overload exists) }
+    procedure TestCodegen_WideningMatch_Used;
+
+    { Two same-arity overloads where the argument is an exact match for
+      neither but a widening match for both — must be flagged ambiguous }
+    procedure TestSemantic_AmbiguousOverload_RaisesError;
   end;
 
 implementation
@@ -168,6 +188,63 @@ const
     '  Greet(1, 2)'                                         + LineEnding +
     'end.';
 
+  SrcTypeDistinct =
+    'program P;'                                            + LineEnding +
+    'procedure Show(N: Integer); overload;'                 + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  WriteLn(N)'                                          + LineEnding +
+    'end;'                                                  + LineEnding +
+    'procedure Show(S: string); overload;'                  + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  WriteLn(S)'                                          + LineEnding +
+    'end;'                                                  + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  Show(42);'                                           + LineEnding +
+    '  Show(''hi'')'                                        + LineEnding +
+    'end.';
+
+  { Two same-arity overloads — Integer + Double.  Calling with an
+    Integer literal must pick the Integer overload (exact match). }
+  SrcExactBeatsWidening =
+    'program P;'                                            + LineEnding +
+    'procedure F(N: Integer); overload;'                    + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  WriteLn(N)'                                          + LineEnding +
+    'end;'                                                  + LineEnding +
+    'procedure F(D: Double); overload;'                     + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  WriteLn(DoubleToStr(D))'                             + LineEnding +
+    'end;'                                                  + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  F(42)'                                               + LineEnding +
+    'end.';
+
+  { Single Double overload, called with Integer — widening succeeds. }
+  SrcWideningUsed =
+    'program P;'                                            + LineEnding +
+    'procedure F(D: Double); overload;'                     + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  WriteLn(DoubleToStr(D))'                             + LineEnding +
+    'end;'                                                  + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  F(42)'                                               + LineEnding +
+    'end.';
+
+  { Two same-arity overloads — Int64 + Double — both reachable from
+    Integer only by widening.  Argument 42 (Integer) matches both via
+    widening with equal score → ambiguous. }
+  SrcAmbiguousOverload =
+    'program P;'                                            + LineEnding +
+    'procedure F(N: Int64); overload;'                      + LineEnding +
+    'begin'                                                 + LineEnding +
+    'end;'                                                  + LineEnding +
+    'procedure F(D: Double); overload;'                     + LineEnding +
+    'begin'                                                 + LineEnding +
+    'end;'                                                  + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  F(42)'                                               + LineEnding +
+    'end.';
+
 { ------------------------------------------------------------------ }
 { Tests                                                               }
 { ------------------------------------------------------------------ }
@@ -221,13 +298,12 @@ var
   IR: string;
 begin
   IR := GenIR(SrcTwoArities);
-  { Each overload must produce its own QBE function definition. The exact
-    mangling scheme is a Phase A internal detail (arity-suffixed for now,
-    type-coded later). We assert distinctness via the suffix presence. }
-  AssertTrue('arity-0 overload defined',
-    Pos('function $Greet$N0(', IR) > 0);
-  AssertTrue('arity-1 overload defined',
-    Pos('function $Greet$N1(', IR) > 0);
+  { Type-code mangling: zero-arg overload is '$' (empty signature),
+    Integer overload is '$i'. }
+  AssertTrue('zero-arg overload defined',
+    Pos('function $Greet$(', IR) > 0);
+  AssertTrue('Integer overload defined',
+    Pos('function $Greet$i(', IR) > 0);
 end;
 
 procedure TOverloadTests.TestCodegen_CallSite_ResolvesByArity;
@@ -235,10 +311,66 @@ var
   IR: string;
 begin
   IR := GenIR(SrcTwoArities);
-  AssertTrue('arity-0 call site mangled',
-    Pos('call $Greet$N0(', IR) > 0);
-  AssertTrue('arity-1 call site mangled',
-    Pos('call $Greet$N1(', IR) > 0);
+  AssertTrue('zero-arg call site mangled',
+    Pos('call $Greet$(', IR) > 0);
+  AssertTrue('Integer call site mangled',
+    Pos('call $Greet$i(', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Phase B — type-distinct resolution                                  }
+{ ------------------------------------------------------------------ }
+
+procedure TOverloadTests.TestSemantic_TypeDistinct_BothRegistered;
+var
+  Prog: TProgram;
+begin
+  Prog := AnalyseSrc(SrcTypeDistinct);
+  try
+    AssertEquals('both proc decls survive', 2, Prog.Block.ProcDecls.Count);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TOverloadTests.TestCodegen_TypeDistinct_DistinctQBENames;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcTypeDistinct);
+  AssertTrue('Integer-typed overload uses ''i'' suffix',
+    Pos('function $Show$i(', IR) > 0);
+  AssertTrue('string-typed overload uses ''S'' suffix',
+    Pos('function $Show$S(', IR) > 0);
+  AssertTrue('Integer call site mangled',
+    Pos('call $Show$i(', IR) > 0);
+  AssertTrue('string call site mangled',
+    Pos('call $Show$S(', IR) > 0);
+end;
+
+procedure TOverloadTests.TestCodegen_ExactMatch_BeatsWidening;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcExactBeatsWidening);
+  AssertTrue('exact-match overload selected (Integer)',
+    Pos('call $F$i(', IR) > 0);
+  AssertFalse('widening overload not selected (Double)',
+    Pos('call $F$d(', IR) > 0);
+end;
+
+procedure TOverloadTests.TestCodegen_WideningMatch_Used;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcWideningUsed);
+  AssertTrue('widening overload selected (Double)',
+    Pos('call $F$d(', IR) > 0);
+end;
+
+procedure TOverloadTests.TestSemantic_AmbiguousOverload_RaisesError;
+begin
+  AnalyseExpectError(SrcAmbiguousOverload);
 end;
 
 initialization

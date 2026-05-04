@@ -78,12 +78,23 @@ type
     procedure AnalyseAssignment(AAssign: TAssignment);
     procedure AnalyseFieldAssignment(AAssign: TFieldAssignment);
     procedure AnalyseProcCall(ACall: TProcCall);
-    { Phase A overload resolution: walks FProcIndex collecting all decls
-      whose name matches AName (case-insensitive), then returns the one
-      whose param count matches AArity.  Returns nil if no match.
-      Raises ESemanticError on no-match or ambiguity (Phase B). }
+    { Phase A/B overload resolution.  Walks FProcIndex collecting all
+      decls whose name matches AName (case-insensitive); filters by
+      arity; for the survivors, scores per-argument compatibility
+      using AArgs (each TASTExpr already analysed, ResolvedType set);
+      returns the highest-scoring candidate.  Raises ESemanticError on
+      "no matching overload" or ambiguous ties.  AArgs may be nil for
+      a pure arity probe (used when args are not yet analysed). }
     function  ResolveStandaloneOverload(const AName: string;
-      AArity: Integer): TMethodDecl;
+      AArity: Integer; AArgs: TObjectList;
+      ALine, ACol: Integer): TMethodDecl;
+    { Type-code suffix for a single parameter.  Phase B mangling. }
+    function  MangleTypeCode(AType: TTypeDesc; AVarParam: Boolean): string;
+    { Full mangled signature for a TMethodDecl: '$<code1><code2>…'.
+      Empty parameter list yields '$' (lone dollar). }
+    function  MangleParamSig(ADecl: TMethodDecl): string;
+    { Per-arg compatibility: 2 = exact, 1 = widening, 0 = no match. }
+    function  ArgMatchScore(AParam: TTypeDesc; AArg: TTypeDesc): Integer;
     procedure AnalyseMethodCall(ACall: TMethodCallStmt);
     procedure AnalyseInheritedCall(ACall: TInheritedCallStmt);
     procedure AnalyseCaseStmt(AStmt: TCaseStmt);
@@ -2149,10 +2160,10 @@ begin
       end;
     end;
 
-    { Compute the QBE-emit name.  Phase A: overloads get an arity suffix
-      ('$N<arity>'); non-overloaded decls keep their plain name. }
+    { Compute the QBE-emit name.  Phase B: overloads get a type-code
+      suffix ('$<codes>'); non-overloaded decls keep their plain name. }
     if ADecl.IsOverload then
-      ADecl.ResolvedQbeName := ADecl.Name + '$N' + IntToStr(ADecl.Params.Count)
+      ADecl.ResolvedQbeName := ADecl.Name + '$' + MangleParamSig(ADecl)
     else
       ADecl.ResolvedQbeName := ADecl.Name;
 
@@ -3145,35 +3156,211 @@ begin
     AAssign.Line, AAssign.Col);
 end;
 
-function TSemanticAnalyser.ResolveStandaloneOverload(const AName: string;
-  AArity: Integer): TMethodDecl;
+function TSemanticAnalyser.MangleTypeCode(AType: TTypeDesc;
+  AVarParam: Boolean): string;
 var
-  I:        Integer;
-  Cand:     TMethodDecl;
-  Match:    TMethodDecl;
-  TotalCnt: Integer;
+  Base: string;
+  PT:   TPointerTypeDesc;
 begin
-  Match    := nil;
-  TotalCnt := 0;
-  for I := 0 to FProcIndex.Count - 1 do
-    if SameText(FProcIndex.Strings[I], AName) then
-    begin
-      Inc(TotalCnt);
-      Cand := TMethodDecl(FProcIndex.Objects[I]);
-      if Cand.Params.Count = AArity then
-      begin
-        Match := Cand;
-        { Phase A: take the first arity match.  Phase B will refine via
-          type-compatibility scoring when multiple candidates share an arity. }
-        Break;
-      end;
-    end;
-  if (TotalCnt = 0) and (Match = nil) then
+  if AType = nil then
   begin
-    Result := nil;
+    Result := '?';
     Exit;
   end;
-  Result := Match;  { nil = candidates exist but none with this arity }
+  case AType.Kind of
+    tyInteger:  Base := 'i';
+    tyInt64:    Base := 'l';
+    tyUInt32:   Base := 'u';
+    tyByte:     Base := 'y';
+    tyBoolean:  Base := 'b';
+    tyDouble:   Base := 'd';
+    tySingle:   Base := 's';
+    tyString:   Base := 'S';
+    tyPChar:    Base := 'C';
+    tyEnum:     Base := 'E' + AType.Name;
+    tyRecord:   Base := 'R' + AType.Name;
+    tyClass:    Base := 'K' + AType.Name;
+    tyInterface:Base := 'I' + AType.Name;
+    tyPointer:
+      begin
+        PT := TPointerTypeDesc(AType);
+        if (PT.BaseType = nil) then
+          Base := 'p'
+        else
+          Base := '^' + MangleTypeCode(PT.BaseType, False);
+      end;
+    tyOpenArray: Base := 'A' + MangleTypeCode(
+                          TOpenArrayTypeDesc(AType).ElementType, False);
+    tySet:       Base := 'T' + AType.Name;
+    tyProcedural:Base := 'F' + AType.Name;
+  else
+    Base := '?';
+  end;
+  if AVarParam then
+    Result := '@' + Base
+  else
+    Result := Base;
+end;
+
+function TSemanticAnalyser.MangleParamSig(ADecl: TMethodDecl): string;
+var
+  I:   Integer;
+  Par: TMethodParam;
+begin
+  Result := '';
+  for I := 0 to ADecl.Params.Count - 1 do
+  begin
+    Par    := TMethodParam(ADecl.Params.Items[I]);
+    Result := Result + MangleTypeCode(Par.ResolvedType, Par.IsVarParam);
+  end;
+end;
+
+function TSemanticAnalyser.ArgMatchScore(AParam: TTypeDesc;
+  AArg: TTypeDesc): Integer;
+begin
+  Result := 0;
+  if (AParam = nil) or (AArg = nil) then Exit;
+  if AParam = AArg then
+  begin
+    Result := 2;  { exact match — same descriptor instance }
+    Exit;
+  end;
+  { Same-kind, same-name, structurally identical types count as exact —
+    catches multiple TOpenArrayTypeDesc instances over the same element. }
+  if (AParam.Kind = tyOpenArray) and (AArg.Kind = tyOpenArray) and
+     (TOpenArrayTypeDesc(AParam).ElementType =
+      TOpenArrayTypeDesc(AArg).ElementType) then
+  begin
+    Result := 2;
+    Exit;
+  end;
+  { Same numeric kind = exact match (same kind, just possibly different
+    descriptor instance). }
+  if AParam.IsNumeric and AArg.IsNumeric and (AParam.Kind = AArg.Kind) then
+  begin
+    Result := 2;
+    Exit;
+  end;
+  { Numeric widening: both numerics, kinds differ.  Captures
+    Integer→Int64, Integer→Double, Single→Double, Byte→Integer, etc. }
+  if AParam.IsNumeric and AArg.IsNumeric then
+  begin
+    Result := 1;
+    Exit;
+  end;
+  { Fall-through: probe full assignability via CheckTypesMatch.  This
+    covers nil-literal, class subtypes, untyped-Pointer compatibility,
+    enum/integer crossover, procedural-type signature compatibility,
+    and similar.  Cost 1 (widening). }
+  try
+    CheckTypesMatch(AParam, AArg, '', 0, 0);
+    Result := 1;
+  except
+    on E: ESemanticError do
+      Result := 0;
+  end;
+end;
+
+function TSemanticAnalyser.ResolveStandaloneOverload(const AName: string;
+  AArity: Integer; AArgs: TObjectList; ALine, ACol: Integer): TMethodDecl;
+var
+  I, J:        Integer;
+  Cand:        TMethodDecl;
+  ArityMatch:  TList;
+  Score:       Integer;
+  ArgScore:    Integer;
+  Par:         TMethodParam;
+  Arg:         TASTExpr;
+  BestScore:   Integer;
+  BestCount:   Integer;
+  Best:        TMethodDecl;
+  TotalCnt:    Integer;
+begin
+  Result    := nil;
+  TotalCnt  := 0;
+  ArityMatch := TList.Create;
+  try
+    for I := 0 to FProcIndex.Count - 1 do
+      if SameText(FProcIndex.Strings[I], AName) then
+      begin
+        Inc(TotalCnt);
+        Cand := TMethodDecl(FProcIndex.Objects[I]);
+        if Cand.Params.Count = AArity then
+          ArityMatch.Add(Cand);
+      end;
+
+    if TotalCnt = 0 then Exit;  { caller treats as "no decl found" }
+
+    if ArityMatch.Count = 0 then
+      SemanticError(
+        Format('No matching overload for ''%s'' with %d argument(s)',
+          [AName, AArity]),
+        ALine, ACol);
+
+    { With no args supplied, accept the unique arity match — used by
+      callers that haven't analysed their args yet.  Ambiguity is then
+      caught when the caller re-resolves with arg types. }
+    if (AArgs = nil) or (AArity = 0) then
+    begin
+      if ArityMatch.Count = 1 then
+      begin
+        Result := TMethodDecl(ArityMatch[0]);
+        Exit;
+      end;
+      { zero-arg ambiguity is impossible — same name + zero params would
+        have been rejected by the symbol-table chain, but be defensive. }
+      if AArity = 0 then
+        SemanticError(
+          Format('Ambiguous overload of ''%s''', [AName]),
+          ALine, ACol);
+      { Multiple arity matches but no args to score with — keep nil. }
+      Exit;
+    end;
+
+    BestScore := -1;
+    BestCount := 0;
+    Best      := nil;
+    for I := 0 to ArityMatch.Count - 1 do
+    begin
+      Cand  := TMethodDecl(ArityMatch[I]);
+      Score := 0;
+      for J := 0 to AArity - 1 do
+      begin
+        Par      := TMethodParam(Cand.Params.Items[J]);
+        Arg      := TASTExpr(AArgs.Items[J]);
+        ArgScore := ArgMatchScore(Par.ResolvedType, Arg.ResolvedType);
+        if ArgScore = 0 then
+        begin
+          Score := -1;  { drop this candidate }
+          Break;
+        end;
+        Score := Score + ArgScore;
+      end;
+      if Score < 0 then Continue;
+      if Score > BestScore then
+      begin
+        BestScore := Score;
+        BestCount := 1;
+        Best      := Cand;
+      end
+      else if Score = BestScore then
+        Inc(BestCount);
+    end;
+
+    if BestScore < 0 then
+      SemanticError(
+        Format('No matching overload for ''%s'' with %d argument(s)',
+          [AName, AArity]),
+        ALine, ACol);
+    if BestCount > 1 then
+      SemanticError(
+        Format('Ambiguous overload of ''%s'' — multiple candidates match equally',
+          [AName]),
+        ALine, ACol);
+    Result := Best;
+  finally
+    ArityMatch.Free;
+  end;
 end;
 
 procedure TSemanticAnalyser.AnalyseProcCall(ACall: TProcCall);
@@ -3226,44 +3413,41 @@ begin
       Format('''%s'' is not a procedure or function', [ACall.Name]),
       ACall.Line, ACall.Col);
 
-  { For user-defined procs/funcs, validate arg count and types }
+  { For user-defined procs/funcs, validate arg count and types.
+    Phase B: analyse all args FIRST so overload resolution can score
+    them by type, then re-validate the chosen overload's parameter
+    modes (var/out arguments). }
   Idx := FProcIndex.IndexOf(ACall.Name);
   if Idx >= 0 then
   begin
-    MDecl := ResolveStandaloneOverload(ACall.Name, ACall.Args.Count);
+    for I := 0 to ACall.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+
+    MDecl := ResolveStandaloneOverload(ACall.Name, ACall.Args.Count,
+      ACall.Args, ACall.Line, ACall.Col);
     if MDecl = nil then
       SemanticError(
         Format('No matching overload for ''%s'' with %d argument(s)',
           [ACall.Name, ACall.Args.Count]),
         ACall.Line, ACall.Col);
-    if ACall.Args.Count <> MDecl.Params.Count then
-      SemanticError(
-        Format('Procedure ''%s'' expects %d argument(s) but got %d',
-          [ACall.Name, MDecl.Params.Count, ACall.Args.Count]),
-        ACall.Line, ACall.Col);
+
     for I := 0 to ACall.Args.Count - 1 do
     begin
       Par := TMethodParam(MDecl.Params.Items[I]);
       if Par.IsVarParam then
       begin
-        { var parameter: argument must be a simple variable }
         if not (TASTExpr(ACall.Args.Items[I]) is TIdentExpr) then
           SemanticError(
             Format('var argument %d of ''%s'' must be a variable',
               [I + 1, ACall.Name]),
             ACall.Line, ACall.Col);
-        ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+        ArgType := TASTExpr(ACall.Args.Items[I]).ResolvedType;
         CheckTypesMatch(Par.ResolvedType, ArgType,
           Format('var argument %d of ''%s''', [I + 1, ACall.Name]),
           ACall.Line, ACall.Col);
-      end
-      else
-      begin
-        ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
-        CheckTypesMatch(Par.ResolvedType, ArgType,
-          Format('argument %d of ''%s''', [I + 1, ACall.Name]),
-          ACall.Line, ACall.Col);
       end;
+      { Non-var argument compatibility was verified by overload scoring;
+        no second CheckTypesMatch needed here. }
     end;
     ACall.ResolvedDecl := MDecl;
   end
@@ -3826,27 +4010,17 @@ begin
       Format('Cannot find declaration for function ''%s''', [AExpr.Name]),
       AExpr.Line, AExpr.Col);
 
-  MDecl := ResolveStandaloneOverload(AExpr.Name, AExpr.Args.Count);
+  { Phase B: analyse args first, then score overloads by argument type. }
+  for I := 0 to AExpr.Args.Count - 1 do
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+
+  MDecl := ResolveStandaloneOverload(AExpr.Name, AExpr.Args.Count,
+    AExpr.Args, AExpr.Line, AExpr.Col);
   if MDecl = nil then
     SemanticError(
       Format('No matching overload for ''%s'' with %d argument(s)',
         [AExpr.Name, AExpr.Args.Count]),
       AExpr.Line, AExpr.Col);
-
-  if AExpr.Args.Count <> MDecl.Params.Count then
-    SemanticError(
-      Format('Function ''%s'' expects %d argument(s) but got %d',
-        [AExpr.Name, MDecl.Params.Count, AExpr.Args.Count]),
-      AExpr.Line, AExpr.Col);
-
-  for I := 0 to AExpr.Args.Count - 1 do
-  begin
-    ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
-    Par     := TMethodParam(MDecl.Params.Items[I]);
-    CheckTypesMatch(Par.ResolvedType, ArgType,
-      Format('argument %d of ''%s''', [I + 1, AExpr.Name]),
-      AExpr.Line, AExpr.Col);
-  end;
 
   AExpr.ResolvedDecl := MDecl;
   Result := MDecl.ResolvedReturnType;
