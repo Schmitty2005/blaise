@@ -88,6 +88,15 @@ type
     function  ResolveStandaloneOverload(const AName: string;
       AArity: Integer; AArgs: TObjectList;
       ALine, ACol: Integer): TMethodDecl;
+    { Class-method overload resolution.  Walks the inheritance chain
+      starting at ATypeName, collecting candidates whose method name
+      matches AMethodName.  Filters by arity, scores by argument type
+      (Phase B rules), returns the best match.  Raises ESemanticError
+      on no-match or ambiguity.  AArgs may be nil to fall back to
+      first-name-match (used by paths that need the decl before args
+      are analysed, e.g. zero-arg lookups). }
+    function  ResolveMethodOverload(const ATypeName, AMethodName: string;
+      AArgs: TObjectList; ALine, ACol: Integer): TMethodDecl;
     { Type-code suffix for a single parameter.  Phase B mangling. }
     function  MangleTypeCode(AType: TTypeDesc; AVarParam: Boolean): string;
     { Full mangled signature for a TMethodDecl: '$<code1><code2>…'.
@@ -702,33 +711,62 @@ end;
 
 procedure TSemanticAnalyser.LinkClassMethodImpls(ABlock: TBlock);
 var
-  I:    Integer;
-  Decl: TMethodDecl;
-  Key:  string;
-  Idx:  Integer;
-  CD:   TMethodDecl;
+  I, J, K:  Integer;
+  Decl:     TMethodDecl;
+  Key:      string;
+  CD:       TMethodDecl;
+  Match:    TMethodDecl;
+  ImplSig:  string;
+  Par:      TMethodParam;
 begin
   for I := 0 to ABlock.ProcDecls.Count - 1 do
   begin
     Decl := TMethodDecl(ABlock.ProcDecls.Items[I]);
     if Decl.OwnerTypeName = '' then Continue;
     if Decl.OwnerTypeParams <> nil then Continue;  { generic owner — handled by LinkGenericClassMethodImpls }
-    Key := Decl.OwnerTypeName + '.' + Decl.Name;
-    Idx := FMethodIndex.IndexOf(Key);
-    if Idx < 0 then
+
+    { Resolve impl param types so we can compute its signature for matching. }
+    for J := 0 to Decl.Params.Count - 1 do
+    begin
+      Par              := TMethodParam(Decl.Params.Items[J]);
+      Par.ResolvedType := ResolveParamType(Par, Decl.Line, Decl.Col);
+    end;
+    ImplSig := MangleParamSig(Decl);
+
+    Key   := Decl.OwnerTypeName + '.' + Decl.Name;
+    Match := nil;
+    for K := 0 to FMethodIndex.Count - 1 do
+      if SameText(FMethodIndex.Strings[K], Key) then
+      begin
+        CD := TMethodDecl(FMethodIndex.Objects[K]);
+        if CD.IsOverload then
+        begin
+          if MangleParamSig(CD) = ImplSig then
+          begin
+            Match := CD;
+            Break;
+          end;
+        end
+        else
+        begin
+          { Non-overloaded: first (and only) match wins }
+          Match := CD;
+          Break;
+        end;
+      end;
+    if Match = nil then
       SemanticError(
         Format('Method ''%s'' is not declared in class ''%s''',
           [Decl.Name, Decl.OwnerTypeName]),
         Decl.Line, Decl.Col);
-    CD := TMethodDecl(FMethodIndex.Objects[Idx]);
-    if CD.Body <> nil then
+    if Match.Body <> nil then
       SemanticError(
         Format('Method ''%s.%s'' already has an inline body',
           [Decl.OwnerTypeName, Decl.Name]),
         Decl.Line, Decl.Col);
     { Transfer the body; after this, AnalyseMethodBodies will find and analyse it }
-    CD.Body   := Decl.Body;
-    Decl.Body := nil;
+    Match.Body := Decl.Body;
+    Decl.Body  := nil;
   end;
 end;
 
@@ -1533,6 +1571,7 @@ var
   AliasDesc:  TTypeDesc;
   BaseName:   string;
   BaseType:   TTypeDesc;
+  MangledKey: string;
 begin
   { Pass 1 — register all type symbols with empty descriptors.
     This allows self-referential field types to resolve in pass 2. }
@@ -1785,36 +1824,64 @@ begin
         end;
       end;
 
-      { Pre-pass: register vtable slots for virtual/override methods BEFORE
-        adding own fields, so that field offsets correctly account for the vptr. }
+      { Pre-resolve param types for every method now (was done post-field
+        previously) so the vtable pre-pass below can compute mangled keys
+        for overloaded methods.  Type names referenced here must already
+        be in scope, which Pass 1 of AnalyseTypeDecls guarantees by
+        registering all type names before any Pass 2 resolution. }
       if MethodList <> nil then
         for J := 0 to MethodList.Count - 1 do
         begin
           MDecl := TMethodDecl(MethodList.Items[J]);
+          for K := 0 to MDecl.Params.Count - 1 do
+          begin
+            Par              := TMethodParam(MDecl.Params.Items[K]);
+            Par.ResolvedType := ResolveParamType(Par, MDecl.Line, MDecl.Col);
+          end;
+          if MDecl.ReturnTypeName <> '' then
+          begin
+            ParType := FTable.FindType(MDecl.ReturnTypeName);
+            if ParType = nil then
+              SemanticError(
+                Format('Unknown return type ''%s'' for method ''%s''',
+                  [MDecl.ReturnTypeName, MDecl.Name]),
+                MDecl.Line, MDecl.Col);
+            MDecl.ResolvedReturnType := ParType;
+          end;
+        end;
+
+      { Pre-pass: register vtable slots for virtual/override methods BEFORE
+        adding own fields, so that field offsets correctly account for the vptr.
+        Each (name, parameter-signature) pair gets its own slot — overloaded
+        virtual methods are independently dispatched. }
+      if MethodList <> nil then
+        for J := 0 to MethodList.Count - 1 do
+        begin
+          MDecl := TMethodDecl(MethodList.Items[J]);
+          MangledKey := MDecl.Name;
+          if MDecl.IsOverload then
+            MangledKey := MangledKey + '$' + MangleParamSig(MDecl);
           if MDecl.IsVirtual then
-            RT.AddVTableSlot(MDecl.Name, '$' + TD.Name + '_' + MDecl.Name)
+            RT.AddVTableSlot(MangledKey, '$' + TD.Name + '_' + MangledKey)
           else if MDecl.IsOverride then
           begin
-            Slot := RT.FindVTableSlot(MDecl.Name);
+            Slot := RT.FindVTableSlot(MangledKey);
             if Slot < 0 then
             begin
-              { No inherited vtable slot — check if TObject provides the virtual
-                base (handles both parentless classes and deep hierarchies where
-                an intermediate class doesn't declare the method as virtual). }
               ParentSym := FTable.Lookup('TObject');
               if (ParentSym <> nil) and (ParentSym.TypeDesc is TRecordTypeDesc) then
               begin
                 ParentRT := TRecordTypeDesc(ParentSym.TypeDesc);
-                if ParentRT.FindVTableSlot(MDecl.Name) >= 0 then
+                if ParentRT.FindVTableSlot(MangledKey) >= 0 then
                 begin
                   RT.CopyVTableFrom(ParentRT);
                   if RT.Parent = nil then
                     RT.Parent := ParentRT;
-                  Slot := RT.FindVTableSlot(MDecl.Name);
+                  Slot := RT.FindVTableSlot(MangledKey);
                 end;
               end;
             end;
-            RT.OverrideVTableSlot(Slot, '$' + TD.Name + '_' + MDecl.Name);
+            RT.OverrideVTableSlot(Slot, '$' + TD.Name + '_' + MangledKey);
           end;
         end;
     end;
@@ -1857,37 +1924,42 @@ begin
       begin
         MDecl               := TMethodDecl(MethodList.Items[J]);
         MDecl.OwnerTypeName := TD.Name;
-        Key                 := TD.Name + '.' + MDecl.Name;
+
+        { Compute mangled key and ResolvedQbeName for overloaded methods.
+          Non-overloaded methods keep their plain name throughout. }
+        MangledKey := MDecl.Name;
+        if MDecl.IsOverload then
+          MangledKey := MangledKey + '$' + MangleParamSig(MDecl);
+        MDecl.ResolvedQbeName := TD.Name + '_' + MangledKey;
+
+        { Reject duplicate-without-overload at registration time.  Walk
+          existing FMethodIndex entries for this (TypeName.Name) — if
+          any sibling has IsOverload=False or the new MDecl lacks
+          IsOverload, this is a duplicate-identifier error. }
+        Key := TD.Name + '.' + MDecl.Name;
+        for K := 0 to FMethodIndex.Count - 1 do
+          if SameText(FMethodIndex.Strings[K], Key) then
+          begin
+            if (not MDecl.IsOverload) or
+               (not TMethodDecl(FMethodIndex.Objects[K]).IsOverload) then
+              SemanticError(
+                Format('Duplicate method ''%s.%s'' (missing ''overload'' directive?)',
+                  [TD.Name, MDecl.Name]),
+                MDecl.Line, MDecl.Col);
+          end;
         FMethodIndex.AddObject(Key, MDecl);
         if SameText(MDecl.Name, 'Destroy') then
           RT.HasDestroyMethod := True;
 
-        { Retrieve the vtable slot assigned in the pre-pass above }
+        { Retrieve the vtable slot assigned in the pre-pass above. }
         if MDecl.IsVirtual or MDecl.IsOverride then
         begin
-          MDecl.VTableSlot := RT.FindVTableSlot(MDecl.Name);
+          MDecl.VTableSlot := RT.FindVTableSlot(MangledKey);
           if MDecl.IsOverride and (MDecl.VTableSlot < 0) then
             SemanticError(
-              Format('Method ''%s'' marked override but no virtual base method found',
+              Format('Method ''%s'' marked override but no matching virtual base method found',
                 [MDecl.Name]),
               MDecl.Line, MDecl.Col);
-        end;
-
-        for K := 0 to MDecl.Params.Count - 1 do
-        begin
-          Par              := TMethodParam(MDecl.Params.Items[K]);
-          Par.ResolvedType := ResolveParamType(Par, MDecl.Line, MDecl.Col);
-        end;
-
-        if MDecl.ReturnTypeName <> '' then
-        begin
-          ParType := FTable.FindType(MDecl.ReturnTypeName);
-          if ParType = nil then
-            SemanticError(
-              Format('Unknown return type ''%s'' for method ''%s''',
-                [MDecl.ReturnTypeName, MDecl.Name]),
-              MDecl.Line, MDecl.Col);
-          MDecl.ResolvedReturnType := ParType;
         end;
       end;
 
@@ -2109,6 +2181,124 @@ begin
       Break;
   end;
   Result := nil;
+end;
+
+function TSemanticAnalyser.ResolveMethodOverload(
+  const ATypeName, AMethodName: string;
+  AArgs: TObjectList; ALine, ACol: Integer): TMethodDecl;
+var
+  CurrName:    string;
+  Sym:         TSymbol;
+  RT:          TRecordTypeDesc;
+  Key:         string;
+  Cand:        TMethodDecl;
+  ArityMatch:  TList;
+  J, K, Score: Integer;
+  ArgScore:    Integer;
+  Par:         TMethodParam;
+  Arg:         TASTExpr;
+  BestScore:   Integer;
+  BestCount:   Integer;
+  Best:        TMethodDecl;
+  TotalCnt:    Integer;
+  Arity:       Integer;
+begin
+  Result    := nil;
+  if AArgs <> nil then Arity := AArgs.Count else Arity := -1;
+  TotalCnt  := 0;
+  ArityMatch := TList.Create;
+  try
+    CurrName := ATypeName;
+    while CurrName <> '' do
+    begin
+      Key := CurrName + '.' + AMethodName;
+      for K := 0 to FMethodIndex.Count - 1 do
+        if SameText(FMethodIndex.Strings[K], Key) then
+        begin
+          Inc(TotalCnt);
+          Cand := TMethodDecl(FMethodIndex.Objects[K]);
+          if (Arity < 0) or (Cand.Params.Count = Arity) then
+            ArityMatch.Add(Cand);
+        end;
+      if ArityMatch.Count > 0 then Break;
+      { Walk parent — only if no candidates yet (Delphi: derived overloads
+        do not mix with inherited ones unless the descendant explicitly
+        repeats the directive, which our model treats as a fresh slot). }
+      Sym := FTable.Lookup(CurrName);
+      if (Sym <> nil) and (Sym.TypeDesc is TRecordTypeDesc) then
+      begin
+        RT := TRecordTypeDesc(Sym.TypeDesc);
+        if RT.Parent <> nil then
+          CurrName := RT.Parent.Name
+        else
+          Break;
+      end
+      else
+        Break;
+    end;
+
+    if TotalCnt = 0 then Exit;  { caller treats nil as "no method on class" }
+
+    if ArityMatch.Count = 0 then
+      SemanticError(
+        Format('No matching overload for ''%s.%s'' with %d argument(s)',
+          [ATypeName, AMethodName, Arity]),
+        ALine, ACol);
+
+    if (AArgs = nil) or (Arity = 0) then
+    begin
+      if ArityMatch.Count = 1 then
+      begin
+        Result := TMethodDecl(ArityMatch[0]);
+        Exit;
+      end;
+      Exit;  { ambiguous-by-arity-only — caller must score with args }
+    end;
+
+    BestScore := -1;
+    BestCount := 0;
+    Best      := nil;
+    for K := 0 to ArityMatch.Count - 1 do
+    begin
+      Cand  := TMethodDecl(ArityMatch[K]);
+      Score := 0;
+      for J := 0 to Arity - 1 do
+      begin
+        Par      := TMethodParam(Cand.Params.Items[J]);
+        Arg      := TASTExpr(AArgs.Items[J]);
+        ArgScore := ArgMatchScore(Par.ResolvedType, Arg.ResolvedType);
+        if ArgScore = 0 then
+        begin
+          Score := -1;
+          Break;
+        end;
+        Score := Score + ArgScore;
+      end;
+      if Score < 0 then Continue;
+      if Score > BestScore then
+      begin
+        BestScore := Score;
+        BestCount := 1;
+        Best      := Cand;
+      end
+      else if Score = BestScore then
+        Inc(BestCount);
+    end;
+
+    if BestScore < 0 then
+      SemanticError(
+        Format('No matching overload for ''%s.%s'' with %d argument(s)',
+          [ATypeName, AMethodName, Arity]),
+        ALine, ACol);
+    if BestCount > 1 then
+      SemanticError(
+        Format('Ambiguous overload of ''%s.%s'' — multiple candidates match equally',
+          [ATypeName, AMethodName]),
+        ALine, ACol);
+    Result := Best;
+  finally
+    ArityMatch.Free;
+  end;
 end;
 
 procedure TSemanticAnalyser.AnalyseStandaloneDecls(ABlock: TBlock);
@@ -2736,30 +2926,21 @@ begin
         Format('Receiver of ''.%s'' must be a class or interface', [ACall.Name]),
         ACall.Line, ACall.Col);
     RT := TRecordTypeDesc(ObjType);
-    MDecl := FindMethodDecl(RT.Name, ACall.Name);
-    if (MDecl = nil) and SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) then
+    if SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) and
+       (FindMethodDecl(RT.Name, 'Free') = nil) then
     begin
       ACall.ResolvedClassType := RT;
       ACall.ResolvedMethod    := nil;
       Exit;
     end;
+    for I := 0 to ACall.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+    MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
+      ACall.Line, ACall.Col);
     if MDecl = nil then
       SemanticError(
         Format('Class ''%s'' has no method ''%s''', [RT.Name, ACall.Name]),
         ACall.Line, ACall.Col);
-    if ACall.Args.Count <> MDecl.Params.Count then
-      SemanticError(
-        Format('Method ''%s.%s'' expects %d argument(s) but got %d',
-          [RT.Name, ACall.Name, MDecl.Params.Count, ACall.Args.Count]),
-        ACall.Line, ACall.Col);
-    for I := 0 to ACall.Args.Count - 1 do
-    begin
-      ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
-      Par     := TMethodParam(MDecl.Params.Items[I]);
-      CheckTypesMatch(Par.ResolvedType, ArgType,
-        Format('argument %d of ''%s''', [I + 1, ACall.Name]),
-        ACall.Line, ACall.Col);
-    end;
     ACall.ResolvedClassType := RT;
     ACall.ResolvedMethod    := MDecl;
     Exit;
@@ -2778,30 +2959,21 @@ begin
       begin
         ACall.IsImplicitSelf := True;
         RT := TRecordTypeDesc(ACall.ImplicitBaseInfo.TypeDesc);
-        MDecl := FindMethodDecl(RT.Name, ACall.Name);
-        if (MDecl = nil) and SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) then
+        if SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) and
+           (FindMethodDecl(RT.Name, 'Free') = nil) then
         begin
           ACall.ResolvedClassType := RT;
           ACall.ResolvedMethod    := nil;
           Exit;
         end;
+        for I := 0 to ACall.Args.Count - 1 do
+          AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+        MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
+          ACall.Line, ACall.Col);
         if MDecl = nil then
           SemanticError(
             Format('Class ''%s'' has no method ''%s''', [RT.Name, ACall.Name]),
             ACall.Line, ACall.Col);
-        if ACall.Args.Count <> MDecl.Params.Count then
-          SemanticError(
-            Format('Method ''%s.%s'' expects %d argument(s) but got %d',
-              [RT.Name, ACall.Name, MDecl.Params.Count, ACall.Args.Count]),
-            ACall.Line, ACall.Col);
-        for I := 0 to ACall.Args.Count - 1 do
-        begin
-          ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
-          Par     := TMethodParam(MDecl.Params.Items[I]);
-          CheckTypesMatch(Par.ResolvedType, ArgType,
-            Format('argument %d of ''%s''', [I + 1, ACall.Name]),
-            ACall.Line, ACall.Col);
-        end;
         ACall.ResolvedClassType := RT;
         ACall.ResolvedMethod    := MDecl;
         Exit;
@@ -2836,38 +3008,26 @@ begin
     Exit;
   end;
 
-  RT    := TRecordTypeDesc(ObjSym.TypeDesc);
-  MDecl := FindMethodDecl(RT.Name, ACall.Name);
-  if MDecl = nil then
+  RT := TRecordTypeDesc(ObjSym.TypeDesc);
+  { Free is a built-in: if Self <> nil then free(Self). No user-defined method needed. }
+  if SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) and
+     (FindMethodDecl(RT.Name, 'Free') = nil) then
   begin
-    { Free is a built-in: if Self <> nil then free(Self). No user-defined method needed. }
-    if SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) then
-    begin
-      ACall.ResolvedClassType := RT;
-      ACall.ResolvedMethod    := nil;  { nil signals built-in Free to codegen }
-      ACall.IsGlobal          := ObjSym.IsGlobal;
-      ACall.IsVarParam        := (ObjSym.Kind = skVarParameter);
-      Exit;
-    end;
+    ACall.ResolvedClassType := RT;
+    ACall.ResolvedMethod    := nil;
+    ACall.IsGlobal          := ObjSym.IsGlobal;
+    ACall.IsVarParam        := (ObjSym.Kind = skVarParameter);
+    Exit;
+  end;
+
+  for I := 0 to ACall.Args.Count - 1 do
+    AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+  MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
+    ACall.Line, ACall.Col);
+  if MDecl = nil then
     SemanticError(
       Format('Class ''%s'' has no method ''%s''', [RT.Name, ACall.Name]),
       ACall.Line, ACall.Col);
-  end;
-
-  if ACall.Args.Count <> MDecl.Params.Count then
-    SemanticError(
-      Format('Method ''%s.%s'' expects %d argument(s) but got %d',
-        [RT.Name, ACall.Name, MDecl.Params.Count, ACall.Args.Count]),
-      ACall.Line, ACall.Col);
-
-  for I := 0 to ACall.Args.Count - 1 do
-  begin
-    ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
-    Par     := TMethodParam(MDecl.Params.Items[I]);
-    CheckTypesMatch(Par.ResolvedType, ArgType,
-      Format('argument %d of ''%s''', [I + 1, ACall.Name]),
-      ACall.Line, ACall.Col);
-  end;
 
   ACall.ResolvedClassType := RT;
   ACall.ResolvedMethod    := MDecl;
@@ -4068,25 +4228,16 @@ begin
       AExpr.ResolvedType := Result;
       Exit;
     end;
-    RT    := TRecordTypeDesc(ObjType);
-    MDecl := FindMethodDecl(RT.Name, AExpr.Name);
+    RT := TRecordTypeDesc(ObjType);
+    { Analyse args first so overload resolution can score by type. }
+    for I := 0 to AExpr.Args.Count - 1 do
+      AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+    MDecl := ResolveMethodOverload(RT.Name, AExpr.Name, AExpr.Args,
+      AExpr.Line, AExpr.Col);
     if MDecl = nil then
       SemanticError(
         Format('Class ''%s'' has no method ''%s''', [RT.Name, AExpr.Name]),
         AExpr.Line, AExpr.Col);
-    if AExpr.Args.Count <> MDecl.Params.Count then
-      SemanticError(
-        Format('Method ''%s.%s'' expects %d argument(s) but got %d',
-          [RT.Name, AExpr.Name, MDecl.Params.Count, AExpr.Args.Count]),
-        AExpr.Line, AExpr.Col);
-    for I := 0 to AExpr.Args.Count - 1 do
-    begin
-      ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
-      Par     := TMethodParam(MDecl.Params.Items[I]);
-      CheckTypesMatch(Par.ResolvedType, ArgType,
-        Format('argument %d of ''%s''', [I + 1, AExpr.Name]),
-        AExpr.Line, AExpr.Col);
-    end;
     AExpr.ResolvedClassType := RT;
     AExpr.ResolvedMethod    := MDecl;
     Result := MDecl.ResolvedReturnType;

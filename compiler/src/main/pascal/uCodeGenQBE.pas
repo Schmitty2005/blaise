@@ -125,6 +125,13 @@ type
     function  QbeEscapeString(const AStr: string): string;
     { Mangle a type name for use in QBE symbols: '<' → '_', '>' → '', ',' → '_' }
     function  QBEMangle(const AName: string): string;
+    { Builds the QBE symbol name for a class method call.  Uses the
+      decl's pre-computed ResolvedQbeName when set (overloaded methods
+      and any decl that has been through semantic mangling); falls back
+      to the legacy '<Owner>_<Name>' form for callers that haven't been
+      migrated.  ATypeName/AMethodName are the fallback components. }
+    function  MethodEmitName(AMDecl: TMethodDecl;
+      const ATypeName, AMethodName: string): string;
   public
     constructor Create;
     destructor Destroy; override;
@@ -1983,7 +1990,7 @@ begin
     begin
       SelfTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %%_var_Self', [SelfTemp]));
-      FuncName := '$' + QBEMangle(MDecl.OwnerTypeName + '_' + FCallExpr.Name);
+      FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, FCallExpr.Name);
       ArgLine  := Format('l %s, l %s', [ASretAddr, SelfTemp]);
     end
     else
@@ -2016,7 +2023,7 @@ begin
     SelfTemp := AllocTemp;
     EmitLine(Format('  %s =l loadl %s',
       [SelfTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
-    FuncName := '$' + QBEMangle(MDecl.OwnerTypeName + '_' + MCallExpr.Name);
+    FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, MCallExpr.Name);
     ArgLine  := Format('l %s, l %s', [ASretAddr, SelfTemp]);
     for I := 0 to MCallExpr.Args.Count - 1 do
     begin
@@ -2062,7 +2069,7 @@ begin
       EmitLine(Format('  %s =l loadl %s',
         [SelfTemp, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
     end;
-    FuncName := '$' + QBEMangle(MDecl.OwnerTypeName + '_' + FldAccess.FieldName);
+    FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, FldAccess.FieldName);
     ArgLine  := Format('l %s, l %s', [ASretAddr, SelfTemp]);
     EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
   end;
@@ -2325,9 +2332,9 @@ begin
       end;
     end;
     if MDecl.OwnerTypeName <> '' then
-      FuncName := '$' + MDecl.OwnerTypeName + '_' + ACall.Name
+      FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name)
     else
-      FuncName := '$' + RT.Name + '_' + ACall.Name;
+      FuncName := '$' + MethodEmitName(MDecl, RT.Name, ACall.Name);
     EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
     Exit;
   end;
@@ -2429,9 +2436,9 @@ begin
   begin
     { Static dispatch }
     if MDecl.OwnerTypeName <> '' then
-      FuncName := '$' + MDecl.OwnerTypeName + '_' + ACall.Name
+      FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name)
     else
-      FuncName := '$' + RT.Name + '_' + ACall.Name;
+      FuncName := '$' + MethodEmitName(MDecl, RT.Name, ACall.Name);
     EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
   end;
 end;
@@ -2527,8 +2534,8 @@ begin
   end;
 
   { Always a direct (static) call — inherited bypasses vtable dispatch }
-  EmitLine(Format('  call $%s_%s(%s)',
-    [MDecl.OwnerTypeName, ACall.Name, ArgLine]));
+  EmitLine(Format('  call $%s(%s)',
+    [MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
 end;
 
 procedure TCodeGenQBE.EmitParamAllocs(AMethod: TMethodDecl;
@@ -2610,7 +2617,10 @@ var
   SavedExitLbl:  string;
   ValTemp:       string;
 begin
-  FuncName := '$' + ATypeName + '_' + AMethod.Name;
+  if AMethod.ResolvedQbeName <> '' then
+    FuncName := '$' + AMethod.ResolvedQbeName
+  else
+    FuncName := '$' + ATypeName + '_' + AMethod.Name;
   IsFunc   := AMethod.ResolvedReturnType <> nil;
 
   { Build parameter signature.
@@ -3286,8 +3296,8 @@ begin
         ArgLine := ArgLine + Format(', %s %s',
           [QbeTypeOf(Par.ResolvedType), ArgTemp]);
       end;
-      EmitLine(Format('  call $%s_%s(%s)',
-        [MDecl.OwnerTypeName, ACall.Name, ArgLine]));
+      EmitLine(Format('  call $%s(%s)',
+        [MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
       Exit;
     end;
     ArgLine := '';
@@ -4168,7 +4178,7 @@ begin
         ArgTemp := AllocTemp;
         EmitLine(Format('  %s =l loadl %%_var_Self', [ArgTemp]));
         ArgLine  := Format('l %s', [ArgTemp]);
-        FuncName := '$' + MDecl.OwnerTypeName + '_' + FC.Name;
+        FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, FC.Name);
         for I := 0 to FC.Args.Count - 1 do
         begin
           Par     := TMethodParam(MDecl.Params.Items[I]);
@@ -4289,9 +4299,9 @@ begin
           ArgLine := ArgLine + Format(', %s %s', [QbeTypeOf(Par.ResolvedType), ArgTemp]);
         end;
         if MDecl.OwnerTypeName <> '' then
-          FuncName := '$' + MDecl.OwnerTypeName + '_' + MCallExpr.Name
+          FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, MCallExpr.Name)
         else
-          FuncName := '$' + RT.Name + '_' + MCallExpr.Name;
+          FuncName := '$' + MethodEmitName(MDecl, RT.Name, MCallExpr.Name);
         EmitLine(Format('  call %s(%s)', [FuncName, ArgLine]));
       end;
       Result := SelfTemp;
@@ -4300,9 +4310,9 @@ begin
 
     MDecl     := TMethodDecl(MCallExpr.ResolvedMethod);
     if MDecl.OwnerTypeName <> '' then
-      FuncName := '$' + MDecl.OwnerTypeName + '_' + MCallExpr.Name
+      FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, MCallExpr.Name)
     else
-      FuncName := '$' + RT.Name + '_' + MCallExpr.Name;
+      FuncName := '$' + MethodEmitName(MDecl, RT.Name, MCallExpr.Name);
     QType     := QbeTypeOf(MDecl.ResolvedReturnType);
     { sret: record-returning method }
     if MDecl.ResolvedReturnType.Kind = tyRecord then
@@ -4464,16 +4474,18 @@ begin
             EmitLine(Format('  %s =l alloc4 %d', [SretBuf, RT.TotalSize]));
           if RT.TotalSize > 0 then
             EmitLine(Format('  call $memset(l %s, w 0, l %d)', [SretBuf, RT.TotalSize]));
-          EmitLine(Format('  call $%s_%s(l %s, l %s)',
-            [MDecl.OwnerTypeName, FldAccess.FieldName, SretBuf, L]));
+          EmitLine(Format('  call $%s(l %s, l %s)',
+            [MethodEmitName(MDecl, MDecl.OwnerTypeName, FldAccess.FieldName),
+             SretBuf, L]));
           Result := SretBuf;
         end
         else
         begin
           QType := QbeTypeOf(MDecl.ResolvedReturnType);
           T := AllocTemp;
-          EmitLine(Format('  %s =%s call $%s_%s(l %s)',
-            [T, QType, MDecl.OwnerTypeName, FldAccess.FieldName, L]));
+          EmitLine(Format('  %s =%s call $%s(l %s)',
+            [T, QType,
+             MethodEmitName(MDecl, MDecl.OwnerTypeName, FldAccess.FieldName), L]));
           Result := T;
         end;
         Exit;
@@ -4549,16 +4561,18 @@ begin
             EmitLine(Format('  %s =l alloc4 %d', [SretBuf, RT.TotalSize]));
           if RT.TotalSize > 0 then
             EmitLine(Format('  call $memset(l %s, w 0, l %d)', [SretBuf, RT.TotalSize]));
-          EmitLine(Format('  call $%s_%s(l %s, l %s)',
-            [MDecl.OwnerTypeName, FldAccess.FieldName, SretBuf, L]));
+          EmitLine(Format('  call $%s(l %s, l %s)',
+            [MethodEmitName(MDecl, MDecl.OwnerTypeName, FldAccess.FieldName),
+             SretBuf, L]));
           Result := SretBuf;
         end
         else
         begin
           QType := QbeTypeOf(MDecl.ResolvedReturnType);
           T := AllocTemp;
-          EmitLine(Format('  %s =%s call $%s_%s(l %s)',
-            [T, QType, MDecl.OwnerTypeName, FldAccess.FieldName, L]));
+          EmitLine(Format('  %s =%s call $%s(l %s)',
+            [T, QType,
+             MethodEmitName(MDecl, MDecl.OwnerTypeName, FldAccess.FieldName), L]));
           Result := T;
         end;
         Exit;
@@ -5290,6 +5304,15 @@ begin
       Result := Result + Chr(C);
     end;
   end;
+end;
+
+function TCodeGenQBE.MethodEmitName(AMDecl: TMethodDecl;
+  const ATypeName, AMethodName: string): string;
+begin
+  if (AMDecl <> nil) and (AMDecl.ResolvedQbeName <> '') then
+    Result := QBEMangle(AMDecl.ResolvedQbeName)
+  else
+    Result := QBEMangle(ATypeName + '_' + AMethodName);
 end;
 
 function TCodeGenQBE.QbeEscapeString(const AStr: string): string;

@@ -66,6 +66,19 @@ type
     { Two same-arity overloads where the argument is an exact match for
       neither but a widening match for both — must be flagged ambiguous }
     procedure TestSemantic_AmbiguousOverload_RaisesError;
+
+    { Phase C — class method overloading }
+
+    { Two methods sharing a name but distinguished by parameter type }
+    procedure TestSemantic_ClassOverload_BothRegistered;
+    procedure TestCodegen_ClassOverload_DistinctQBENames;
+    procedure TestCodegen_ClassOverload_CallSitesMangled;
+
+    { Class method dup without 'overload' rejected }
+    procedure TestSemantic_ClassDupNoOverload_RaisesError;
+
+    { virtual + overload base; override + overload descendant }
+    procedure TestCodegen_VirtualOverload_DistinctVTableSlots;
   end;
 
 implementation
@@ -230,6 +243,58 @@ const
     '  F(42)'                                               + LineEnding +
     'end.';
 
+  SrcClassOverload =
+    'program P;'                                            + LineEnding +
+    'type'                                                  + LineEnding +
+    '  TFoo = class'                                        + LineEnding +
+    '    procedure Show(N: Integer); overload;'             + LineEnding +
+    '    procedure Show(S: string); overload;'              + LineEnding +
+    '  end;'                                                + LineEnding +
+    '  procedure TFoo.Show(N: Integer); overload;'          + LineEnding +
+    '  begin WriteLn(N) end;'                               + LineEnding +
+    '  procedure TFoo.Show(S: string); overload;'           + LineEnding +
+    '  begin WriteLn(S) end;'                               + LineEnding +
+    'var F: TFoo;'                                          + LineEnding +
+    'begin'                                                 + LineEnding +
+    '  F := TFoo.Create;'                                   + LineEnding +
+    '  F.Show(42);'                                         + LineEnding +
+    '  F.Show(''hi'')'                                      + LineEnding +
+    'end.';
+
+  SrcClassDupNoOverload =
+    'program P;'                                            + LineEnding +
+    'type'                                                  + LineEnding +
+    '  TFoo = class'                                        + LineEnding +
+    '    procedure Show(N: Integer);'                       + LineEnding +
+    '    procedure Show(S: string);'                        + LineEnding +
+    '  end;'                                                + LineEnding +
+    '  procedure TFoo.Show(N: Integer);'                    + LineEnding +
+    '  begin end;'                                          + LineEnding +
+    '  procedure TFoo.Show(S: string);'                     + LineEnding +
+    '  begin end;'                                          + LineEnding +
+    'begin end.';
+
+  SrcVirtualOverload =
+    'program P;'                                            + LineEnding +
+    'type'                                                  + LineEnding +
+    '  TBase = class'                                       + LineEnding +
+    '    procedure Greet(N: Integer); overload; virtual;'   + LineEnding +
+    '    procedure Greet(S: string);  overload; virtual;'   + LineEnding +
+    '  end;'                                                + LineEnding +
+    '  TChild = class(TBase)'                               + LineEnding +
+    '    procedure Greet(N: Integer); overload; override;'  + LineEnding +
+    '    procedure Greet(S: string);  overload; override;'  + LineEnding +
+    '  end;'                                                + LineEnding +
+    '  procedure TBase.Greet(N: Integer); overload;'        + LineEnding +
+    '  begin WriteLn(''base int '', N) end;'                + LineEnding +
+    '  procedure TBase.Greet(S: string); overload;'         + LineEnding +
+    '  begin WriteLn(''base str '', S) end;'                + LineEnding +
+    '  procedure TChild.Greet(N: Integer); overload;'       + LineEnding +
+    '  begin WriteLn(''child int '', N) end;'               + LineEnding +
+    '  procedure TChild.Greet(S: string); overload;'        + LineEnding +
+    '  begin WriteLn(''child str '', S) end;'               + LineEnding +
+    'begin end.';
+
   { Two same-arity overloads — Int64 + Double — both reachable from
     Integer only by widening.  Argument 42 (Integer) matches both via
     widening with equal score → ambiguous. }
@@ -371,6 +436,70 @@ end;
 procedure TOverloadTests.TestSemantic_AmbiguousOverload_RaisesError;
 begin
   AnalyseExpectError(SrcAmbiguousOverload);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Phase C — class method overloading                                  }
+{ ------------------------------------------------------------------ }
+
+procedure TOverloadTests.TestSemantic_ClassOverload_BothRegistered;
+var
+  Prog: TProgram;
+  CD:   TClassTypeDef;
+begin
+  Prog := AnalyseSrc(SrcClassOverload);
+  try
+    CD := TClassTypeDef(TTypeDecl(Prog.Block.TypeDecls[0]).Def);
+    AssertEquals('TFoo has two Show methods', 2, CD.Methods.Count);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TOverloadTests.TestCodegen_ClassOverload_DistinctQBENames;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcClassOverload);
+  AssertTrue('Integer overload defined as $TFoo_Show$i',
+    Pos('function $TFoo_Show$i(', IR) > 0);
+  AssertTrue('string overload defined as $TFoo_Show$S',
+    Pos('function $TFoo_Show$S(', IR) > 0);
+end;
+
+procedure TOverloadTests.TestCodegen_ClassOverload_CallSitesMangled;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcClassOverload);
+  AssertTrue('Integer call site mangled',
+    Pos('call $TFoo_Show$i(', IR) > 0);
+  AssertTrue('string call site mangled',
+    Pos('call $TFoo_Show$S(', IR) > 0);
+end;
+
+procedure TOverloadTests.TestSemantic_ClassDupNoOverload_RaisesError;
+begin
+  AnalyseExpectError(SrcClassDupNoOverload);
+end;
+
+procedure TOverloadTests.TestCodegen_VirtualOverload_DistinctVTableSlots;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcVirtualOverload);
+  { Each (name, signature) pair gets its own vtable slot.  The TBase
+    typeinfo data record carries one entry per slot pointing to the
+    matching base implementation; TChild carries overrides keyed by
+    the same mangled signatures. }
+  AssertTrue('TBase Integer slot',
+    Pos('$TBase_Greet$i', IR) > 0);
+  AssertTrue('TBase string slot',
+    Pos('$TBase_Greet$S', IR) > 0);
+  AssertTrue('TChild Integer override',
+    Pos('$TChild_Greet$i', IR) > 0);
+  AssertTrue('TChild string override',
+    Pos('$TChild_Greet$S', IR) > 0);
 end;
 
 initialization
