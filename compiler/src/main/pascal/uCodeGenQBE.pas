@@ -346,6 +346,7 @@ begin
     tyProcedural:                           Result := 'l';  { function code pointer }
     tyDouble:                               Result := 'd';  { 64-bit float }
     tySingle:                               Result := 's';  { 32-bit float }
+    tyMetaClass:                            Result := 'l';  { typeinfo pointer }
   else
     Result := 'w';
   end;
@@ -420,11 +421,12 @@ begin
             EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
           end;
 
-        tyPointer, tyProcedural:
+        tyPointer, tyProcedural, tyMetaClass:
           begin
-            { Pointer var (typed/untyped) or procedural var — one pointer
-              slot, nil-init.  Procedural variables hold a function code
-              pointer; storage is identical to a typed/untyped pointer. }
+            { Pointer var (typed/untyped), procedural var, or metaclass
+              var — one pointer slot, nil-init.  Procedural variables
+              hold a function code pointer; metaclass variables hold a
+              typeinfo pointer; storage is identical to a pointer. }
             EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
             EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
           end;
@@ -524,7 +526,7 @@ begin
             EmitLine(Format('export data $%s = { l 0 }', [VarName]));
         tyInt64:
           EmitLine(Format('export data $%s = { l 0 }', [VarName]));
-        tyString, tyClass, tyPointer:
+        tyString, tyClass, tyPointer, tyMetaClass:
           EmitLine(Format('export data $%s = { l 0 }', [VarName]));
         tyDouble:
           EmitLine(Format('export data $%s = { d 0 }', [VarName]));
@@ -2712,7 +2714,7 @@ begin
           EmitLine(Format('  storew %%_par_%s, %%_var_%s',
             [Par.ParamName, Par.ParamName]));
         end;
-      tyInt64, tyString, tyClass:
+      tyInt64, tyString, tyClass, tyMetaClass:
         begin
           EmitLine(Format('  %%_var_%s =l alloc8 1', [Par.ParamName]));
           EmitLine(Format('  storel %%_par_%s, %%_var_%s',
@@ -5392,9 +5394,13 @@ begin
       Exit;
     end;
 
-    { Use long (pointer) comparison instructions when operands are class/nil }
-    if (BinExpr.Left.ResolvedType <> nil) and
-       (BinExpr.Left.ResolvedType.Kind in [tyClass, tyNil]) then
+    { Use long (pointer) comparison instructions when either operand is
+      pointer-shaped (class/nil/pointer/metaclass).  Identity check only;
+      ordering ops on pointers are not supported. }
+    if ((BinExpr.Left.ResolvedType <> nil) and
+        (BinExpr.Left.ResolvedType.Kind in [tyClass, tyNil, tyPointer, tyMetaClass])) or
+       ((BinExpr.Right.ResolvedType <> nil) and
+        (BinExpr.Right.ResolvedType.Kind in [tyClass, tyNil, tyPointer, tyMetaClass])) then
     begin
       case BinExpr.Op of
         boEQ: Op := 'ceql';
@@ -6114,7 +6120,7 @@ begin
     case SAT.ElementType.Kind of
       tyByte, tyBoolean: QLoad := 'loadub';
       tyInteger, tyUInt32, tyEnum: QLoad := 'loadw';
-      tyInt64, tyString, tyClass, tyPointer: QLoad := 'loadl';
+      tyInt64, tyString, tyClass, tyPointer, tyMetaClass: QLoad := 'loadl';
     else
       QLoad := 'loadl';
     end;
@@ -6147,7 +6153,7 @@ begin
     ElemSize := ElemType.ElementType.ByteSize;
     case ElemType.ElementType.Kind of
       tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum: QLoad := 'loadw';
-      tyInt64, tyString, tyClass, tyPointer:          QLoad := 'loadl';
+      tyInt64, tyString, tyClass, tyPointer, tyMetaClass: QLoad := 'loadl';
     else
       QLoad := 'loadl';
     end;
@@ -6324,7 +6330,7 @@ begin
   case ElemType.Kind of
     tyByte, tyBoolean: StoreInstr := 'storeb';
     tyInteger, tyUInt32, tyEnum: StoreInstr := 'storew';
-    tyInt64, tyString, tyClass, tyPointer: StoreInstr := 'storel';
+    tyInt64, tyString, tyClass, tyPointer, tyMetaClass: StoreInstr := 'storel';
   else
     StoreInstr := 'storew';
   end;
@@ -6402,7 +6408,7 @@ begin
   TotalBytes := AExpr.Elements.Count * ElemSize;
   if TotalBytes < 1 then TotalBytes := 1;
   case ElemType.Kind of
-    tyString, tyClass, tyPointer, tyInt64:
+    tyString, tyClass, tyPointer, tyInt64, tyMetaClass:
     begin
       AllocInstr := 'alloc8';
       StoreInstr := 'storel';

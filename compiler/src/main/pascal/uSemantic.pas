@@ -354,6 +354,22 @@ begin
        (TPointerTypeDesc(AExpected).BaseType = TPointerTypeDesc(AActual).BaseType) then
       Exit;
   end;
+  { Metaclass-of-TBase accepts metaclass-of-TDerived (TDerived is-a TBase). }
+  if (AExpected.Kind = tyMetaClass) and (AActual.Kind = tyMetaClass) then
+  begin
+    if (TMetaClassTypeDesc(AExpected).BaseClass = TMetaClassTypeDesc(AActual).BaseClass) or
+       IsSubtypeOf(TMetaClassTypeDesc(AActual).BaseClass,
+                   TMetaClassTypeDesc(AExpected).BaseClass) then
+      Exit;
+  end;
+  { Untyped Pointer ↔ metaclass: a class identifier passes through any
+    'Pointer' parameter (used heavily by punit.AssertEquals(Pointer)). }
+  if (AExpected.Kind = tyPointer) and (AActual.Kind = tyMetaClass) and
+     (TPointerTypeDesc(AExpected).BaseType = nil) then
+    Exit;
+  if (AActual.Kind = tyPointer) and (AExpected.Kind = tyMetaClass) and
+     (TPointerTypeDesc(AActual).BaseType = nil) then
+    Exit;
   { enum ↔ enum (same type) already handled by = check above;
     enum ↔ integer: allow assignment between enum and integer types }
   if (AExpected.Kind = tyEnum) and AActual.IsNumeric then Exit;
@@ -1097,6 +1113,20 @@ begin
       Sym := TSymbol.Create(AName, skType, PT);
       FTable.DefineGlobal(Sym);
       Result := PT;
+    end;
+    Exit;
+  end;
+  { Metaclass: 'class of TypeName' — create on demand. }
+  if (Length(AName) > 9) and (Copy(AName, 1, 9) = 'class of ') then
+  begin
+    BaseName := Copy(AName, 10, MaxInt);
+    BaseType := FindTypeOrInstantiate(BaseName);
+    if (BaseType <> nil) and (BaseType.Kind = tyClass) then
+    begin
+      Sym := TSymbol.Create(AName, skType,
+        FTable.NewMetaClassType(AName, BaseType));
+      FTable.DefineGlobal(Sym);
+      Result := Sym.TypeDesc;
     end;
     Exit;
   end;
@@ -1871,6 +1901,20 @@ begin
         if (BaseSym <> nil) and (BaseSym.Kind = skType) then
           BaseType := BaseSym.TypeDesc;
         AliasDesc := FTable.NewPointerType(TD.Name, BaseType);
+      end
+      else if (Length(AliasName) > 9) and (Copy(AliasName, 1, 9) = 'class of ') then
+      begin
+        { Metaclass alias: 'class of TFoo'.  Route through the standard
+          on-demand instantiation path so the underlying class type is
+          resolved consistently with other 'class of TFoo' references. }
+        AliasDesc := FindTypeOrInstantiate(AliasName);
+        if AliasDesc = nil then
+        begin
+          SemanticError(
+            Format('Unknown class type in metaclass alias ''%s''', [AliasName]),
+            TD.Line, TD.Col);
+          Continue;
+        end;
       end
       else
       begin
@@ -5036,14 +5080,16 @@ begin
       TIdentExpr(AExpr).ConstString := Sym.ConstString;
     end;
     { Bare class type identifier used as a value: metaclass reference.
-      Codegen emits the typeinfo address (a Pointer-typed compile-time
-      constant).  Used wherever a TClass or untyped Pointer is expected:
-      argument of ExpectException, Pointer(EError) cast, etc. }
+      The result type is 'class of TFoo'; codegen emits the typeinfo
+      address.  Compatibility with untyped Pointer (so 'Pointer(EError)'
+      casts and 'AClass: Pointer' parameters keep working) is handled
+      in CheckTypesMatch. }
     if (Sym.Kind = skType) and (Sym.TypeDesc <> nil) and
        (Sym.TypeDesc.Kind = tyClass) then
     begin
       TIdentExpr(AExpr).IsMetaclassRef := True;
-      Result := FTable.TypePointer;
+      Result := FindTypeOrInstantiate('class of ' + Sym.TypeDesc.Name);
+      if Result = nil then Result := FTable.TypePointer;
       AExpr.ResolvedType := Result;
       Exit;
     end;
@@ -5510,7 +5556,12 @@ begin
        (IsSubtypeOf(LType, RType) or IsSubtypeOf(RType, LType))) or
       { TObject is universal base class }
       ((LType.Kind = tyClass) and (RType.Kind = tyClass) and
-       ((LType.Name = 'TObject') or (RType.Name = 'TObject')))
+       ((LType.Name = 'TObject') or (RType.Name = 'TObject'))) or
+      { Metaclass comparisons: any two metaclass-typed values compare
+        as pointer identity. }
+      ((LType.Kind = tyMetaClass) and (RType.Kind = tyMetaClass)) or
+      ((LType.Kind = tyMetaClass) and (RType.Kind in [tyPointer, tyNil])) or
+      ((RType.Kind = tyMetaClass) and (LType.Kind in [tyPointer, tyNil]))
     ) then
       CheckTypesMatch(LType, RType,
         Format('comparison ''%s''', [BinaryOpName(ABin.Op)]),

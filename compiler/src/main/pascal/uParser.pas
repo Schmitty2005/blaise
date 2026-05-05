@@ -172,6 +172,16 @@ begin
     Result := '^' + Self.ParseTypeName;  { Self. forces recursive call, not result-var read }
     Exit;
   end;
+  { Metaclass reference: 'class of TFoo' — encoded as 'class of <Name>'.
+    The base class name is parsed via ParseTypeName so that 'class of
+    TList<Integer>' (a metaclass of a generic instance) is also valid. }
+  if Check(tkClass) then
+  begin
+    Advance;  { consume 'class' }
+    Expect(tkOf);
+    Result := 'class of ' + Self.ParseTypeName;
+    Exit;
+  end;
   if not Check(tkIdent) then
     raise EParseError.Create(Format('Expected type name at line %d col %d in %s',
       [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
@@ -458,6 +468,15 @@ begin
       Expect(tkEquals);
       if Check(tkRecord) then
         TD.Def := ParseRecordDef
+      else if Check(tkClass) and (PeekKind = tkOf) then
+      begin
+        { Metaclass alias: type TFooClass = class of TFoo;  Use the
+          generic type-name parser, which already encodes the metaclass
+          form as 'class of <Name>'. }
+        AD := TTypeAliasDef.Create;
+        AD.TypeName := Self.ParseTypeName;
+        TD.Def := AD;
+      end
       else if Check(tkClass) then
         TD.Def := ParseClassDef
       else if Check(tkIntf) then

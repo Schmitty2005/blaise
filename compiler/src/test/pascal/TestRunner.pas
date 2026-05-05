@@ -71,7 +71,8 @@ uses
   cp.test.forin,
   cp.test.genericforin,
   cp.test.proctypes,
-  cp.test.overload;
+  cp.test.overload,
+  cp.test.classof;
 
 var
   Application: TTestRunner;

@@ -41,7 +41,8 @@ type
     tyProcedural, { Bare procedural pointer — QBE 'l'; see TProceduralTypeDesc.
                    Not 'of object' (method ptr), not 'reference to' (closure). }
     tyDouble,    { 64-bit IEEE 754 float — QBE 'd' }
-    tySingle     { 32-bit IEEE 754 float — QBE 's' }
+    tySingle,    { 32-bit IEEE 754 float — QBE 's' }
+    tyMetaClass  { 'class of TFoo' — typeinfo pointer, see TMetaClassTypeDesc }
   );
 
   TTypeDesc = class
@@ -68,6 +69,14 @@ type
   TPointerTypeDesc = class(TTypeDesc)
   public
     BaseType: TTypeDesc;  { not owned; nil = untyped Pointer }
+  end;
+
+  { Metaclass descriptor — 'class of TFoo'.  The runtime value of any
+    metaclass-typed expression is the typeinfo pointer of a class
+    descended from BaseClass.  Stored as QBE 'l' (8 bytes). }
+  TMetaClassTypeDesc = class(TTypeDesc)
+  public
+    BaseClass: TTypeDesc;  { not owned; the class type after 'class of' }
   end;
 
   { Open-array parameter descriptor.
@@ -348,6 +357,7 @@ type
 
     { Creates a typed pointer descriptor '^BaseType'. Registered in FAllTypes. }
     function NewPointerType(const AName: string; ABase: TTypeDesc): TPointerTypeDesc;
+    function NewMetaClassType(const AName: string; ABase: TTypeDesc): TMetaClassTypeDesc;
     function NewEnumType(const AName: string): TEnumTypeDesc;
     function NewSetType(const AName: string; ABase: TEnumTypeDesc): TSetTypeDesc;
     function NewProceduralType(const AName: string): TProceduralTypeDesc;
@@ -940,6 +950,15 @@ begin
   Result.Kind     := tyPointer;
   Result.Name     := AName;
   Result.BaseType := ABase;
+  FAllTypes.Add(Result);
+end;
+
+function TSymbolTable.NewMetaClassType(const AName: string; ABase: TTypeDesc): TMetaClassTypeDesc;
+begin
+  Result           := TMetaClassTypeDesc.Create;
+  Result.Kind      := tyMetaClass;
+  Result.Name      := AName;
+  Result.BaseClass := ABase;
   FAllTypes.Add(Result);
 end;
 
