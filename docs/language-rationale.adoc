@@ -839,63 +839,93 @@ AND-NOT respectively.  This matches FPC's implementation model.
 
 ==== Decision
 
-Blaise supports bare procedural types — function and procedure pointers to
-standalone (non-method) functions:
+Blaise supports two procedural type forms:
+
+- *Bare procedural types* — pointers to standalone (non-method) functions.
+  Storage: a single QBE `l` (8-byte code pointer).
+- *Method-pointer types* — declared with the `of object` suffix.  Pointers
+  to instance methods carry both a code pointer and a `Self` pointer.
+  Storage: a 16-byte block, `Code` at offset 0, `Data` at offset 8.
 
 [source,pascal]
 ----
 type
-  TIntFn   = function: Integer;
-  TStrFn   = function(const S: string): Integer;
-  TLogProc = procedure(Level: Integer; const Msg: string);
+  TIntFn      = function: Integer;
+  TStrFn      = function(const S: string): Integer;
+  TLogProc    = procedure(Level: Integer; const Msg: string);
+  TRunMethod  = procedure of object;
+  TIsTrue     = function (X: Integer): Boolean of object;
 
 var
   F: TIntFn;
+  G: TRunMethod;
 begin
   F := @MyFn;
-  X := F();          // indirect call through F
+  X := F();                          // indirect bare-pointer call
+  G := TRunMethod(SomeMethod);       // assigned via TMethod cast
+  G;                                 // calls Code(Data, ...)
 end;
 ----
 
-A procedural variable is stored as a single QBE `l` (8-byte code pointer).
-`@FuncName` produces a value of the matching procedural type.  An indirect
-call `F(args)` loads the pointer from `F` and emits a QBE indirect call
-through the temporary.
+A bare-procedural variable holds a single function code pointer.  An
+indirect call `F(args)` loads the pointer from `F` and emits a QBE
+indirect call.
 
-Type compatibility requires return types to match (both nil or both the same
-`TTypeDesc`) and parameter lists to match pairwise on type and on parameter
-mode (`var`/`const`/value).  Parameter names do not participate.
+A method-pointer variable holds a 16-byte block.  An indirect call loads
+both halves, then emits `call code(l data, args...)` — `Data` is passed
+as the implicit first argument so the callee sees it as `Self`.  The
+intrinsic record `TMethod = record Code, Data: Pointer end` has the
+exact same byte layout, so the cast `TMyMethod(m)` for `m: TMethod` is a
+no-op at the QBE level.  This is the canonical xUnit dispatch pattern:
+
+[source,pascal]
+----
+m.Code := MethodAddress(Self, FName);
+m.Data := Self;
+RunMethod := TRunMethod(m);
+RunMethod;
+----
+
+Type compatibility requires return types to match (both nil or both the
+same `TTypeDesc`), parameter lists to match pairwise on type and mode
+(`var`/`const`/value), AND the `IsMethodPtr` flag to match — a bare
+procedural pointer and a method pointer with otherwise-identical
+signatures are *not* compatible.  Parameter names do not participate.
 
 ==== Rejected / deferred
 
-- *`function ... of object`* (method pointers) — *deferred.* Method pointers
-  carry both a code pointer and a `Self` pointer (a fat pointer, two QBE `l`
-  slots), and the codegen rules differ.  Will be added when a use case
-  requires it (likely when the bcl.testing fpcunit port lands and needs
-  `procedure of object` for instance test methods).
 - *`reference to function/procedure`* (anonymous methods / closures) —
-  *deferred.* Closures need an environment record carrying captured locals,
-  far beyond what a bare pointer represents.  No current Blaise feature
-  needs them.
+  *deferred.* Closures need an environment record carrying captured
+  locals, far beyond what a (Code, Data) pair represents.  No current
+  Blaise feature needs them.
 - *Calling-convention markers* (`cdecl`, `stdcall`) on procedural types —
-  *deferred.* The current self-hosting target uses the System V x86_64 ABI
-  uniformly; no use case yet requires non-default conventions on procedural
-  pointers.
+  *deferred.* The current self-hosting target uses the System V x86_64
+  ABI uniformly; no use case yet requires non-default conventions on
+  procedural pointers.
 
 ==== Rationale
 
-Bare procedural types are sufficient for the immediate use case (porting
-Michael Van Canneyt's punit test framework into the RTL test tree, where
-every test, every Setup/TearDown, and every hook handler is stored as a
-function pointer). Procedural types are a fundamental Pascal language
-feature that would have been needed eventually anyway — for callback APIs
-across the future BCL, signal handlers, comparator functions for sorting,
-and event-style hooks generally.
+Bare procedural types are sufficient for callback APIs that do not need
+instance state (the original punit RTL test framework's `TTestRun` /
+`TTestSetup` hooks, sort comparators, signal handlers).
 
-The `of object` and `reference to` forms are deliberately scoped out of
-this iteration so that the procedural-type work remains a clearly bounded
-~2-3 day extension rather than a multi-week feature.  Their inclusion can
-be staged when concrete needs arise.
+Method pointers are required by every xUnit-style test framework: both
+fpcunit (`TRunMethod = procedure of object`) and fptest
+(`TTestMethod = procedure of object`) dispatch their tests through them.
+The 16-byte fat-pointer representation matches FPC and Delphi exactly;
+the byte-equivalence with `TMethod` lets the canonical
+`TRunMethod(LMethod)` cast pattern work unchanged in ported code.
+
+A single `IsMethodPtr` flag on the type descriptor keeps both forms in
+one descriptor class.  The flag participates in `IsCompatibleWith` so a
+method pointer cannot accidentally bind to a bare-procedural variable,
+preventing ABI mismatches at call sites that would otherwise corrupt
+arguments.
+
+The `reference to` form is deliberately scoped out: closures interact
+with ARC lifetimes through the environment record's captured class
+references, which would push the design into territory that no current
+Blaise consumer requires.
 
 ---
 
