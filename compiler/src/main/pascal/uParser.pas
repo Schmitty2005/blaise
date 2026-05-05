@@ -2876,6 +2876,17 @@ begin
               end;
               Expect(tkRParen);
               Result := MCallNode;
+            end
+            else if Check(tkLBracket) then
+            begin
+              { Indexed property on chained access from a typecast/call:
+                FuncOrCast(...).A.B.Items[idx].  Same shape as the
+                A.B.Items[idx] branch above — store the index on the
+                outer FieldAccess so the analyser can resolve the property
+                with its index in one place. }
+              Advance;
+              FldNode.PropIndexExpr := ParseExpr;
+              Expect(tkRBracket);
             end;
           end;
         end

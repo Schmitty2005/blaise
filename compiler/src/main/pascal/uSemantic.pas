@@ -2451,7 +2451,7 @@ var
   RT:          TRecordTypeDesc;
   Key:         string;
   Cand:        TMethodDecl;
-  ArityMatch:  TList;
+  ArityMatch:  TObjectList;
   J, K, Score: Integer;
   ArgScore:    Integer;
   Par:         TMethodParam;
@@ -2465,7 +2465,7 @@ begin
   Result    := nil;
   if AArgs <> nil then Arity := AArgs.Count else Arity := -1;
   TotalCnt  := 0;
-  ArityMatch := TList.Create;
+  ArityMatch := TObjectList.Create(False);
   try
     CurrName := ATypeName;
     while CurrName <> '' do
@@ -2509,7 +2509,7 @@ begin
     begin
       if ArityMatch.Count = 1 then
       begin
-        Result := TMethodDecl(ArityMatch[0]);
+        Result := TMethodDecl(ArityMatch.Items[0]);
         Exit;
       end;
       Exit;  { ambiguous-by-arity-only — caller must score with args }
@@ -2520,7 +2520,7 @@ begin
     Best      := nil;
     for K := 0 to ArityMatch.Count - 1 do
     begin
-      Cand  := TMethodDecl(ArityMatch[K]);
+      Cand  := TMethodDecl(ArityMatch.Items[K]);
       Score := 0;
       for J := 0 to Arity - 1 do
       begin
@@ -3860,7 +3860,7 @@ function TSemanticAnalyser.ResolveStandaloneOverload(const AName: string;
 var
   I, J:        Integer;
   Cand:        TMethodDecl;
-  ArityMatch:  TList;
+  ArityMatch:  TObjectList;
   Score:       Integer;
   ArgScore:    Integer;
   Par:         TMethodParam;
@@ -3872,7 +3872,7 @@ var
 begin
   Result    := nil;
   TotalCnt  := 0;
-  ArityMatch := TList.Create;
+  ArityMatch := TObjectList.Create(False);
   try
     for I := 0 to FProcIndex.Count - 1 do
       if SameText(FProcIndex.Strings[I], AName) then
@@ -3898,7 +3898,7 @@ begin
     begin
       if ArityMatch.Count = 1 then
       begin
-        Result := TMethodDecl(ArityMatch[0]);
+        Result := TMethodDecl(ArityMatch.Items[0]);
         Exit;
       end;
       { zero-arg ambiguity is impossible — same name + zero params would
@@ -3916,7 +3916,7 @@ begin
     Best      := nil;
     for I := 0 to ArityMatch.Count - 1 do
     begin
-      Cand  := TMethodDecl(ArityMatch[I]);
+      Cand  := TMethodDecl(ArityMatch.Items[I]);
       Score := 0;
       for J := 0 to AArity - 1 do
       begin
