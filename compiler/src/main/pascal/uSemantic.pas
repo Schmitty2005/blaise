@@ -4503,6 +4503,29 @@ begin
     Exit;
   end;
 
+  { MethodAddress(Obj, Name): walks the object's typeinfo chain looking for
+    a published method named 'Name'.  Returns nil when not found.  Used by
+    bcl.testing's RegisterTest path to dispatch test methods by name. }
+  if SameText(AExpr.Name, 'MethodAddress') then
+  begin
+    if AExpr.Args.Count <> 2 then
+      SemanticError('MethodAddress requires exactly two arguments (Obj, Name)',
+        AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[1]));
+    if (TASTExpr(AExpr.Args.Items[0]).ResolvedType = nil) or
+       (TASTExpr(AExpr.Args.Items[0]).ResolvedType.Kind <> tyClass) then
+      SemanticError('MethodAddress: first argument must be a class instance',
+        AExpr.Line, AExpr.Col);
+    if (TASTExpr(AExpr.Args.Items[1]).ResolvedType = nil) or
+       (TASTExpr(AExpr.Args.Items[1]).ResolvedType.Kind <> tyString) then
+      SemanticError('MethodAddress: second argument must be a string',
+        AExpr.Line, AExpr.Col);
+    Result := FTable.TypePointer;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   if SameText(AExpr.Name, 'StrToInt64') then
   begin
     if AExpr.Args.Count <> 1 then

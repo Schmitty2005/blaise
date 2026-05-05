@@ -2872,9 +2872,14 @@ end;
 
 procedure TCodeGenQBE.EmitTypeInfoDefs(AProg: TProgram);
 { Emit one $typeinfo_T data item per class type.
-  Layout: l parent_typeinfo_or_zero, l impllist_or_zero
-  TypeInfo is at vtable slot 0; _IsInstance walks parent chain.
-  impllist is NULL-terminated array of (typeinfo_intf, itab) pairs for _ImplementsInterface.
+  Layout: { l parent, l impllist, l name, l methods }
+    Slot 0 (offset  0): parent typeinfo pointer (0 = root)
+    Slot 1 (offset  8): impllist pointer (0 = no interfaces)
+    Slot 2 (offset 16): pointer to class name string literal
+    Slot 3 (offset 24): pointer to published-method table (0 = none)
+                        Table layout: { l count, [l name, l addr] x count }.
+                        TObject.MethodAddress walks vtable[0]→typeinfo→
+                        slot 3, then climbs the parent chain.
 
   TObject is the built-in root class; any user class with an explicit
   class(TObject, IFoo) parent list resolves Parent to TObject's
@@ -2882,20 +2887,21 @@ procedure TCodeGenQBE.EmitTypeInfoDefs(AProg: TProgram);
   to satisfy the linker.  Its parent slot is nil and its impllist slot
   is nil because TObject implements no interfaces. }
 var
-  I:         Integer;
-  TD:        TTypeDecl;
-  TDesc:     TTypeDesc;
-  RT:        TRecordTypeDesc;
-  GI:        TGenericInstance;
-  ParentStr: string;
-  ImplStr:   string;
-  MName:     string;
+  I, J, PubCount:  Integer;
+  TD:              TTypeDecl;
+  TDesc:           TTypeDesc;
+  RT:              TRecordTypeDesc;
+  GI:              TGenericInstance;
+  CD:              TClassTypeDef;
+  MD:              TMethodDecl;
+  ParentStr:       string;
+  ImplStr:         string;
+  MethStr:         string;
+  MName:           string;
+  MethLine:        string;
 begin
-  { typeinfo layout: { l parent, l impllist, l nameptr }
-    Slot 0 (offset  0): parent typeinfo pointer (0 = root)
-    Slot 1 (offset  8): impllist pointer (0 = no interfaces)
-    Slot 2 (offset 16): pointer to class name string literal }
-  EmitLine('data $typeinfo_TObject = { l 0, l 0, l ' + EmitClassNameRef('TObject') + ' }');
+  EmitLine('data $typeinfo_TObject = { l 0, l 0, l ' +
+           EmitClassNameRef('TObject') + ', l 0 }');
 
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
@@ -2904,6 +2910,8 @@ begin
     TDesc := AProg.SymbolTable.FindType(TD.Name);
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     RT := TRecordTypeDesc(TDesc);
+    CD := TClassTypeDef(TD.Def);
+
     if RT.Parent <> nil then
       ParentStr := '$typeinfo_' + RT.Parent.Name
     else
@@ -2912,12 +2920,40 @@ begin
       ImplStr := '$impllist_' + TD.Name
     else
       ImplStr := '0';
+
+    { Emit the published-method table if any methods are flagged.
+      Each entry: l name-string-data-ptr, l method-code-ptr. }
+    PubCount := 0;
+    for J := 0 to CD.Methods.Count - 1 do
+      if TMethodDecl(CD.Methods.Items[J]).IsPublished then
+        Inc(PubCount);
+    if PubCount > 0 then
+    begin
+      MethLine := 'data $methods_' + TD.Name + ' = { l ' + IntToStr(PubCount);
+      for J := 0 to CD.Methods.Count - 1 do
+      begin
+        MD := TMethodDecl(CD.Methods.Items[J]);
+        if not MD.IsPublished then Continue;
+        MethLine := MethLine +
+                    ', l ' + EmitClassNameRef(MD.Name) +
+                    ', l $' + MethodEmitName(MD, TD.Name, MD.Name);
+      end;
+      MethLine := MethLine + ' }';
+      EmitLine(MethLine);
+      MethStr := '$methods_' + TD.Name;
+    end
+    else
+      MethStr := '0';
+
     EmitLine('data $typeinfo_' + TD.Name +
              ' = { l ' + ParentStr + ', l ' + ImplStr +
-             ', l ' + EmitClassNameRef(TD.Name) + ' }');
+             ', l ' + EmitClassNameRef(TD.Name) +
+             ', l ' + MethStr + ' }');
   end;
 
-  { Generic instances }
+  { Generic instances — no published-method table emission yet (the
+    type-name mangling makes deduplicating across instantiations
+    finicky; revisit if a use case appears). }
   for I := 0 to AProg.GenericInstances.Count - 1 do
   begin
     GI    := TGenericInstance(AProg.GenericInstances.Items[I]);
@@ -2929,7 +2965,7 @@ begin
       ParentStr := '0';
     ImplStr := '0';
     EmitLine('data $typeinfo_' + MName + ' = { l ' + ParentStr + ', l ' + ImplStr +
-             ', l ' + EmitClassNameRef(GI.TypeName) + ' }');
+             ', l ' + EmitClassNameRef(GI.TypeName) + ', l 0 }');
   end;
 
   EmitLine('');
@@ -4073,6 +4109,16 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =w call $_StrToInt(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name,'MethodAddress') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        R := EmitExpr(TASTExpr(FC.Args.Items[1]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_MethodAddress(l %s, l %s)', [T, L, R]));
         Result := T;
         Exit;
       end;

@@ -40,6 +40,7 @@ function  _StringEquals(S1, S2: Pointer): Integer;
 function  _StringConcat(S1, S2: Pointer): Pointer;
 procedure TObject_Destroy(Self: Pointer);
 function  TObject_ToString(Self: Pointer): Pointer;
+function  _MethodAddress(Self, Name: Pointer): Pointer;
 procedure _ClassAddRef(UserPtr: Pointer);
 procedure _ClassFree(UserPtr: Pointer);
 { _ClassRelease is implemented in blaise_arc_class.c — decrement refcount
@@ -222,6 +223,60 @@ begin
   TInfo  := Slot^;        { TInfo points to typeinfo data }
   Slot   := TInfo + 16;   { typeinfo[2] = classname, at byte offset 16 }
   Result := Slot^;
+end;
+
+{ _MethodAddress: walk the typeinfo chain for an instance, looking up
+  Name in each class's published-method table.  Layout:
+    instance[0]  = vptr -> vtable
+    vtable[0]    = typeinfo
+    typeinfo[3]  = published-methods table (or 0)
+    methods[0]   = count (Int64)
+    methods[1+]  = pairs of (name-string-data-ptr, code-ptr)
+  Returns nil when no match is found.  Equality on names uses
+  _StringEquals so the caller passes a Blaise string. }
+function _MethodAddress(Self, Name: Pointer): Pointer;
+var
+  Slot:    ^Pointer;
+  VTable:  Pointer;
+  TInfo:   Pointer;
+  Methods: Pointer;
+  Count:   ^Int64;
+  Entry:   ^Pointer;
+  EntName: Pointer;
+  EntAddr: Pointer;
+  I:       Integer;
+begin
+  Result := nil;
+  if (Self = nil) or (Name = nil) then Exit;
+  Slot   := Self;
+  VTable := Slot^;
+  if VTable = nil then Exit;
+  Slot  := VTable;
+  TInfo := Slot^;
+  while TInfo <> nil do
+  begin
+    Slot    := TInfo + 24;   { typeinfo[3] = methods table ptr }
+    Methods := Slot^;
+    if Methods <> nil then
+    begin
+      Count := Methods;
+      Entry := Methods + 8;  { skip 8-byte count }
+      for I := 0 to Integer(Count^) - 1 do
+      begin
+        EntName := Entry^;
+        Entry   := Pointer(Entry) + 8;
+        EntAddr := Entry^;
+        Entry   := Pointer(Entry) + 8;
+        if _StringEquals(EntName, Name) <> 0 then
+        begin
+          Result := EntAddr;
+          Exit;
+        end;
+      end;
+    end;
+    Slot  := TInfo;          { typeinfo[0] = parent }
+    TInfo := Slot^;
+  end;
 end;
 
 procedure _ClassAddRef(UserPtr: Pointer);

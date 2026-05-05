@@ -695,6 +695,9 @@ begin
 end;
 
 function TParser.ParseClassDef: TClassTypeDef;
+var
+  CurrPublished: Boolean;
+  MethDecl:      TMethodDecl;
 begin
   Result := TClassTypeDef.Create;
   try
@@ -717,13 +720,19 @@ begin
     { Class body: fields, properties, and methods in any order.  A field
       declaration may be preceded by an attribute list, so accept
       `[` as a legal field-start token too.  Visibility keywords
-      (private/public/protected/published) are silently consumed. }
+      (private/public/protected/published) update CurrPublished, which
+      is then attached to each method decl so codegen can emit a
+      published-method table entry. }
+    CurrPublished := False;
     repeat
       if Check(tkIdent) and (SameText(FCurrent.Value, 'private') or
                               SameText(FCurrent.Value, 'public') or
                               SameText(FCurrent.Value, 'protected') or
                               SameText(FCurrent.Value, 'published')) then
-        Advance  { skip visibility modifier }
+      begin
+        CurrPublished := SameText(FCurrent.Value, 'published');
+        Advance;  { consume the visibility modifier }
+      end
       else if Check(tkConst) then
         ParseConstBlock(Result.ConstDecls)
       else if Check(tkVar) then
@@ -733,9 +742,17 @@ begin
       else if Check(tkIdent) or Check(tkLBracket) then
         ParseFieldDecl(Result.Fields)
       else if Check(tkFunction) then
-        Result.Methods.Add(ParseMethodDecl(True))
+      begin
+        MethDecl := ParseMethodDecl(True);
+        MethDecl.IsPublished := CurrPublished;
+        Result.Methods.Add(MethDecl);
+      end
       else if Check(tkProcedure) or Check(tkConstructor) or Check(tkDestructor) then
-        Result.Methods.Add(ParseMethodDecl(False))
+      begin
+        MethDecl := ParseMethodDecl(False);
+        MethDecl.IsPublished := CurrPublished;
+        Result.Methods.Add(MethDecl);
+      end
       else
         Break;
     until False;

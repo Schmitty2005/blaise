@@ -527,6 +527,11 @@ type
     IsVirtual:          Boolean;     { declared with 'virtual' directive }
     IsOverride:         Boolean;     { declared with 'override' directive }
     IsOverload:         Boolean;     { declared with 'overload' directive }
+    IsPublished:        Boolean;     { declared inside a 'published' visibility
+                                       section of a class.  Used by codegen to
+                                       emit an entry in the published-method
+                                       table, which TObject.MethodAddress
+                                       walks at runtime. }
     ResolvedQbeName:    string;      { set by uSemantic — mangled QBE symbol name;
                                        empty string means use Name verbatim }
     IsExternal:         Boolean;     { declared with 'external' directive — no body }
