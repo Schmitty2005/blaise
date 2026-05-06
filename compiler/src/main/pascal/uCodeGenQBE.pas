@@ -30,7 +30,10 @@ type
     FStrLitsEmitted:  Integer;      { count of $__s<N> already written to output }
     FTempCount:       Integer;
     FLabelCount:      Integer;
-    FCurrentBlock: TBlock;       { block currently being emitted; set by EmitBlock }
+    FCurrentBlock:      TBlock;      { block currently being emitted; set by EmitBlock }
+    FCurrentBlockLabel: string;      { label of the current basic block; updated by EmitLine
+                                       whenever a '@label' line is emitted; used by phi codegen }
+    FExcFrameNext:  Integer;   { index of next pre-allocated exc frame slot to use }
     FBreakLabels:    TStringList;  { stack of active loop-end labels; top = innermost }
     FContinueLabels: TStringList;  { stack of active loop-continue labels; top = innermost }
     FExitLabel:    string;       { label to jmp to for 'exit'; '' = main program }
@@ -62,6 +65,8 @@ type
     procedure EmitFuncDef(ADecl: TMethodDecl; AExported: Boolean);
     procedure EmitBlock(ABlock: TBlock);
     procedure EmitVarAllocs(ABlock: TBlock);
+    function  CountTryStmts(AStmt: TASTStmt): Integer;
+    procedure EmitExcFrameAllocs(ABlock: TBlock);
     procedure EmitGlobalVarData(ABlock: TBlock);
     procedure EmitParamAllocs(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
     procedure EmitArcCleanup(ABlock: TBlock);
@@ -282,6 +287,10 @@ end;
 procedure TCodeGenQBE.EmitLine(const ALine: string);
 begin
   FOutput.Add(ALine);
+  { Track the current basic block label — needed by short-circuit phi codegen
+    to record which predecessor block each incoming value comes from. }
+  if (Length(ALine) > 0) and (ALine[1] = '@') then
+    FCurrentBlockLabel := Copy(ALine, 2, Length(ALine) - 1);
 end;
 
 procedure TCodeGenQBE.EmitPendingStrLits;
@@ -352,6 +361,117 @@ begin
   end;
 end;
 
+
+function TCodeGenQBE.CountTryStmts(AStmt: TASTStmt): Integer;
+var
+  I, J: Integer;
+  Cmp:  TCompoundStmt;
+  IfS:  TIfStmt;
+  WhS:  TWhileStmt;
+  ForS: TForStmt;
+  FiS:  TForInStmt;
+  RepS: TRepeatStmt;
+  TFS:  TTryFinallyStmt;
+  TES:  TTryExceptStmt;
+  CsS:  TCaseStmt;
+  Br:   TCaseBranch;
+  H:    TExceptHandlerClause;
+begin
+  Result := 0;
+  if AStmt = nil then Exit;
+  if AStmt is TTryFinallyStmt then
+  begin
+    TFS := TTryFinallyStmt(AStmt);
+    Result := 1;
+    for I := 0 to TFS.TryBody.Stmts.Count - 1 do
+      Result := Result + CountTryStmts(TASTStmt(TFS.TryBody.Stmts.Items[I]));
+    for I := 0 to TFS.FinallyBody.Stmts.Count - 1 do
+      Result := Result + CountTryStmts(TASTStmt(TFS.FinallyBody.Stmts.Items[I]));
+    Exit;
+  end;
+  if AStmt is TTryExceptStmt then
+  begin
+    TES := TTryExceptStmt(AStmt);
+    Result := 1;
+    for I := 0 to TES.TryBody.Stmts.Count - 1 do
+      Result := Result + CountTryStmts(TASTStmt(TES.TryBody.Stmts.Items[I]));
+    for I := 0 to TES.Handlers.Count - 1 do
+    begin
+      H := TExceptHandlerClause(TES.Handlers.Items[I]);
+      Result := Result + CountTryStmts(H.Body);
+    end;
+    if TES.ElseBody <> nil then
+      for I := 0 to TES.ElseBody.Stmts.Count - 1 do
+        Result := Result + CountTryStmts(TASTStmt(TES.ElseBody.Stmts.Items[I]));
+    Exit;
+  end;
+  if AStmt is TCompoundStmt then
+  begin
+    Cmp := TCompoundStmt(AStmt);
+    for I := 0 to Cmp.Stmts.Count - 1 do
+      Result := Result + CountTryStmts(TASTStmt(Cmp.Stmts.Items[I]));
+    Exit;
+  end;
+  if AStmt is TIfStmt then
+  begin
+    IfS := TIfStmt(AStmt);
+    Result := CountTryStmts(IfS.ThenStmt) + CountTryStmts(IfS.ElseStmt);
+    Exit;
+  end;
+  if AStmt is TWhileStmt then
+  begin
+    WhS := TWhileStmt(AStmt);
+    Result := CountTryStmts(WhS.Body);
+    Exit;
+  end;
+  if AStmt is TForStmt then
+  begin
+    ForS := TForStmt(AStmt);
+    Result := CountTryStmts(ForS.Body);
+    Exit;
+  end;
+  if AStmt is TForInStmt then
+  begin
+    FiS := TForInStmt(AStmt);
+    Result := CountTryStmts(FiS.Body);
+    Exit;
+  end;
+  if AStmt is TRepeatStmt then
+  begin
+    RepS := TRepeatStmt(AStmt);
+    for I := 0 to RepS.Body.Stmts.Count - 1 do
+      Result := Result + CountTryStmts(TASTStmt(RepS.Body.Stmts.Items[I]));
+    Exit;
+  end;
+  if AStmt is TCaseStmt then
+  begin
+    CsS := TCaseStmt(AStmt);
+    for I := 0 to CsS.Branches.Count - 1 do
+    begin
+      Br := TCaseBranch(CsS.Branches.Items[I]);
+      Result := Result + CountTryStmts(Br.Stmt);
+    end;
+    Result := Result + CountTryStmts(CsS.ElseStmt);
+    Exit;
+  end;
+end;
+
+{ Pre-allocate exception frame slots at @start so that try/finally and
+  try/except blocks (including those inside loops) use static stack slots
+  rather than dynamic sub-%rsp allocations.  Dynamic alloc16 512 in loop
+  bodies grows the stack by 512 bytes per iteration and eventually
+  corrupts parent exception frame prev-pointers. }
+procedure TCodeGenQBE.EmitExcFrameAllocs(ABlock: TBlock);
+var
+  I, Total: Integer;
+begin
+  Total := 0;
+  for I := 0 to ABlock.Stmts.Count - 1 do
+    Total := Total + CountTryStmts(TASTStmt(ABlock.Stmts.Items[I]));
+  FExcFrameNext := 0;
+  for I := 0 to Total - 1 do
+    EmitLine(Format('  %%_exc_frame_%d =l alloc16 512', [I]));
+end;
 
 procedure TCodeGenQBE.EmitVarAllocs(ABlock: TBlock);
 var
@@ -643,6 +763,7 @@ var
 begin
   FCurrentBlock := ABlock;
   EmitVarAllocs(ABlock);
+  EmitExcFrameAllocs(ABlock);
   for I := 0 to ABlock.Stmts.Count - 1 do
     EmitStmt(TASTStmt(ABlock.Stmts.Items[I]));
   { Fall-through to exit label so 'exit' and normal flow share cleanup. }
@@ -842,11 +963,13 @@ begin
   LblFinExc := AllocLabel('fin_exc');
   LblEnd    := AllocLabel('fin_end');
 
-  { Stack-allocate exception frame (512 bytes, 16-byte aligned).
-    jbuf is at offset 0 so frame ptr can be passed directly to setjmp.
-    512 bytes accommodates jmp_buf on Linux x86_64 (200 B) and macOS ARM64 (~312 B). }
-  FrameTemp := AllocTemp;
-  EmitLine(Format('  %s =l alloc16 512', [FrameTemp]));
+  { Use a pre-allocated exception frame slot from @start (see EmitExcFrameAllocs).
+    Pre-allocation ensures the frame lives in the function's static stack frame
+    rather than being allocated dynamically on every execution of this block.
+    Dynamic alloc16 inside loops would grow the stack by 512 bytes per iteration
+    and eventually corrupt parent exception frame prev-pointers. }
+  FrameTemp := Format('%%_exc_frame_%d', [FExcFrameNext]);
+  FExcFrameNext := FExcFrameNext + 1;
   EmitLine(Format('  call $_PushExcFrame(l %s)', [FrameTemp]));
 
   SjrTemp := AllocTemp;
@@ -895,11 +1018,11 @@ begin
   LblExcept := AllocLabel('except_handler');
   LblEnd    := AllocLabel('except_end');
 
-  { Stack-allocate exception frame (512 bytes, 16-byte aligned).
+  { Use a pre-allocated exception frame slot from @start (see EmitExcFrameAllocs).
     Matches the size contract in blaise_exc.c — must hold jmp_buf (200 B on
     Linux x86_64, ~312 B on macOS ARM64) plus two pointer fields. }
-  FrameTemp := AllocTemp;
-  EmitLine(Format('  %s =l alloc16 512', [FrameTemp]));
+  FrameTemp := Format('%%_exc_frame_%d', [FExcFrameNext]);
+  FExcFrameNext := FExcFrameNext + 1;
   EmitLine(Format('  call $_PushExcFrame(l %s)', [FrameTemp]));
 
   SjrTemp := AllocTemp;
@@ -5455,26 +5578,32 @@ begin
     { Short-circuit boolean and/or: evaluate LHS, then skip RHS when the
       result is already determined.  FPC and Delphi use short-circuit by
       default, and the compiler source relies on it for guarded nil-checks
-      like "(P <> nil) and P.IsX". }
+      like "(P <> nil) and P.IsX".
+      We use a QBE phi node at the join block so that no alloc4/storew/loadw
+      memory slot is needed.  alloc4 inside loop bodies caused the stack
+      pointer to drift on every iteration (QBE emits a dynamic sub %rsp per
+      non-@start alloc), eventually overwriting parent exception frames. }
     if (BinExpr.Op = boAnd) or (BinExpr.Op = boOr) then
     begin
-      SelfTemp := AllocTemp;   { slot holding the boolean result }
-      EmitLine(Format('  %s =l alloc4 1', [SelfTemp]));
+      FuncName := AllocLabel('sc_rhs');
+      ArgLine  := AllocLabel('sc_end');
       L := EmitExpr(BinExpr.Left);
-      EmitLine(Format('  storew %s, %s', [L, SelfTemp]));
-      FuncName := AllocLabel('sc_rhs');   { reuse local; acts as RHS label }
-      ArgLine  := AllocLabel('sc_end');   { reuse local; acts as end label }
+      { Record the label of the block from which LHS falls through to @sc_end
+        (used by the phi).  We need the label of the CURRENT block — the last
+        @label emitted is our predecessor.  FCurrentBlockLabel tracks this. }
+      ArgTemp  := FCurrentBlockLabel;   { predecessor label for phi's LHS arm }
       if BinExpr.Op = boAnd then
         EmitLine(Format('  jnz %s, @%s, @%s', [L, FuncName, ArgLine]))
       else
         EmitLine(Format('  jnz %s, @%s, @%s', [L, ArgLine, FuncName]));
       EmitLine('@' + FuncName);
       R := EmitExpr(BinExpr.Right);
-      EmitLine(Format('  storew %s, %s', [R, SelfTemp]));
+      SelfTemp := FCurrentBlockLabel;   { predecessor label for phi's RHS arm }
       EmitLine(Format('  jmp @%s', [ArgLine]));
       EmitLine('@' + ArgLine);
       T := AllocTemp;
-      EmitLine(Format('  %s =w loadw %s', [T, SelfTemp]));
+      EmitLine(Format('  %s =w phi @%s %s, @%s %s',
+        [T, ArgTemp, L, SelfTemp, R]));
       Result := T;
       Exit;
     end;
