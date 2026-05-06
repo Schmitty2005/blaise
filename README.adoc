@@ -1,17 +1,13 @@
-= Blaise
+= Blaise Pascal Compiler
 :toc: left
 :toclevels: 2
 :icons: font
 :source-highlighter: rouge
 
-A modern, cross-platform Object Pascal compiler targeting native code via
-https://c9x.me/compile/[QBE] (and eventually LLVM). Single language mode,
-single string type, zero-GUID interfaces, reified generics, and first-class
-https://github.com/graemeg/opdebugger[OPDF] debug format support.
+**The Pascal you love, reimagined for the modern era.**
 
-Bootstrapped with https://www.freepascal.org/[Free Pascal Compiler].
-Built with https://github.com/graemeg/pasbuild[PasBuild].
-Licensed under the BSD 3-Clause licence.
+Blaise is a next-generation Object Pascal compiler built from the ground up to eliminate decades of legacy baggage. It prioritizes developer productivity, memory safety, and high-performance execution.
+
 
 == Design Philosophy
 
@@ -34,6 +30,12 @@ This compiler takes a different approach:
 
 See link:docs/design.adoc[docs/design.adoc] for the full architecture and
 implementation plan.
+
+The result — A modern, cross-platform Object Pascal compiler targeting native code via
+https://c9x.me/compile/[QBE] (and eventually LLVM). Single language mode,
+single string type, zero-GUID interfaces, reified generics, and first-class
+https://github.com/graemeg/opdebugger[OPDF] debug format support.
+
 
 == Repository Layout
 
@@ -71,6 +73,18 @@ never committed to the repository.
 
 == Status
 
+[cols="1,2", options="none"]
+|===
+| Self-hosting
+| Yes — Blaise compiles itself with byte-for-byte identical output across bootstrap stages.
+
+| Test coverage
+| 1200+ tests and growing; Test-Driven Development from day one.
+
+| Backend
+| QBE (production); LLVM backend in active development.
+|===
+
 [cols="1,3,1", options="header"]
 |===
 | Phase | Goal | Status
@@ -89,11 +103,11 @@ never committed to the repository.
 
 | 4
 | OPDF debug info emission
-| Planned
+| Complete
 
 | 5
 | Self-hosting + LLVM + Windows + macOS ARM64
-| Planned
+| In-Progress
 
 | 6
 | LSP + VS Code extension
@@ -190,6 +204,17 @@ compiler/target/blaise --source Hello.pas --emit-ir
   breaks cycles
 |===
 
+== Community
+
+The core architecture is still being finalised, so the project is not yet
+accepting code contributions. Feedback on language design, syntax choices, and
+the future direction of Blaise is very welcome — please use the
+https://github.com/graemeg/blaise/discussions[Discussions] tab on GitHub.
+
 == Licence
 
-BSD 3-Clause. See link:LICENCE[LICENCE].
+Apache License v2.0 with Runtime Library Exception. See link:LICENSE[LICENSE].
+
+
+---
+*Built with ❤️ for the Pascal community by Graeme.*
