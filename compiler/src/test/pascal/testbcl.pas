@@ -7,17 +7,19 @@
 }
 
 {
-  testbcl — smoke test for the bcl.testing v0 unit (Step 11d).
+  testbcl — end-to-end smoke test for bcl.testing + bcl.testing.runner.text.
 
   Declares one TTestCase fixture with two published methods (one passes,
-  one fails), constructs and runs each one against a TTestResultesult, and
-  prints a one-line summary plus the failure list.
+  one fails), registers the class via RegisterTest, then hands off to
+  the text runner.  The runner is responsible for walking the
+  published-method table, instantiating each test, and printing the
+  PASS / FAIL summary.
 
-  This driver intentionally uses direct construction (TFixture.Create
-  per method name) rather than relying on metaclass-based enumeration,
-  which is the runner's responsibility in Step 11e.  The hot path
-  (MethodAddress + procedure-of-object dispatch) is exercised exactly
-  the way the runner will exercise it.
+  Successful run prints:
+
+    FAIL (2 tests, 1 failures, 0 errors)
+    Failures:
+      TestFailing: deliberate failure Expected: 42  Actual: 2
 }
 
 program testbcl;
@@ -25,7 +27,8 @@ program testbcl;
 {$mode objfpc}{$H+}
 
 uses
-  bcl.testing;
+  bcl.testing,
+  bcl.testing.runner.text;
 
 type
   TSampleTests = class(TTestCase)
@@ -45,35 +48,7 @@ begin
   Self.AssertEquals(42, 1 + 1, 'deliberate failure');
 end;
 
-var
-  Inst: TSampleTests;
-  R:    TTestResult;
-  I:    Integer;
 begin
-  R := TTestResult.Create;
-  try
-    { Run the passing test. }
-    Inst := TSampleTests.Create('TestPassing');
-    Inst.Run(R);
-    Inst.Free;
-
-    { Run the deliberately failing test. }
-    Inst := TSampleTests.Create('TestFailing');
-    Inst.Run(R);
-    Inst.Free;
-
-    WriteLn(R.Summary);
-    if R.NumberOfFailures > 0 then
-    begin
-      WriteLn('Failures:');
-      I := 0;
-      while I < R.NumberOfFailures do
-      begin
-        WriteLn('  ' + R.Failures.Strings[I]);
-        I := I + 1
-      end;
-    end;
-  finally
-    R.Free;
-  end;
+  RegisterTest(TSampleTests);
+  Halt(RunAll);
 end.
