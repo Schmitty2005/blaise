@@ -41,11 +41,15 @@ function  _StringConcat(S1, S2: Pointer): Pointer;
 procedure TObject_Destroy(Self: Pointer);
 function  TObject_ToString(Self: Pointer): Pointer;
 function  _MethodAddress(Self, Name: Pointer): Pointer;
+function  _ClassCreate(TInfo: Pointer): Pointer;
 procedure _ClassAddRef(UserPtr: Pointer);
 procedure _ClassFree(UserPtr: Pointer);
-{ _ClassRelease is implemented in blaise_arc_class.c — decrement refcount
-  and free the object (running the cleanup hook) when it reaches zero. }
+{ _ClassRelease and _ClassAlloc are implemented in blaise_arc_class.c
+  because they store and call a cleanup function pointer in the object
+  header — a pattern not yet expressible in Blaise's Pascal RTL.
+  We call _ClassAlloc from _ClassCreate via an external declaration. }
 procedure _ClassRelease(UserPtr: Pointer); external name '_ClassRelease';
+function  _ClassAlloc(Size: Int64; Cleanup: Pointer): Pointer; external name '_ClassAlloc';
 
 implementation
 
@@ -277,6 +281,52 @@ begin
     Slot  := TInfo;          { typeinfo[0] = parent }
     TInfo := Slot^;
   end;
+end;
+
+{ _ClassCreate: runtime equivalent of the inline EmitConstructorCall
+  lowering the codegen produces for the static 'TFoo.Create' form.
+  Reads totalsize, fieldcleanup pointer, and vtable pointer from the
+  expanded class typeinfo (see typeinfo layout in uCodeGenQBE.pas's
+  EmitTypeInfoDefs).  Allocates an instance, installs the vtable
+  pointer at slot 0, and bumps the refcount once.
+
+  Typeinfo offsets read here:
+    typeinfo[ 4]  +32  -> totalsize  (Int64)
+    typeinfo[ 5]  +40  -> $_FieldCleanup_<T>
+    typeinfo[ 6]  +48  -> $vtable_<T> }
+function _ClassCreate(TInfo: Pointer): Pointer;
+var
+  SizeSlot:    ^Int64;
+  PtrSlot:     ^Pointer;
+  Size:        Int64;
+  Cleanup:     Pointer;
+  VTable:      Pointer;
+  UserPtr:     Pointer;
+  VTableSlot:  ^Pointer;
+begin
+  Result := nil;
+  if TInfo = nil then Exit;
+
+  SizeSlot := TInfo + 32;
+  Size     := SizeSlot^;
+
+  PtrSlot  := TInfo + 40;
+  Cleanup  := PtrSlot^;
+
+  PtrSlot  := TInfo + 48;
+  VTable   := PtrSlot^;
+
+  UserPtr  := _ClassAlloc(Size, Cleanup);
+  if UserPtr = nil then Exit;
+
+  { Install the vtable pointer at instance[0] — the codegen emits
+    'storel $vtable_T, %self' immediately after _ClassAlloc; mirror
+    that here. }
+  VTableSlot  := UserPtr;
+  VTableSlot^ := VTable;
+
+  _ClassAddRef(UserPtr);
+  Result := UserPtr;
 end;
 
 procedure _ClassAddRef(UserPtr: Pointer);
