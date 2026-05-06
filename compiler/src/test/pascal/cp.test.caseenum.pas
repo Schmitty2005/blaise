@@ -68,6 +68,14 @@ type
     { enum + case integration                                              }
     { ------------------------------------------------------------------ }
     procedure TestCodegen_Enum_In_Case_Compiles;
+
+    { ------------------------------------------------------------------ }
+    { case — string selector (Step 11f prerequisite)                       }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_CaseString_AcceptsStringSelector;
+    procedure TestSemantic_CaseString_RejectsIntLabelOnStringSelector;
+    procedure TestCodegen_CaseString_EmitsStringEqualsCalls;
+    procedure TestCodegen_CaseString_OrdinalCaseStillUsesCEQW;
   end;
 
 implementation
@@ -353,6 +361,85 @@ begin
   IR := GenIR(SrcEnumInCase);
   AssertTrue('enum-in-case produces IR', Length(IR) > 0);
   AssertTrue('enum-in-case emits ceqw', Pos('ceqw', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ case — string selector                                               }
+{ ------------------------------------------------------------------ }
+
+procedure TCaseEnumTests.TestSemantic_CaseString_AcceptsStringSelector;
+const
+  Src =
+    'program P;'                                    + LineEnding +
+    'var S: string; R: Integer;'                    + LineEnding +
+    'begin'                                         + LineEnding +
+    '  S := ''foo'';'                               + LineEnding +
+    '  case S of'                                   + LineEnding +
+    '    ''bar'': R := 1;'                          + LineEnding +
+    '    ''foo'': R := 2'                           + LineEnding +
+    '  else'                                        + LineEnding +
+    '    R := 99'                                   + LineEnding +
+    '  end'                                         + LineEnding +
+    'end.';
+begin
+  SemanticOK(Src);
+end;
+
+procedure TCaseEnumTests.TestSemantic_CaseString_RejectsIntLabelOnStringSelector;
+const
+  Src =
+    'program P;'                                    + LineEnding +
+    'var S: string;'                                + LineEnding +
+    'begin'                                         + LineEnding +
+    '  S := ''foo'';'                               + LineEnding +
+    '  case S of'                                   + LineEnding +
+    '    1: S := ''one''  '                         + LineEnding +
+    '  end'                                         + LineEnding +
+    'end.';
+var
+  Raised: Boolean;
+begin
+  Raised := False;
+  try
+    SemanticOK(Src);
+  except
+    on E: Exception do Raised := True;
+  end;
+  AssertTrue('integer literal label on string-typed selector rejected', Raised);
+end;
+
+procedure TCaseEnumTests.TestCodegen_CaseString_EmitsStringEqualsCalls;
+const
+  Src =
+    'program P;'                                    + LineEnding +
+    'var S: string; R: Integer;'                    + LineEnding +
+    'begin'                                         + LineEnding +
+    '  S := ''foo'';'                               + LineEnding +
+    '  case S of'                                   + LineEnding +
+    '    ''bar'': R := 1;'                          + LineEnding +
+    '    ''foo'': R := 2'                           + LineEnding +
+    '  else'                                        + LineEnding +
+    '    R := 99'                                   + LineEnding +
+    '  end'                                         + LineEnding +
+    'end.';
+var
+  IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('string case emits _StringEquals call',
+    Pos('call $_StringEquals(', IR) > 0);
+end;
+
+procedure TCaseEnumTests.TestCodegen_CaseString_OrdinalCaseStillUsesCEQW;
+{ Regression: the new string-case codegen must not affect the ordinal
+  case path.  Use the existing SrcCaseSimple fixture. }
+var
+  IR: string;
+begin
+  IR := GenIR(SrcCaseSimple);
+  AssertTrue('integer case still emits ceqw', Pos('ceqw', IR) > 0);
+  AssertEquals('integer case does NOT emit _StringEquals',
+    0, Pos('_StringEquals', IR));
 end;
 
 initialization

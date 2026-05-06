@@ -284,9 +284,11 @@ type
 
   TCaseStmt = class(TASTStmt)
   public
-    Selector: TASTExpr;    { owned — must be ordinal type }
+    Selector: TASTExpr;    { owned — ordinal or string }
     Branches: TObjectList; { owned list of TCaseBranch }
     ElseStmt: TASTStmt;    { owned; nil if no else clause }
+    IsStringCase: Boolean; { set by uSemantic when Selector resolves to string;
+                             codegen uses _StringEquals instead of ceqw }
     constructor Create;
     destructor Destroy; override;
   end;

@@ -1534,6 +1534,58 @@ ClassCreate surface.
 
 ---
 
+== `case` Statement on String Selector
+
+=== Decision
+
+A `case` statement may use a `string`-typed selector.  Each branch label
+must be a string-typed expression (typically a string literal); the
+runtime comparison uses `_StringEquals` against the selector value.
+
+[source,pascal]
+----
+case S of
+  'foo':   HandleFoo;
+  'bar':   HandleBar;
+  'baz':   HandleBaz;
+else
+  HandleOther;
+end;
+----
+
+The semantics are equivalent to a chain of `if S = 'foo' then ... else
+if S = 'bar' then ...` tests, evaluated in source order.
+
+=== Rationale
+
+The compiler's own source uses small one-letter strings (`'w'`, `'l'`,
+`'d'`, `'s'`) as QBE type tags and switches on them in several places.
+Forcing those sites into hand-rolled if/else chains for the sake of
+self-hosting was rejected as a step backwards — Object Pascal users
+have always read `case`-on-string as idiomatic, and Delphi/FPC accept
+it.  Implementation cost is small (lower to a chained equality test;
+no jump tables) and the codegen is local to `EmitCaseStmt`.
+
+The selector is evaluated exactly once.  Each branch label is
+evaluated when its turn comes; because string literals are immortal,
+order has no observable side effect.
+
+=== Alternatives rejected
+
+* *Refactor every internal `case S of` to if/elseif chains.*  Hides
+  intent at the call site, repeats the selector expression, and would
+  have to be re-applied every time a new tag-switch site appears.
+  The language feature pays for itself the first time it's reused.
+* *Restrict labels to string literals only.*  Would simplify the
+  semantic check, but ruins compositions like `case Tag of EmptyName,
+  WildcardName: ... end`.  Allow any string-typed expression; the
+  runtime comparison handles whatever value flows in.
+* *Build a hash table for large dispatches.*  Premature.  All current
+  uses are 2–6 branches, where chained equality is faster than any
+  hash overhead.  Revisit if a case ever has dozens of labels.
+
+---
+
 == Open Language Questions
 
 These items are under active consideration but not yet decided.

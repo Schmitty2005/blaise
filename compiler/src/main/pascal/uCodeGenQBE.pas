@@ -2630,7 +2630,10 @@ begin
       BranchLabels.Add(AllocLabel('case_br'));
 
     { Dispatch block: for each branch test all its values;
-      on no match fall through to next branch test or else }
+      on no match fall through to next branch test or else.
+      String-typed selector lowers each label test to a call to
+      _StringEquals (returns 1 on equal, 0 otherwise) so jnz works
+      against the result directly. }
     for I := 0 to AStmt.Branches.Count - 1 do
     begin
       Branch    := TCaseBranch(AStmt.Branches.Items[I]);
@@ -2640,7 +2643,11 @@ begin
         ValTemp := EmitExpr(TASTExpr(Branch.Values.Items[J]));
         CmpTemp := AllocTemp;
         NextLbl := AllocLabel('case_next');
-        EmitLine(Format('  %s =w ceqw %s, %s', [CmpTemp, SelTemp, ValTemp]));
+        if AStmt.IsStringCase then
+          EmitLine(Format('  %s =w call $_StringEquals(l %s, l %s)',
+            [CmpTemp, SelTemp, ValTemp]))
+        else
+          EmitLine(Format('  %s =w ceqw %s, %s', [CmpTemp, SelTemp, ValTemp]));
         EmitLine(Format('  jnz %s, @%s, @%s', [CmpTemp, BranchLbl, NextLbl]));
         EmitLine('@' + NextLbl);
       end;

@@ -5956,9 +5956,11 @@ var
   I, J:     Integer;
 begin
   SelType := AnalyseExpr(AStmt.Selector);
-  if not SelType.IsOrdinal then
+  AStmt.IsStringCase := SelType.IsString;
+  if not (SelType.IsOrdinal or AStmt.IsStringCase) then
     SemanticError(
-      Format('case selector must be ordinal type, got ''%s''', [SelType.Name]),
+      Format('case selector must be ordinal or string type, got ''%s''',
+        [SelType.Name]),
       AStmt.Line, AStmt.Col);
   for I := 0 to AStmt.Branches.Count - 1 do
   begin
