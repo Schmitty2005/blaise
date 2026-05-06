@@ -34,6 +34,7 @@ type
     FCurrentBlockLabel: string;      { label of the current basic block; updated by EmitLine
                                        whenever a '@label' line is emitted; used by phi codegen }
     FExcFrameNext:  Integer;   { index of next pre-allocated exc frame slot to use }
+    FExcDepth:      Integer;   { number of exc frames currently pushed in the try stack }
     FBreakLabels:    TStringList;  { stack of active loop-end labels; top = innermost }
     FContinueLabels: TStringList;  { stack of active loop-continue labels; top = innermost }
     FExitLabel:    string;       { label to jmp to for 'exit'; '' = main program }
@@ -71,6 +72,7 @@ type
     procedure EmitParamAllocs(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
     procedure EmitArcCleanup(ABlock: TBlock);
     procedure EmitExcPathArcCleanup(ABlock: TBlock);
+    procedure EmitExcUnwind(ATargetDepth: Integer);
     procedure EmitStmt(AStmt: TASTStmt);
     procedure EmitIfStmt(AStmt: TIfStmt);
     procedure EmitWhileStmt(AStmt: TWhileStmt);
@@ -469,6 +471,7 @@ begin
   for I := 0 to ABlock.Stmts.Count - 1 do
     Total := Total + CountTryStmts(TASTStmt(ABlock.Stmts.Items[I]));
   FExcFrameNext := 0;
+  FExcDepth := 0;
   for I := 0 to Total - 1 do
     EmitLine(Format('  %%_exc_frame_%d =l alloc16 512', [I]));
 end;
@@ -843,6 +846,14 @@ begin
   end;
 end;
 
+procedure TCodeGenQBE.EmitExcUnwind(ATargetDepth: Integer);
+var
+  I: Integer;
+begin
+  for I := FExcDepth downto ATargetDepth + 1 do
+    EmitLine('  call $_PopExcFrame()');
+end;
+
 procedure TCodeGenQBE.EmitStmt(AStmt: TASTStmt);
 var
   DeadLbl: string;
@@ -885,6 +896,7 @@ begin
     EmitProcCall(TProcCall(AStmt))
   else if AStmt is TExitStmt then
   begin
+    EmitExcUnwind(0);
     if FExitLabel <> '' then
       EmitLine(Format('  jmp @%s', [FExitLabel]))
     else
@@ -897,6 +909,7 @@ begin
   begin
     if FBreakLabels.Count = 0 then
       raise ECodeGenError.Create('break outside loop');
+    EmitExcUnwind(PtrUInt(FBreakLabels.Objects[FBreakLabels.Count - 1]));
     EmitLine(Format('  jmp @%s',
       [FBreakLabels.Strings[FBreakLabels.Count - 1]]));
     DeadLbl := AllocLabel('after_break');
@@ -906,6 +919,7 @@ begin
   begin
     if FContinueLabels.Count = 0 then
       raise ECodeGenError.Create('continue outside loop');
+    EmitExcUnwind(PtrUInt(FContinueLabels.Objects[FContinueLabels.Count - 1]));
     EmitLine(Format('  jmp @%s',
       [FContinueLabels.Strings[FContinueLabels.Count - 1]]));
     DeadLbl := AllocLabel('after_continue');
@@ -971,6 +985,7 @@ begin
   FrameTemp := Format('%%_exc_frame_%d', [FExcFrameNext]);
   FExcFrameNext := FExcFrameNext + 1;
   EmitLine(Format('  call $_PushExcFrame(l %s)', [FrameTemp]));
+  Inc(FExcDepth);
 
   SjrTemp := AllocTemp;
   EmitLine(Format('  %s =w call $setjmp(l %s)', [SjrTemp, FrameTemp]));
@@ -981,6 +996,7 @@ begin
   for I := 0 to AStmt.TryBody.Stmts.Count - 1 do
     EmitStmt(TASTStmt(AStmt.TryBody.Stmts.Items[I]));
   EmitLine('  call $_PopExcFrame()');
+  Dec(FExcDepth);
   for I := 0 to AStmt.FinallyBody.Stmts.Count - 1 do
     EmitStmt(TASTStmt(AStmt.FinallyBody.Stmts.Items[I]));
   EmitLine(Format('  jmp @%s', [LblEnd]));
@@ -991,6 +1007,7 @@ begin
   ExcTemp := AllocTemp;
   EmitLine(Format('  %s =l call $_CurrentException()', [ExcTemp]));
   EmitLine('  call $_PopExcFrame()');
+  Dec(FExcDepth);
   for I := 0 to AStmt.FinallyBody.Stmts.Count - 1 do
     EmitStmt(TASTStmt(AStmt.FinallyBody.Stmts.Items[I]));
   EmitExcPathArcCleanup(FCurrentBlock);
@@ -1024,6 +1041,7 @@ begin
   FrameTemp := Format('%%_exc_frame_%d', [FExcFrameNext]);
   FExcFrameNext := FExcFrameNext + 1;
   EmitLine(Format('  call $_PushExcFrame(l %s)', [FrameTemp]));
+  Inc(FExcDepth);
 
   SjrTemp := AllocTemp;
   EmitLine(Format('  %s =w call $setjmp(l %s)', [SjrTemp, FrameTemp]));
@@ -1034,6 +1052,7 @@ begin
   for I := 0 to AStmt.TryBody.Stmts.Count - 1 do
     EmitStmt(TASTStmt(AStmt.TryBody.Stmts.Items[I]));
   EmitLine('  call $_PopExcFrame()');
+  Dec(FExcDepth);
   EmitLine(Format('  jmp @%s', [LblEnd]));
 
   { Exception path: capture exception before popping frame, then pop }
@@ -1046,6 +1065,7 @@ begin
     ExcTemp := AllocTemp;
     EmitLine(Format('  %s =l call $_CurrentException()', [ExcTemp]));
     EmitLine('  call $_PopExcFrame()');
+    Dec(FExcDepth);
 
     for I := 0 to AStmt.Handlers.Count - 1 do
     begin
@@ -1086,6 +1106,7 @@ begin
   begin
     { Plain catch-all body }
     EmitLine('  call $_PopExcFrame()');
+    Dec(FExcDepth);
     for I := 0 to AStmt.ExceptBody.Stmts.Count - 1 do
       EmitStmt(TASTStmt(AStmt.ExceptBody.Stmts.Items[I]));
     EmitLine(Format('  jmp @%s', [LblEnd]));
@@ -1156,8 +1177,8 @@ begin
 
   { Body block }
   EmitLine('@' + LblBody);
-  FBreakLabels.Add(LblEnd);
-  FContinueLabels.Add(LblNext);
+  FBreakLabels.AddObject(LblEnd, TObject(PtrUInt(FExcDepth)));
+  FContinueLabels.AddObject(LblNext, TObject(PtrUInt(FExcDepth)));
   try
     EmitStmt(AStmt.Body);
   finally
@@ -1252,8 +1273,8 @@ begin
 
     { Body: load element, assign to loop var, then user body }
     EmitLine('@' + LblBody);
-    FBreakLabels.Add(LblEnd);
-    FContinueLabels.Add(LblCond);
+    FBreakLabels.AddObject(LblEnd, TObject(PtrUInt(FExcDepth)));
+    FContinueLabels.AddObject(LblCond, TObject(PtrUInt(FExcDepth)));
     try
       BasePtr := EmitExpr(AStmt.CollExpr);
       IdxW    := AllocTemp;
@@ -1354,8 +1375,8 @@ begin
 
     { Body: load byte at index — data IS the pointer, no skip needed }
     EmitLine('@' + LblBody);
-    FBreakLabels.Add(LblEnd);
-    FContinueLabels.Add(LblCond);
+    FBreakLabels.AddObject(LblEnd, TObject(PtrUInt(FExcDepth)));
+    FContinueLabels.AddObject(LblCond, TObject(PtrUInt(FExcDepth)));
     try
       SelfT   := EmitExpr(AStmt.CollExpr);
       IdxW    := AllocTemp;
@@ -1457,8 +1478,8 @@ begin
 
   { --- Body: read Current, assign to loop var, then user body --- }
   EmitLine('@' + LblBody);
-  FBreakLabels.Add(LblEnd);
-  FContinueLabels.Add(LblCond);
+  FBreakLabels.AddObject(LblEnd, TObject(PtrUInt(FExcDepth)));
+  FContinueLabels.AddObject(LblCond, TObject(PtrUInt(FExcDepth)));
   try
     SelfT    := AllocTemp;
     EmitLine(Format('  %s =l loadl %s', [SelfT, EnumSlot]));
@@ -1544,8 +1565,8 @@ begin
 
   { Loop body block }
   EmitLine('@' + LblBody);
-  FBreakLabels.Add(LblEnd);
-  FContinueLabels.Add(LblCond);
+  FBreakLabels.AddObject(LblEnd, TObject(PtrUInt(FExcDepth)));
+  FContinueLabels.AddObject(LblCond, TObject(PtrUInt(FExcDepth)));
   try
     EmitStmt(AStmt.Body);
   finally
@@ -1574,8 +1595,8 @@ begin
 
   { Body block }
   EmitLine('@' + LblBody);
-  FBreakLabels.Add(LblEnd);
-  FContinueLabels.Add(LblCond);
+  FBreakLabels.AddObject(LblEnd, TObject(PtrUInt(FExcDepth)));
+  FContinueLabels.AddObject(LblCond, TObject(PtrUInt(FExcDepth)));
   try
     EmitCompoundStmt(AStmt.Body);
   finally
