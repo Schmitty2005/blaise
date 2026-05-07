@@ -231,6 +231,47 @@ local record variables at scope exit.
 
 *Effort.* Small to moderate — shares infrastructure with ARC scope-exit emit.
 
+
+=== If Conditional Operator (Ternary Conditional Operator)
+
+More details here: https://en.wikipedia.org/wiki/Ternary_conditional_operator
+
+Many languages use the ?: syntax as follows:
+
+`result = condition ? value_if_true : value_if_false`
+
+But that's not very pascal-like. Oxygene language has implemented this years
+ago with te following syntax:
+
+For instance
+
+[source]
+----
+var s := if (a<>0) then Sin(1/a) else 1;
+----
+
+being equivalent to
+
+[source,pascal]
+----
+var s : Float;
+if (a<>0) then
+   s := Sin(1/a)
+else s := 1;
+----
+
+So for Blaise we could do similar:
+
+X := if Left < 100 then 22 else 45;
+// the operator can be used as part of any expression, as follows:
+ShowMessage(if Left < 100 then 'Small' else 'Big');
+
+NOTE: If the two types do not match and are incompatible, the compiler should issue an error message
+
+NOTE: It is important to note that the if-then-else expression differs from the if-then-else statement, the expression has a single type. When the type of the then and else expressions differ, the expression's type is the common type of the two expressions' types; also known as the Least Upper Bound (LUB) type.
+
+See also Delphi's documentation: https://docwiki.embarcadero.com/RADStudio/Florence/en/Conditional_Operators_(Delphi)
+
 == BCL Packages — Numeric Types
 
 === `Currency` and `BigDecimal` as BCL packages
