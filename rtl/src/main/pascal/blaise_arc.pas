@@ -41,6 +41,7 @@ function  _StringConcat(S1, S2: Pointer): Pointer;
 procedure TObject_Destroy(Self: Pointer);
 function  TObject_ToString(Self: Pointer): Pointer;
 function  _MethodAddress(Self, Name: Pointer): Pointer;
+function  _InheritsFrom(AChild, AParent: Pointer): Boolean;
 function  _ClassCreate(TInfo: Pointer): Pointer;
 procedure _ClassAddRef(UserPtr: Pointer);
 procedure _ClassFree(UserPtr: Pointer);
@@ -280,6 +281,31 @@ begin
     end;
     Slot  := TInfo;          { typeinfo[0] = parent }
     TInfo := Slot^;
+  end;
+end;
+
+{ _InheritsFrom: class-identity walk for TObject.InheritsFrom.
+  AChild and AParent are both typeinfo pointers (the values returned by
+  Obj.ClassType or a bare class-identifier reference).
+  Returns True when AChild equals AParent or is a descendant of AParent.
+  A nil AParent always returns False; a nil AChild always returns False. }
+function _InheritsFrom(AChild, AParent: Pointer): Boolean;
+var
+  TI: ^Pointer;
+  Current: Pointer;
+begin
+  Result := False;
+  if (AChild = nil) or (AParent = nil) then Exit;
+  Current := AChild;
+  while Current <> nil do
+  begin
+    if Current = AParent then
+    begin
+      Result := True;
+      Exit;
+    end;
+    TI      := Current;   { typeinfo[0] = parent pointer }
+    Current := TI^;
   end;
 end;
 

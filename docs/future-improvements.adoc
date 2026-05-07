@@ -346,28 +346,6 @@ template.
 
 *Effort.* Significant — new type kind, RTL support, codegen changes.
 
-=== `TObject.InheritsFrom`
-
-*What.* A class method on `TObject` that walks the parent-class chain and
-returns `True` if the receiver class is equal to or descends from the
-argument class.
-
-*Why it matters.* In punit this is needed by `AssertInheritsFrom`, which
-tests that one object's class is a subclass of another.  More generally it is
-a prerequisite for any `is`-operator implementation and for pattern matching
-on exception hierarchies.
-
-*Current workaround in punit.* `AssertInheritsFrom` is absent from the Blaise
-punit port.
-
-*Implementation notes.* Requires the parent-class pointer in the vmt (already
-partially present in the typeinfo struct) and a loop or recursive call that
-walks the chain comparing pointers.  Closely related to implementing the `is`
-operator and typed `on E: TFoo do` exception matching by inheritance rather
-than exact type.
-
-*Effort.* Small — walks the parent-class pointer chain already present in the typeinfo struct.
-
 === `Str()` intrinsic — numeric to string conversion
 
 *What.* The FPC/Pascal `Str(X, S)` intrinsic writes the string representation

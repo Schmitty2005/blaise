@@ -70,6 +70,15 @@ type
     procedure TestSemantic_Inherited_WithArgs_OK;
     procedure TestCodegen_Inherited_NoArgs_CallsParentMethod;
     procedure TestCodegen_Inherited_WithArgs_ForwardsArgs;
+
+    { ------------------------------------------------------------------ }
+    { TObject.InheritsFrom                                                 }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_InheritsFrom_OnPointerVar_OK;
+    procedure TestSemantic_InheritsFrom_OnClassInstance_OK;
+    procedure TestSemantic_InheritsFrom_ReturnsBoolean;
+    procedure TestCodegen_InheritsFrom_CallsRTL;
+    procedure TestCodegen_InheritsFrom_OnClassInstance_LoadsTypeinfo;
   end;
 
 implementation
@@ -533,6 +542,74 @@ var IR: string;
 begin
   IR := GenIR(SrcInheritedWithArgs);
   AssertTrue('call $TBase_SetX in IR', Pos('call $TBase_SetX', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ TObject.InheritsFrom                                                }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcInheritsFromPointer =
+    'program P;'                    + LineEnding +
+    'var C: Pointer;'               + LineEnding +
+    '    D: Pointer;'               + LineEnding +
+    '    B: Boolean;'               + LineEnding +
+    'begin'                         + LineEnding +
+    '  B := C.InheritsFrom(D);'     + LineEnding +
+    'end.';
+
+  SrcInheritsFromClassInstance =
+    'program P;'                            + LineEnding +
+    'type TBase = class end;'               + LineEnding +
+    '     TChild = class(TBase) end;'       + LineEnding +
+    'var Obj: TChild;'                      + LineEnding +
+    '    B: Boolean;'                       + LineEnding +
+    'begin'                                 + LineEnding +
+    '  B := Obj.InheritsFrom(TBase);'       + LineEnding +
+    'end.';
+
+procedure TInheritTests.TestSemantic_InheritsFrom_OnPointerVar_OK;
+var Prog: TProgram;
+begin
+  Prog := AnalyseSrc(SrcInheritsFromPointer);
+  AssertNotNull('program parsed and analysed', Prog);
+  Prog.Free;
+end;
+
+procedure TInheritTests.TestSemantic_InheritsFrom_OnClassInstance_OK;
+var Prog: TProgram;
+begin
+  Prog := AnalyseSrc(SrcInheritsFromClassInstance);
+  AssertNotNull('program parsed and analysed', Prog);
+  Prog.Free;
+end;
+
+procedure TInheritTests.TestSemantic_InheritsFrom_ReturnsBoolean;
+var Prog: TProgram;
+    VD:   TVarDecl;
+begin
+  Prog := AnalyseSrc(SrcInheritsFromPointer);
+  try
+    VD := TVarDecl(Prog.Block.Decls.Items[2]);  { B: Boolean }
+    AssertEquals('B is Boolean', 'Boolean', VD.ResolvedType.Name);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TInheritTests.TestCodegen_InheritsFrom_CallsRTL;
+var IR: string;
+begin
+  IR := GenIR(SrcInheritsFromPointer);
+  AssertTrue('call $_InheritsFrom in IR', Pos('call $_InheritsFrom', IR) > 0);
+end;
+
+procedure TInheritTests.TestCodegen_InheritsFrom_OnClassInstance_LoadsTypeinfo;
+var IR: string;
+begin
+  IR := GenIR(SrcInheritsFromClassInstance);
+  AssertTrue('call $_InheritsFrom in IR', Pos('call $_InheritsFrom', IR) > 0);
+  AssertTrue('$typeinfo_TBase as arg', Pos('$typeinfo_TBase', IR) > 0);
 end;
 
 initialization

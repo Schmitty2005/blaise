@@ -563,7 +563,8 @@ type
     IsConstructorCall:  Boolean;    { set by uSemantic — TypeName.Create(args) }
     IsGlobal:           Boolean;    { set by uSemantic — ObjectName is a program-level global }
     IsVarParam:         Boolean;    { set by uSemantic — ObjectName is a var/out parameter }
-    IsBuiltinToString:  Boolean;    { set by uSemantic — built-in TObject.ToString virtual dispatch }
+    IsBuiltinToString:    Boolean;  { set by uSemantic — built-in TObject.ToString virtual dispatch }
+    IsBuiltinInheritsFrom: Boolean; { set by uSemantic — SomeClass.InheritsFrom(OtherClass) }
     constructor Create;
     destructor Destroy; override;
   end;

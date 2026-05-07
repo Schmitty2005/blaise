@@ -4858,6 +4858,46 @@ begin
       Exit;
     end;
 
+    { Built-in InheritsFrom: calls $_InheritsFrom(child_ti, parent_ti).
+      Receiver is a typeinfo pointer (Pointer/metaclass var, or class instance);
+      argument is any expression that produces a typeinfo pointer. }
+    if MCallExpr.IsBuiltinInheritsFrom then
+    begin
+      { Load the receiver typeinfo pointer }
+      if MCallExpr.ObjExpr <> nil then
+        SelfTemp := EmitExpr(MCallExpr.ObjExpr)  { already a typeinfo ptr }
+      else if MCallExpr.IsVarParam then
+      begin
+        FPtrTemp := AllocTemp;
+        SelfTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %%_var_%s', [FPtrTemp, MCallExpr.ObjectName]));
+        EmitLine(Format('  %s =l loadl %s', [SelfTemp, FPtrTemp]));
+      end
+      else
+      begin
+        SelfTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s',
+          [SelfTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
+      end;
+      { For a class instance receiver, load typeinfo from vtable[0] }
+      if (MCallExpr.ResolvedClassType <> nil) and
+         (MCallExpr.ResolvedClassType.Kind = tyClass) then
+      begin
+        VTblTemp := AllocTemp;
+        Ptr      := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [VTblTemp, SelfTemp]));
+        EmitLine(Format('  %s =l loadl %s', [Ptr, VTblTemp]));
+        SelfTemp := Ptr;
+      end;
+      { Evaluate the argument — a class ref or Pointer variable }
+      ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[0]));
+      T := AllocTemp;
+      EmitLine(Format('  %s =w call $_InheritsFrom(l %s, l %s)',
+        [T, SelfTemp, ArgTemp]));
+      Result := T;
+      Exit;
+    end;
+
     { Built-in TObject.ToString: virtual dispatch through vtable slot 1.
       Loads the object pointer, reads its vtable, reads slot 1 (ToString),
       calls through it with just Self, returns a string (QBE type l). }

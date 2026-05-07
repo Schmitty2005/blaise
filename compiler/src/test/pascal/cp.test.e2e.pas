@@ -185,6 +185,14 @@ type
     { When a derived class inherits the override without re-declaring it,
       the inherited slot must still resolve to the override at runtime. }
     procedure TestRun_ToString_InheritedOverrideStillReached;
+
+    { TObject.InheritsFrom: class ancestry walk }
+    procedure TestRun_InheritsFrom_SameClass_ReturnsTrue;
+    procedure TestRun_InheritsFrom_Parent_ReturnsTrue;
+    procedure TestRun_InheritsFrom_GrandParent_ReturnsTrue;
+    procedure TestRun_InheritsFrom_Unrelated_ReturnsFalse;
+    procedure TestRun_InheritsFrom_Reverse_ReturnsFalse;
+    procedure TestRun_InheritsFrom_ClassType_Works;
   end;
 
 implementation
@@ -2486,6 +2494,151 @@ begin
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('inherited override still reached',
     'foo override' + LE + 'foo override' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ TObject.InheritsFrom                                                }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcInheritsFromBase =
+    'program P;'                          + LineEnding +
+    'type TBase = class end;'             + LineEnding +
+    'var B: TBase;'                       + LineEnding +
+    'begin'                               + LineEnding +
+    '  B := TBase.Create;'                + LineEnding +
+    '  if B.InheritsFrom(TBase) then'     + LineEnding +
+    '    WriteLn(''yes'')'                + LineEnding +
+    '  else'                              + LineEnding +
+    '    WriteLn(''no'');'                + LineEnding +
+    '  B.Free;'                           + LineEnding +
+    'end.';
+
+  SrcInheritsFromParent =
+    'program P;'                              + LineEnding +
+    'type TBase = class end;'                 + LineEnding +
+    '     TChild = class(TBase) end;'         + LineEnding +
+    'var C: TChild;'                          + LineEnding +
+    'begin'                                   + LineEnding +
+    '  C := TChild.Create;'                   + LineEnding +
+    '  if C.InheritsFrom(TBase) then'         + LineEnding +
+    '    WriteLn(''yes'')'                    + LineEnding +
+    '  else'                                  + LineEnding +
+    '    WriteLn(''no'');'                    + LineEnding +
+    '  C.Free;'                               + LineEnding +
+    'end.';
+
+  SrcInheritsFromGrandParent =
+    'program P;'                                    + LineEnding +
+    'type TBase = class end;'                       + LineEnding +
+    '     TChild = class(TBase) end;'               + LineEnding +
+    '     TGrandChild = class(TChild) end;'         + LineEnding +
+    'var G: TGrandChild;'                           + LineEnding +
+    'begin'                                         + LineEnding +
+    '  G := TGrandChild.Create;'                    + LineEnding +
+    '  if G.InheritsFrom(TBase) then'               + LineEnding +
+    '    WriteLn(''yes'')'                          + LineEnding +
+    '  else'                                        + LineEnding +
+    '    WriteLn(''no'');'                          + LineEnding +
+    '  G.Free;'                                     + LineEnding +
+    'end.';
+
+  SrcInheritsFromUnrelated =
+    'program P;'                                  + LineEnding +
+    'type TBase = class end;'                     + LineEnding +
+    '     TUnrelated = class end;'                + LineEnding +
+    'var B: TBase;'                               + LineEnding +
+    'begin'                                       + LineEnding +
+    '  B := TBase.Create;'                        + LineEnding +
+    '  if B.InheritsFrom(TUnrelated) then'        + LineEnding +
+    '    WriteLn(''yes'')'                        + LineEnding +
+    '  else'                                      + LineEnding +
+    '    WriteLn(''no'');'                        + LineEnding +
+    '  B.Free;'                                   + LineEnding +
+    'end.';
+
+  SrcInheritsFromReverse =
+    'program P;'                              + LineEnding +
+    'type TBase = class end;'                 + LineEnding +
+    '     TChild = class(TBase) end;'         + LineEnding +
+    'var B: TBase;'                           + LineEnding +
+    'begin'                                   + LineEnding +
+    '  B := TBase.Create;'                    + LineEnding +
+    '  if B.InheritsFrom(TChild) then'        + LineEnding +
+    '    WriteLn(''yes'')'                    + LineEnding +
+    '  else'                                  + LineEnding +
+    '    WriteLn(''no'');'                    + LineEnding +
+    '  B.Free;'                               + LineEnding +
+    'end.';
+
+  SrcInheritsFromClassType =
+    'program P;'                                  + LineEnding +
+    'type TBase = class end;'                     + LineEnding +
+    '     TChild = class(TBase) end;'             + LineEnding +
+    'var C: TChild;'                              + LineEnding +
+    '    CT: Pointer;'                            + LineEnding +
+    'begin'                                       + LineEnding +
+    '  C := TChild.Create;'                       + LineEnding +
+    '  CT := C.ClassType;'                        + LineEnding +
+    '  if CT.InheritsFrom(TBase) then'            + LineEnding +
+    '    WriteLn(''yes'')'                        + LineEnding +
+    '  else'                                      + LineEnding +
+    '    WriteLn(''no'');'                        + LineEnding +
+    '  C.Free;'                                   + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_InheritsFrom_SameClass_ReturnsTrue;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromBase, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('same class returns true', 'yes' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_InheritsFrom_Parent_ReturnsTrue;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromParent, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('child inherits from parent', 'yes' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_InheritsFrom_GrandParent_ReturnsTrue;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromGrandParent, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('grandchild inherits from base', 'yes' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_InheritsFrom_Unrelated_ReturnsFalse;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromUnrelated, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('unrelated class returns false', 'no' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_InheritsFrom_Reverse_ReturnsFalse;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromReverse, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('parent does not inherit from child', 'no' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_InheritsFrom_ClassType_Works;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromClassType, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('ClassType.InheritsFrom works', 'yes' + LE, Output);
 end;
 
 initialization

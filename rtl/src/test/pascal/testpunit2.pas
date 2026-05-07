@@ -13,8 +13,8 @@
     * QWord        → Int64         (Blaise lacks QWord)
     * Smallint / Shortint / Word / Longint  → Integer (Blaise narrows these)
     * Test8: .Active field dropped; use PTest result + Options directly
-    * DoTest23-25: TClass AssertEquals skipped (ClassName/ClassType not yet in Blaise)
-    * DoTest21/22: ExpectException + class-identity limitation noted
+    * DoTest23-25: TClass uses Pointer (Blaise typeinfo pointers)
+    * DoTest21: now a proper must-fail test — InheritsFrom detects class mismatch
 }
 
 program testpunit2;
@@ -180,10 +180,9 @@ end;
 
 function DoTest21 : string;
 begin
-  { ExpectException + EFail raised.  Class identity not checked in this
-    Blaise punit build (ClassType not yet available) — reports as pass
-    even though EFail ≠ EError.  Will be tightened when ClassType lands. }
-  ExpectException('Expect exception EError (class id skipped)', EError);
+  { Must fail: ExpectException declared EError but EFail raised — class
+    mismatch detected by InheritsFrom check in RunTestHandler. }
+  ExpectException('Must fail: expected EError but raised EFail', EError);
   raise EFail.Create('Expected');
 end;
 
@@ -194,10 +193,8 @@ begin
   raise EFail.Create('Expected');
 end;
 
-{ DoTest23–25 exercise AssertEquals(TClass, TClass) which requires
-  ClassName/ClassType — not yet available in Blaise.  They are replaced
-  with AssertEquals(Pointer) comparisons so the test suite still exercises
-  the pointer equality path. }
+{ DoTest23–25 exercise AssertEquals on class references.  Blaise uses
+  Pointer for TClass; typeinfo pointers are comparable via AssertEquals(Pointer). }
 
 function DoTest23 : string;
 begin

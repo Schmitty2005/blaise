@@ -4803,6 +4803,18 @@ begin
   if AExpr.ObjExpr <> nil then
   begin
     ObjType := AnalyseExpr(AExpr.ObjExpr);
+
+    { Built-in InheritsFrom on a Pointer/metaclass/class ObjExpr receiver. }
+    if SameText(AExpr.Name, 'InheritsFrom') and (AExpr.Args.Count = 1) and
+       (ObjType.Kind in [tyPointer, tyMetaClass, tyClass]) then
+    begin
+      AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+      AExpr.IsBuiltinInheritsFrom := True;
+      Result := FTable.TypeBoolean;
+      AExpr.ResolvedType := Result;
+      Exit;
+    end;
+
     if not (ObjType.Kind in [tyClass, tyInterface]) then
       SemanticError(
         Format('Receiver of ''.%s'' must be a class or interface', [AExpr.Name]),
@@ -4959,6 +4971,23 @@ begin
     SemanticError(
       Format('''%s'' is not a variable', [AExpr.ObjectName]),
       AExpr.Line, AExpr.Col);
+
+  { Built-in InheritsFrom on a Pointer/metaclass receiver.
+    Called as AClass.InheritsFrom(BClass) where both sides are typeinfo
+    pointers (i.e. TClass = Pointer, or class-of-T metaclass).
+    Also handles a tyClass receiver (instance) for uniform usage. }
+  if SameText(AExpr.Name, 'InheritsFrom') and (AExpr.Args.Count = 1) and
+     (ObjSym.TypeDesc.Kind in [tyPointer, tyMetaClass, tyClass]) then
+  begin
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    AExpr.IsBuiltinInheritsFrom := True;
+    AExpr.IsGlobal  := ObjSym.IsGlobal;
+    AExpr.IsVarParam := (ObjSym.Kind = skVarParameter);
+    Result := FTable.TypeBoolean;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   if not (ObjSym.TypeDesc.Kind in [tyClass, tyInterface]) then
     SemanticError(
       Format('''%s'' is not a class or interface variable', [AExpr.ObjectName]),

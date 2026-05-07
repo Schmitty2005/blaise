@@ -309,6 +309,8 @@ function AssertEquals(AMessage : string; const AExpected, AActual : Pointer) : B
 function AssertDiffers(AMessage : string; const AExpected, AActual : Pointer) : Boolean;
 function AssertSame(AMessage : string; const AExpected, AActual : TObject) : Boolean;
 function AssertNotSame(AMessage : string; const AExpected, AActual : TObject) : Boolean;
+function AssertInheritsFrom(AMessage : string; const AChild, AParent : TObject) : Boolean; overload;
+function AssertInheritsFromClass(AMessage : string; const AChild, AParent : Pointer) : Boolean;
 function AssertException(const AMessage : string; AExceptionClass : Pointer;
   ARun : TTestRun) : Boolean;
 function ExpectException(AMessage : string; AClass : Pointer) : Boolean;
@@ -1368,25 +1370,36 @@ begin
   Result := AssertDiffers(AMessage, Pointer(AExpected), Pointer(AActual));
 end;
 
+function AssertInheritsFromClass(AMessage : string; const AChild, AParent : Pointer) : Boolean;
+begin
+  Result := AssertTrue(AMessage, AChild.InheritsFrom(AParent));
+end;
+
+function AssertInheritsFrom(AMessage : string; const AChild, AParent : TObject) : Boolean;
+begin
+  Result := AssertInheritsFromClass(AMessage, AChild.ClassType, AParent.ClassType);
+end;
+
 function AssertException(const AMessage : string; AExceptionClass : Pointer;
   ARun : TTestRun) : Boolean;
 var
   Raised : Boolean;
   S : string;
 begin
-  { ClassType not yet available in Blaise — only verify that an exception
-    was raised and the test function returned no error string.
-    Class-identity check is skipped until RTTI is available. }
   Raised := False;
   S := '';
   try
     S := ARun();
   except
     on E : TObject do
+      begin
       Raised := True;
+      if (AExceptionClass <> nil) and
+         not E.ClassType.InheritsFrom(AExceptionClass) then
+        S := AMessage + ': unexpected exception class ' + E.ClassName;
+      end;
   end;
-  Result := AssertNotNull(AMessage, Pointer(AExceptionClass))  { suppress unused warning }
-    and AssertTrue(AMessage + ': expected exception was not raised', Raised)
+  Result := AssertTrue(AMessage + ': expected exception was not raised', Raised)
     and AssertEquals(AMessage, '', S);
 end;
 
@@ -1634,15 +1647,17 @@ const
 
 function RunTestHandler(aTest : ^TTest) : string;
 var
-  ExcRaised : Boolean;
-  EM        : string;
-  RunFn     : TTestRun;
-  RunProcFn : TTestRunProc;
+  ExcRaised   : Boolean;
+  ExcClass    : Pointer;
+  ExcClassName : string;
+  EM          : string;
+  RunFn       : TTestRun;
+  RunProcFn   : TTestRunProc;
 begin
-  { ClassType not yet available in Blaise.  We track whether any exception
-    was raised; class identity check is deferred until RTTI is available. }
   Result := '';
-  ExcRaised := False;
+  ExcRaised    := False;
+  ExcClass     := nil;
+  ExcClassName := '';
   EM := '';
   RunFn     := aTest^.Run;
   RunProcFn := aTest^.RunProc;
@@ -1659,17 +1674,20 @@ begin
   except
     on E : TObject do
       begin
-      ExcRaised := True;
+      ExcRaised    := True;
+      ExcClass     := E.ClassType;
+      ExcClassName := E.ClassName;
       EM := E.ToString;
       end;
   end;
   if CurrentResult^.ExpectException <> nil then
     begin
-    { An exception was expected — if none raised, report failure. }
     if not ExcRaised then
       Result := CurrentResult^.TestMessage + ' ' +
-        ExpectMessage('<exception>', 'none raised');
-    { Class identity check skipped until ClassType is available in Blaise. }
+        ExpectMessage('<exception>', 'none raised')
+    else if not ExcClass.InheritsFrom(CurrentResult^.ExpectException) then
+      Result := CurrentResult^.TestMessage + ' ' +
+        ExpectMessage('<expected class>', ExcClassName);
     end
   else
     begin
