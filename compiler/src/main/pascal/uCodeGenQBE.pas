@@ -4086,6 +4086,7 @@ var
   SretBuf:      string;
   IdxTemp:      string;
   IdxQType:     string;
+  Ptr2:         string;
 begin
   if AExpr is TFuncCallExpr then
   begin
@@ -5331,6 +5332,32 @@ begin
           FuncName := '$' + QBEMangle(FldAccess.ResolvedType.Name) + '_' + FldAccess.FieldName;
         EmitLine(Format('  call %s(l %s)', [FuncName, T]));
       end;
+      Result := T;
+    end
+    else if FldAccess.IsCharAccess then
+    begin
+      { String field subscript: Rec.Field[N] (1-based) — load field, then read byte at N-1. }
+      L := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+      if FldAccess.FieldInfo.Offset > 0 then
+      begin
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d', [Ptr, L, FldAccess.FieldInfo.Offset]));
+        L := Ptr;
+      end;
+      { Load the string pointer (the field value) }
+      Ptr := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [Ptr, L]));
+      { Compute 0-based byte offset: idx - 1 }
+      T := EmitExpr(FldAccess.PropIndexExpr);
+      IdxTemp := AllocTemp;
+      EmitLine(Format('  %s =l extsw %s', [IdxTemp, T]));
+      Ptr2    := AllocTemp;
+      EmitLine(Format('  %s =l sub %s, 1', [Ptr2, IdxTemp]));
+      IdxTemp := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %s', [IdxTemp, Ptr, Ptr2]));
+      T := AllocTemp;
+      EmitLine(Format('  %s =w loadub %s', [T, IdxTemp]));
       Result := T;
     end
     else if FldAccess.PropRead <> nil then

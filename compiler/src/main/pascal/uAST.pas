@@ -108,6 +108,7 @@ type
     IsBuiltinToString:   Boolean;     { set by uSemantic — .ToString built-in: virtual dispatch via vtable slot 1 }
     IsVarParam:          Boolean;     { set by uSemantic — RecordName is a var parameter (record by-ref) }
     PropIndexExpr: TASTExpr;  { owned — non-nil = indexed property read (e.g. List.Items[i]) }
+    IsCharAccess:  Boolean;   { set by uSemantic — PropIndexExpr indexes a string field: S.Field[N] }
     destructor Destroy; override;
   end;
 
