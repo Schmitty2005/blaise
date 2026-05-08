@@ -50,6 +50,12 @@ type
     procedure TestExpr_Parenthesised;
     procedure TestExpr_IdentInExpr;
 
+    { Chained postfix access }
+    procedure TestChain_MethodThenField;
+    procedure TestChain_SubscriptThenField;
+    procedure TestChain_MethodThenMethodThenField;
+    procedure TestChain_FuncCallThenSubscript;
+
     { Error cases }
     procedure TestError_MissingProgramKeyword;
     procedure TestError_MissingDot;
@@ -421,6 +427,87 @@ begin
 end;
 
 { Error cases }
+
+{ Chained postfix access }
+
+procedure TParserTests.TestChain_MethodThenField;
+var
+  Prog: TProgram;
+  Stmt: TAssignment;
+  Fld:  TFieldAccessExpr;
+begin
+  Prog := ParseSource(
+    'program P; var N: Integer; begin N := Obj.GetRec().X end.');
+  try
+    Stmt := TAssignment(Prog.Block.Stmts[0]);
+    AssertTrue('RHS is field access', Stmt.Expr is TFieldAccessExpr);
+    Fld := TFieldAccessExpr(Stmt.Expr);
+    AssertEquals('field name', 'X', Fld.FieldName);
+    AssertTrue('base is method call', Fld.Base is TMethodCallExpr);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TParserTests.TestChain_SubscriptThenField;
+var
+  Prog: TProgram;
+  Stmt: TAssignment;
+  Fld:  TFieldAccessExpr;
+begin
+  Prog := ParseSource(
+    'program P; var N: Integer; begin N := Tokens[0].Kind end.');
+  try
+    Stmt := TAssignment(Prog.Block.Stmts[0]);
+    AssertTrue('RHS is field access', Stmt.Expr is TFieldAccessExpr);
+    Fld := TFieldAccessExpr(Stmt.Expr);
+    AssertEquals('field name', 'Kind', Fld.FieldName);
+    AssertTrue('base is subscript', Fld.Base is TStringSubscriptExpr);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TParserTests.TestChain_MethodThenMethodThenField;
+var
+  Prog: TProgram;
+  Stmt: TAssignment;
+  Fld:  TFieldAccessExpr;
+  MC:   TMethodCallExpr;
+begin
+  Prog := ParseSource(
+    'program P; var N: Integer; begin N := A.GetB().GetC().Val end.');
+  try
+    Stmt := TAssignment(Prog.Block.Stmts[0]);
+    AssertTrue('RHS is field access', Stmt.Expr is TFieldAccessExpr);
+    Fld := TFieldAccessExpr(Stmt.Expr);
+    AssertEquals('outer field', 'Val', Fld.FieldName);
+    AssertTrue('base is method call', Fld.Base is TMethodCallExpr);
+    MC := TMethodCallExpr(Fld.Base);
+    AssertEquals('middle method', 'GetC', MC.Name);
+    AssertTrue('middle base is method call', MC.ObjExpr is TMethodCallExpr);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TParserTests.TestChain_FuncCallThenSubscript;
+var
+  Prog: TProgram;
+  Stmt: TAssignment;
+  Sub:  TStringSubscriptExpr;
+begin
+  Prog := ParseSource(
+    'program P; var N: Integer; begin N := GetList()[0] end.');
+  try
+    Stmt := TAssignment(Prog.Block.Stmts[0]);
+    AssertTrue('RHS is subscript', Stmt.Expr is TStringSubscriptExpr);
+    Sub := TStringSubscriptExpr(Stmt.Expr);
+    AssertTrue('base is func call', Sub.StrExpr is TFuncCallExpr);
+  finally
+    Prog.Free;
+  end;
+end;
 
 procedure TParserTests.TestError_MissingProgramKeyword;
 begin
