@@ -4152,11 +4152,12 @@ begin
             TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).HighBound]))
         else
         begin
-          { Open-array: load the high-index slot and truncate to Integer (w) }
+          { Open-array: load the high-index slot and truncate to Integer (w).
+            QBE has no truncl; assigning an l value to a w temp implicitly truncates. }
           L := TIdentExpr(FC.Args.Items[0]).Name;
           R := AllocTemp;
           EmitLine(Format('  %s =l loadl %%_var_%s_high', [R, L]));
-          EmitLine(Format('  %s =w truncl %s', [T, R]));
+          EmitLine(Format('  %s =w copy %s', [T, R]));
         end;
         Result := T;
         Exit;
