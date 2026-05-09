@@ -1,27 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project>
   <name>blaise-compiler</name>
-  <!-- version inherited from root aggregator -->
 
   <build>
     <packaging>application</packaging>
     <mainSource>Blaise.pas</mainSource>
     <executableName>blaise</executableName>
-  </build>
-
-  <test>
-    <framework>auto</framework>
-    <testSource>TestRunner.pas</testSource>
-    <frameworkOptions>
-      <option>--all</option>
-      <option>--format=plain</option>
-    </frameworkOptions>
-    <!-- RTL sources needed when Blaise compiles the test runner -->
+    <!-- RTL sources consumed directly by Blaise; no pre-built PPU artifacts needed. -->
     <unitPaths>
       <path>../rtl/src/main/pascal</path>
     </unitPaths>
+  </build>
+
+  <test>
+    <testSource>TestRunner.pas</testSource>
   </test>
 
-  <!-- compiler does not depend on rtl at build time;
-       the RTL is consumed by programs the compiler produces -->
 </project>
