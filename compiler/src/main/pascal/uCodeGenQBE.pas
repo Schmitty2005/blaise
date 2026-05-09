@@ -3889,6 +3889,16 @@ begin
     ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[0]));
     EmitLine(Format('  call $_DeleteFile(l %s)', [ArgTemp]));
   end
+  else if UCaseName = 'REMOVEDIR' then
+  begin
+    ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[0]));
+    EmitLine(Format('  call $_RemoveDir(l %s)', [ArgTemp]));
+  end
+  else if UCaseName = 'FORCEDIRECTORIES' then
+  begin
+    ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[0]));
+    EmitLine(Format('  call $_ForceDirectories(l %s)', [ArgTemp]));
+  end
   else if UCaseName = 'SLEEP' then
   begin
     ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[0]));
@@ -4206,6 +4216,18 @@ begin
         Exit;
       end;
 
+      if SameText(FC.Name,'PosEx') then
+      begin
+        L       := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        R       := EmitExpr(TASTExpr(FC.Args.Items[1]));
+        ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[2]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_StringPosEx(l %s, l %s, w %s)',
+          [T, L, R, ArgTemp]));
+        Result := T;
+        Exit;
+      end;
+
       if SameText(FC.Name,'Copy') then
       begin
         L       := EmitExpr(TASTExpr(FC.Args.Items[0]));
@@ -4519,6 +4541,24 @@ begin
         Exit;
       end;
 
+      if SameText(FC.Name,'GetCurrentDir') then
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_GetCurrentDir()', [T]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name,'GetTempFileName') then
+      begin
+        L       := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        R       := EmitExpr(TASTExpr(FC.Args.Items[1]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_GetTempFileName(l %s, l %s)', [T, L, R]));
+        Result := T;
+        Exit;
+      end;
+
       if SameText(FC.Name,'ParamStr') then
       begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
@@ -4617,6 +4657,24 @@ begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_ExtractFilePath(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name,'ExtractFileDir') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_ExtractFileDir(l %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name,'ExcludeTrailingPathDelimiter') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l call $_ExcludeTrailingPathDelimiter(l %s)', [T, L]));
         Result := T;
         Exit;
       end;
@@ -6269,6 +6327,7 @@ end;
 procedure TCodeGenQBE.AppendUnit(AUnit: TUnit);
 var
   I, J, K, S:  Integer;
+  PubCount:    Integer;
   ImplDecl:     TMethodDecl;
   IntfNames:    TStringList;
   Body:         TStringList;
@@ -6282,6 +6341,8 @@ var
   IntfDesc:     TInterfaceTypeDesc;
   ParentStr:    string;
   ImplStr:      string;
+  MethStr:      string;
+  MethLine:     string;
   ItabLine:     string;
   ImplLine:     string;
   MethName:     string;
@@ -6364,11 +6425,12 @@ begin
             EmitLine('data $typeinfo_' + TD.Name + ' = { l 0 }');
         end;
 
-        { Class typeinfo blocks }
+        { Class typeinfo blocks — full 7-slot layout matching EmitTypeInfoDefs }
         for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
         begin
           TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
           if not (TD.Def is TClassTypeDef) then Continue;
+          CD := TClassTypeDef(TD.Def);
           TDesc := FSymTable.FindType(TD.Name);
           if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
           RT := TRecordTypeDesc(TDesc);
@@ -6380,8 +6442,36 @@ begin
             ImplStr := '$impllist_' + TD.Name
           else
             ImplStr := '0';
+
+          PubCount := 0;
+          for J := 0 to CD.Methods.Count - 1 do
+            if TMethodDecl(CD.Methods.Items[J]).IsPublished then
+              Inc(PubCount);
+          if PubCount > 0 then
+          begin
+            MethLine := 'data $methods_' + TD.Name + ' = { l ' + IntToStr(PubCount);
+            for J := 0 to CD.Methods.Count - 1 do
+            begin
+              MDecl := TMethodDecl(CD.Methods.Items[J]);
+              if not MDecl.IsPublished then Continue;
+              MethLine := MethLine +
+                          ', l ' + EmitClassNameRef(MDecl.Name) +
+                          ', l $' + MethodEmitName(MDecl, TD.Name, MDecl.Name);
+            end;
+            MethLine := MethLine + ' }';
+            EmitLine(MethLine);
+            MethStr := '$methods_' + TD.Name;
+          end
+          else
+            MethStr := '0';
+
           EmitLine('data $typeinfo_' + TD.Name +
-                   ' = { l ' + ParentStr + ', l ' + ImplStr + ' }');
+                   ' = { l ' + ParentStr + ', l ' + ImplStr +
+                   ', l ' + EmitClassNameRef(TD.Name) +
+                   ', l ' + MethStr +
+                   ', l ' + IntToStr(RT.TotalSize) +
+                   ', l $_FieldCleanup_' + TD.Name +
+                   ', l $vtable_' + TD.Name + ' }');
         end;
 
         { Vtable data }

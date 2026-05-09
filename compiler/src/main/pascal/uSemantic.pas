@@ -40,6 +40,7 @@ type
     FCurrentClass:         TRecordTypeDesc;  { class being analysed (set in AnalyseMethodDecl) }
     FCurrentLocalBlock:    TBlock;       { block currently being stmt-analysed; for-in injects synthetic TVarDecl here }
     FForInCounter:         Integer;      { counter for generating unique __forin_N variable names }
+    FCurrentUnitName:      string;       { name of the unit/program currently being analysed }
 
     { Generic type instantiation: resolves 'TBox<Integer>' on demand. }
     function  FindTypeOrInstantiate(const AName: string): TTypeDesc;
@@ -103,7 +104,8 @@ type
       Empty parameter list yields '$' (lone dollar). }
     function  MangleParamSig(ADecl: TMethodDecl): string;
     { Per-arg compatibility: 2 = exact, 1 = widening, 0 = no match. }
-    function  ArgMatchScore(AParam: TTypeDesc; AArg: TTypeDesc): Integer;
+    function  ArgMatchScore(AParam: TTypeDesc; AArg: TTypeDesc;
+                AArgExpr: TASTExpr = nil): Integer;
     procedure AnalyseMethodCall(ACall: TMethodCallStmt);
     procedure AnalyseInheritedCall(ACall: TInheritedCallStmt);
     procedure AnalyseCaseStmt(AStmt: TCaseStmt);
@@ -199,7 +201,10 @@ end;
 
 procedure TSemanticAnalyser.SemanticError(const AMsg: string; ALine, ACol: Integer);
 begin
-  raise ESemanticError.Create(Format('%s at line %d col %d', [AMsg, ALine, ACol]));
+  if FCurrentUnitName <> '' then
+    raise ESemanticError.Create(Format('%s at line %d col %d in %s', [AMsg, ALine, ACol, FCurrentUnitName]))
+  else
+    raise ESemanticError.Create(Format('%s at line %d col %d', [AMsg, ALine, ACol]));
 end;
 
 function TSemanticAnalyser.AttrMatches(const AAttrName, ACanonical: string): Boolean;
@@ -426,6 +431,7 @@ end;
 procedure TSemanticAnalyser.Analyse(AProg: TProgram);
 begin
   FProg := AProg;
+  FCurrentUnitName := AProg.Name;
   AnalyseBlock(AProg.Block);
   { Transfer symbol table ownership to the program so that TTypeDesc
     objects (referenced by ResolvedType pointers on AST nodes) outlive
@@ -444,6 +450,7 @@ var
   ParType:  TTypeDesc;
   Sym:      TSymbol;
 begin
+  FCurrentUnitName := AUnit.Name;
   FTable.PushScope;
   try
     { Resolve interface type and constant declarations. }
@@ -694,6 +701,7 @@ var
   Sym:      TSymbol;
   VDecl:    TVarDecl;
 begin
+  FCurrentUnitName := AUnit.Name;
   { --- Interface section ------------------------------------------------
     No scope is pushed here: all FTable.Define calls go to the global scope,
     making these symbols visible to callers of this unit. }
@@ -1733,14 +1741,35 @@ end;
 
 procedure TSemanticAnalyser.AnalyseConstDecls(ABlock: TBlock);
 var
-  I:    Integer;
+  I, J: Integer;
   CD:   TConstDecl;
   Sym:  TSymbol;
+  RefSym: TSymbol;
   TD:   TTypeDesc;
+  Resolved: string;
 begin
   for I := 0 to ABlock.ConstDecls.Count - 1 do
   begin
     CD := TConstDecl(ABlock.ConstDecls.Items[I]);
+    if CD.IsString and (CD.ConstParts <> nil) then
+    begin
+      Resolved := '';
+      for J := 0 to CD.ConstParts.Count - 1 do
+      begin
+        if CD.ConstParts.Objects[J] <> nil then
+        begin
+          RefSym := FTable.Lookup(CD.ConstParts[J]);
+          if (RefSym <> nil) and (RefSym.Kind = skConstant) then
+            Resolved := Resolved + RefSym.ConstString
+          else
+            SemanticError(Format('Undeclared constant ''%s''', [CD.ConstParts[J]]),
+                          CD.Line, CD.Col);
+        end
+        else
+          Resolved := Resolved + CD.ConstParts[J];
+      end;
+      CD.StrVal := Resolved;
+    end;
     if CD.IsString then
       TD := FTable.TypeString
     else if CD.IsFloat then
@@ -2461,6 +2490,9 @@ var
   Best:        TMethodDecl;
   TotalCnt:    Integer;
   Arity:       Integer;
+  ExactNew:    Integer;
+  ExactBest:   Integer;
+  S1, S2:      Integer;
 begin
   Result    := nil;
   if AArgs <> nil then Arity := AArgs.Count else Arity := -1;
@@ -2526,7 +2558,7 @@ begin
       begin
         Par      := TMethodParam(Cand.Params.Items[J]);
         Arg      := TASTExpr(AArgs.Items[J]);
-        ArgScore := ArgMatchScore(Par.ResolvedType, Arg.ResolvedType);
+        ArgScore := ArgMatchScore(Par.ResolvedType, Arg.ResolvedType, Arg);
         if ArgScore = 0 then
         begin
           Score := -1;
@@ -2535,7 +2567,7 @@ begin
         Score := Score + ArgScore;
       end;
       if Score < 0 then Continue;
-      { Tie-break: prefer fewer defaulted slots (Cand.Params.Count - Arity). }
+      { Primary tie-break: prefer fewer defaulted slots. }
       Score := (Score * 16) - (Cand.Params.Count - Arity);
       if Score > BestScore then
       begin
@@ -2544,7 +2576,31 @@ begin
         Best      := Cand;
       end
       else if Score = BestScore then
-        Inc(BestCount);
+      begin
+        { Secondary tie-break: count exact matches (score=2) per argument.
+          More exact matches = better candidate. }
+        ExactNew  := 0;
+        ExactBest := 0;
+        for J := 0 to Arity - 1 do
+        begin
+          S1 := ArgMatchScore(TMethodParam(Cand.Params.Items[J]).ResolvedType,
+                              TASTExpr(AArgs.Items[J]).ResolvedType,
+                              TASTExpr(AArgs.Items[J]));
+          S2 := ArgMatchScore(TMethodParam(Best.Params.Items[J]).ResolvedType,
+                              TASTExpr(AArgs.Items[J]).ResolvedType,
+                              TASTExpr(AArgs.Items[J]));
+          if S1 = 2 then Inc(ExactNew);
+          if S2 = 2 then Inc(ExactBest);
+        end;
+        if ExactNew > ExactBest then
+        begin
+          Best      := Cand;
+          BestCount := 1;
+        end
+        else if ExactNew = ExactBest then
+          Inc(BestCount);
+        { ExactNew < ExactBest: keep current Best, don't increment BestCount }
+      end;
     end;
 
     if BestScore < 0 then
@@ -3810,10 +3866,17 @@ begin
 end;
 
 function TSemanticAnalyser.ArgMatchScore(AParam: TTypeDesc;
-  AArg: TTypeDesc): Integer;
+  AArg: TTypeDesc; AArgExpr: TASTExpr): Integer;
 begin
   Result := 0;
   if (AParam = nil) or (AArg = nil) then Exit;
+  { Integer literal (untyped constant) matches any integer or numeric type
+    exactly — mirrors the standard Pascal treatment of untyped constants. }
+  if (AArgExpr is TIntLiteral) and AParam.IsNumeric then
+  begin
+    Result := 2;
+    Exit;
+  end;
   if AParam = AArg then
   begin
     Result := 2;  { exact match — same descriptor instance }
@@ -3869,6 +3932,9 @@ var
   BestCount:   Integer;
   Best:        TMethodDecl;
   TotalCnt:    Integer;
+  ExactNew:    Integer;
+  ExactBest:   Integer;
+  S1, S2:      Integer;
 begin
   Result    := nil;
   TotalCnt  := 0;
@@ -3922,7 +3988,7 @@ begin
       begin
         Par      := TMethodParam(Cand.Params.Items[J]);
         Arg      := TASTExpr(AArgs.Items[J]);
-        ArgScore := ArgMatchScore(Par.ResolvedType, Arg.ResolvedType);
+        ArgScore := ArgMatchScore(Par.ResolvedType, Arg.ResolvedType, Arg);
         if ArgScore = 0 then
         begin
           Score := -1;  { drop this candidate }
@@ -3943,7 +4009,30 @@ begin
         Best      := Cand;
       end
       else if Score = BestScore then
-        Inc(BestCount);
+      begin
+        { Secondary tie-break: count exact matches (ArgMatchScore=2).
+          More exact matches = better candidate. }
+        ExactNew  := 0;
+        ExactBest := 0;
+        for J := 0 to AArity - 1 do
+        begin
+          S1 := ArgMatchScore(TMethodParam(Cand.Params.Items[J]).ResolvedType,
+                              TASTExpr(AArgs.Items[J]).ResolvedType,
+                              TASTExpr(AArgs.Items[J]));
+          S2 := ArgMatchScore(TMethodParam(Best.Params.Items[J]).ResolvedType,
+                              TASTExpr(AArgs.Items[J]).ResolvedType,
+                              TASTExpr(AArgs.Items[J]));
+          if S1 = 2 then Inc(ExactNew);
+          if S2 = 2 then Inc(ExactBest);
+        end;
+        if ExactNew > ExactBest then
+        begin
+          Best      := Cand;
+          BestCount := 1;
+        end
+        else if ExactNew = ExactBest then
+          Inc(BestCount);
+      end;
     end;
 
     if BestScore < 0 then
@@ -3982,19 +4071,33 @@ begin
       MDecl := FindMethodDecl(FCurrentClass.Name, ACall.Name);
       if MDecl <> nil then
       begin
-        if ACall.Args.Count <> MDecl.Params.Count then
+        { Analyse args first so overload resolution can score by type. }
+        for I := 0 to ACall.Args.Count - 1 do
+          AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+        { Use overload resolution so the correct variant is chosen when
+          multiple overloads exist (e.g. AssertEquals(string,string,string)
+          vs AssertEquals(string,Integer,Integer)). }
+        MDecl := ResolveMethodOverload(FCurrentClass.Name, ACall.Name,
+          ACall.Args, ACall.Line, ACall.Col);
+        if MDecl = nil then
           SemanticError(
-            Format('Method ''%s.%s'' expects %d argument(s) but got %d',
-              [FCurrentClass.Name, ACall.Name, MDecl.Params.Count, ACall.Args.Count]),
+            Format('No matching overload for ''%s.%s'' with %d argument(s)',
+              [FCurrentClass.Name, ACall.Name, ACall.Args.Count]),
             ACall.Line, ACall.Col);
+        { Validate only var-param arguments (non-var compatibility was
+          verified by the overload scorer). }
         for I := 0 to ACall.Args.Count - 1 do
         begin
-          Par     := TMethodParam(MDecl.Params.Items[I]);
-          ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
-          CheckTypesMatch(Par.ResolvedType, ArgType,
-            Format('argument %d of ''%s''', [I + 1, ACall.Name]),
-            ACall.Line, ACall.Col);
+          Par := TMethodParam(MDecl.Params.Items[I]);
+          if Par.IsVarParam then
+          begin
+            ArgType := TASTExpr(ACall.Args.Items[I]).ResolvedType;
+            CheckTypesMatch(Par.ResolvedType, ArgType,
+              Format('var argument %d of ''%s''', [I + 1, ACall.Name]),
+              ACall.Line, ACall.Col);
+          end;
         end;
+        AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
         ACall.ResolvedDecl         := MDecl;
         ACall.IsImplicitSelfMethod := True;
         Exit;
@@ -4275,19 +4378,28 @@ begin
       MDecl := FindMethodDecl(FCurrentClass.Name, AExpr.Name);
       if MDecl <> nil then
       begin
-        if AExpr.Args.Count <> MDecl.Params.Count then
+        { Analyse args first so overload resolution can score by type. }
+        for I := 0 to AExpr.Args.Count - 1 do
+          AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+        MDecl := ResolveMethodOverload(FCurrentClass.Name, AExpr.Name,
+          AExpr.Args, AExpr.Line, AExpr.Col);
+        if MDecl = nil then
           SemanticError(
-            Format('Method ''%s.%s'' expects %d argument(s) but got %d',
-              [FCurrentClass.Name, AExpr.Name, MDecl.Params.Count, AExpr.Args.Count]),
+            Format('No matching overload for ''%s.%s'' with %d argument(s)',
+              [FCurrentClass.Name, AExpr.Name, AExpr.Args.Count]),
             AExpr.Line, AExpr.Col);
         for I := 0 to AExpr.Args.Count - 1 do
         begin
-          Par     := TMethodParam(MDecl.Params.Items[I]);
-          ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
-          CheckTypesMatch(Par.ResolvedType, ArgType,
-            Format('argument %d of ''%s''', [I + 1, AExpr.Name]),
-            AExpr.Line, AExpr.Col);
+          Par := TMethodParam(MDecl.Params.Items[I]);
+          if Par.IsVarParam then
+          begin
+            ArgType := TASTExpr(AExpr.Args.Items[I]).ResolvedType;
+            CheckTypesMatch(Par.ResolvedType, ArgType,
+              Format('var argument %d of ''%s''', [I + 1, AExpr.Name]),
+              AExpr.Line, AExpr.Col);
+          end;
         end;
+        AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
         AExpr.ResolvedDecl         := MDecl;
         AExpr.IsImplicitSelfMethod := True;
         Result := MDecl.ResolvedReturnType;
@@ -4391,6 +4503,18 @@ begin
       SemanticError('Pos requires exactly two arguments', AExpr.Line, AExpr.Col);
     AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
     AnalyseExpr(TASTExpr(AExpr.Args.Items[1]));
+    Result := FTable.TypeInteger;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'PosEx') then
+  begin
+    if AExpr.Args.Count <> 3 then
+      SemanticError('PosEx requires exactly three arguments', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[1]));
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[2]));
     Result := FTable.TypeInteger;
     AExpr.ResolvedType := Result;
     Exit;
@@ -4664,6 +4788,26 @@ begin
     Exit;
   end;
 
+  if SameText(AExpr.Name, 'GetCurrentDir') then
+  begin
+    if AExpr.Args.Count <> 0 then
+      SemanticError('GetCurrentDir takes no arguments', AExpr.Line, AExpr.Col);
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  if SameText(AExpr.Name, 'GetTempFileName') then
+  begin
+    if AExpr.Args.Count <> 2 then
+      SemanticError('GetTempFileName requires exactly 2 arguments', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[1]));
+    Result := FTable.TypeString;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   if SameText(AExpr.Name, 'ParamStr') then
   begin
     if AExpr.Args.Count <> 1 then
@@ -4744,7 +4888,9 @@ begin
 
   if SameText(AExpr.Name, 'ExtractFileName') or
      SameText(AExpr.Name, 'ExtractFilePath') or
-     SameText(AExpr.Name, 'IncludeTrailingPathDelimiter') then
+     SameText(AExpr.Name, 'ExtractFileDir') or
+     SameText(AExpr.Name, 'IncludeTrailingPathDelimiter') or
+     SameText(AExpr.Name, 'ExcludeTrailingPathDelimiter') then
   begin
     if AExpr.Args.Count <> 1 then
       SemanticError(Format('''%s'' requires exactly 1 argument', [AExpr.Name]),
@@ -4887,6 +5033,7 @@ begin
       SemanticError(
         Format('Class ''%s'' has no method ''%s''', [RT.Name, AExpr.Name]),
         AExpr.Line, AExpr.Col);
+    AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
     AExpr.ResolvedClassType := RT;
     AExpr.ResolvedMethod    := MDecl;
     Result := MDecl.ResolvedReturnType;
@@ -4952,6 +5099,7 @@ begin
         SemanticError(
           Format('Class ''%s'' has no method ''%s''', [RT.Name, AExpr.Name]),
           AExpr.Line, AExpr.Col);
+      AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
       if AExpr.Args.Count <> MDecl.Params.Count then
         SemanticError(
           Format('Method ''%s.%s'' expects %d argument(s) but got %d',
@@ -4990,6 +5138,8 @@ begin
       AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
     { Try to find a user-defined constructor method for type checking }
     MDecl := FindMethodDecl(AExpr.ObjectName, AExpr.Name);
+    if MDecl <> nil then
+      AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
     AExpr.ResolvedMethod    := MDecl;
     AExpr.ResolvedClassType := ObjSym.TypeDesc;
     AExpr.IsConstructorCall := True;

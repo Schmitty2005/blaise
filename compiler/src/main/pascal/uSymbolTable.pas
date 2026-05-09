@@ -1147,6 +1147,8 @@ begin
   Define(Sym);
   Sym := TSymbol.Create('Pos',       skFunction, FTypeInteger);
   Define(Sym);
+  Sym := TSymbol.Create('PosEx',     skFunction, FTypeInteger);
+  Define(Sym);
   Sym := TSymbol.Create('Copy',      skFunction, FTypeString);
   Define(Sym);
   Sym := TSymbol.Create('UpperCase', skFunction, FTypeString);
@@ -1223,12 +1225,17 @@ begin
   Sym := TSymbol.Create('GetTempDir',        skFunction,  FTypeString);  Define(Sym);
   Sym := TSymbol.Create('DirectoryExists',   skFunction,  FTypeBoolean); Define(Sym);
   Sym := TSymbol.Create('ForceDirectories',  skFunction,  FTypeBoolean); Define(Sym);
+  Sym := TSymbol.Create('GetCurrentDir',     skFunction,  FTypeString);  Define(Sym);
+  Sym := TSymbol.Create('GetTempFileName',   skFunction,  FTypeString);  Define(Sym);
   Sym := TSymbol.Create('Sleep',             skProcedure, nil);          Define(Sym);
   { File path manipulation }
   Sym := TSymbol.Create('ChangeFileExt',                skFunction, FTypeString); Define(Sym);
   Sym := TSymbol.Create('ExtractFileName',              skFunction, FTypeString); Define(Sym);
   Sym := TSymbol.Create('ExtractFilePath',              skFunction, FTypeString); Define(Sym);
   Sym := TSymbol.Create('IncludeTrailingPathDelimiter', skFunction, FTypeString); Define(Sym);
+  Sym := TSymbol.Create('ExtractFileDir',               skFunction, FTypeString); Define(Sym);
+  Sym := TSymbol.Create('ExcludeTrailingPathDelimiter', skFunction, FTypeString); Define(Sym);
+  Sym := TSymbol.Create('RemoveDir',                    skProcedure, nil);        Define(Sym);
   { Process management (used by Process.pas RTL) }
   Sym := TSymbol.Create('ProcessCreate',     skFunction,  FTypePointer); Define(Sym);
   Sym := TSymbol.Create('ProcessSetExe',     skProcedure, nil);          Define(Sym);

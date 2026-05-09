@@ -247,6 +247,61 @@ void* _GetTempDir(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* _GetTempFileName(Dir, Prefix) : string                              */
+/* Returns a unique temp file path (like mkstemp).  The file is        */
+/* created and immediately closed; caller is responsible for deletion. */
+
+void* _GetTempFileName(void* dir, void* prefix) {
+    const char* d  = io_str_data(dir);
+    const char* p  = io_str_data(prefix);
+    /* build template: <dir>/<prefix>XXXXXX */
+    int32_t dlen = (int32_t)strlen(d);
+    int32_t plen = (int32_t)strlen(p);
+    int need_slash = (dlen > 0 && d[dlen - 1] != '/') ? 1 : 0;
+    /* template length: dlen + maybe '/' + plen + 6 + NUL */
+    int32_t tlen = dlen + need_slash + plen + 6;
+    char*   tmpl = (char*)malloc((size_t)(tlen + 1));
+    int     fd;
+    if (!tmpl) return io_str_from_cstr("/tmp/blaise_XXXXXX");
+    if (dlen == 0) {
+        const char* tmp = getenv("TMPDIR");
+        if (!tmp || tmp[0] == '\0') tmp = "/tmp";
+        memcpy(tmpl, tmp, strlen(tmp));
+        tmpl[strlen(tmp)] = '/';
+        memcpy(tmpl + strlen(tmp) + 1, p, (size_t)plen);
+        memcpy(tmpl + strlen(tmp) + 1 + plen, "XXXXXX", 6);
+        tmpl[strlen(tmp) + 1 + plen + 6] = '\0';
+    } else {
+        memcpy(tmpl, d, (size_t)dlen);
+        if (need_slash) tmpl[dlen] = '/';
+        memcpy(tmpl + dlen + need_slash, p, (size_t)plen);
+        memcpy(tmpl + dlen + need_slash + plen, "XXXXXX", 6);
+        tmpl[tlen] = '\0';
+    }
+    fd = mkstemp(tmpl);
+    if (fd >= 0) close(fd);
+    void* result = io_str_from_cstr(tmpl);
+    free(tmpl);
+    return result;
+}
+
+/* _GetCurrentDir() : string                                           */
+/* Returns the current working directory with a trailing '/'.          */
+/* ------------------------------------------------------------------ */
+
+void* _GetCurrentDir(void) {
+    char buf[4096];
+    const char* cwd = getcwd(buf, sizeof(buf));
+    if (!cwd) cwd = ".";
+    int32_t len = (int32_t)strlen(cwd);
+    int need_slash = (len > 0 && cwd[len - 1] != '/') ? 1 : 0;
+    void* r = io_str_alloc(len + need_slash);
+    memcpy((char*)r, cwd, (size_t)len);
+    if (need_slash) ((char*)r)[len] = '/';
+    return r;
+}
+
+/* ------------------------------------------------------------------ */
 /* _ForceDirectories(Path) : Boolean (0 or 1)                          */
 /* Creates the directory Path and all parent directories. Returns 1    */
 /* on success, 0 on failure. Like mkdir -p.                            */
@@ -327,6 +382,36 @@ void* _ExtractFilePath(void* path) {
     const char* slash = strrchr(p, '/');
     if (!slash) return io_str_from_cstr("");
     int32_t len = (int32_t)(slash - p + 1);
+    void*   r   = io_str_alloc(len);
+    memcpy((char*)r, p, (size_t)len);
+    return r;
+}
+
+/* _ExcludeTrailingPathDelimiter(path) : string
+   Removes a trailing '/' if present. */
+void* _ExcludeTrailingPathDelimiter(void* path) {
+    const char* p   = io_str_data(path);
+    int32_t     len = (int32_t)strlen(p);
+    if (len > 0 && p[len - 1] == '/') len--;
+    void* r = io_str_alloc(len);
+    memcpy((char*)r, p, (size_t)len);
+    return r;
+}
+
+/* _RemoveDir(path) — removes an empty directory (ignores errors). */
+void _RemoveDir(void* path) {
+    const char* p = io_str_data(path);
+    rmdir(p);
+}
+
+/* _ExtractFileDir(path) : string
+   Returns the directory portion of path WITHOUT the trailing '/'.
+   Returns an empty string when path contains no directory separator. */
+void* _ExtractFileDir(void* path) {
+    const char* p     = io_str_data(path);
+    const char* slash = strrchr(p, '/');
+    if (!slash || slash == p) return io_str_from_cstr("");
+    int32_t len = (int32_t)(slash - p);  /* exclude trailing slash */
     void*   r   = io_str_alloc(len);
     memcpy((char*)r, p, (size_t)len);
     return r;

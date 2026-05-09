@@ -46,6 +46,7 @@ procedure _libc_free(Ptr: Pointer);           external name 'free';
 { ------------------------------------------------------------------ }
 function  _StringLength(S: Pointer): Integer;
 function  _StringPos(Sub, S: Pointer): Integer;
+function  _StringPosEx(Sub, S: Pointer; StartPos: Integer): Integer;
 function  _StringCopy(S: Pointer; From, Count: Integer): Pointer;
 function  _StringDelete(S: Pointer; Idx, Count: Integer): Pointer;
 function  _StringSetLength(S: Pointer; N: Integer): Pointer;
@@ -173,6 +174,57 @@ begin
   SData   := StrData(S);
   SubData := StrData(Sub);
   I := 0;
+  while I <= SLen - SubLen do
+  begin
+    Match := True;
+    J := 0;
+    while J < SubLen do
+    begin
+      if SData[I + J] <> SubData[J] then
+      begin
+        Match := False;
+        Break;
+      end;
+      Inc(J);
+    end;
+    if Match then
+    begin
+      Result := I + 1;
+      Exit;
+    end;
+    Inc(I);
+  end;
+  Result := 0;
+end;
+
+{ ------------------------------------------------------------------ }
+{ _StringPosEx(Sub, S, StartPos) — like _StringPos but starts from   }
+{ the given 1-based position.  Returns 0 if not found.               }
+{ ------------------------------------------------------------------ }
+
+function _StringPosEx(Sub, S: Pointer; StartPos: Integer): Integer;
+var
+  SLen, SubLen: Integer;
+  SData, SubData: PChar;
+  I, J: Integer;
+  Match: Boolean;
+begin
+  SLen   := StrLen(S);
+  SubLen := StrLen(Sub);
+  if SubLen = 0 then
+  begin
+    Result := 1;
+    Exit;
+  end;
+  if (SubLen > SLen) or (StartPos > SLen) then
+  begin
+    Result := 0;
+    Exit;
+  end;
+  SData   := StrData(S);
+  SubData := StrData(Sub);
+  if StartPos < 1 then StartPos := 1;
+  I := StartPos - 1;  { convert to 0-based }
   while I <= SLen - SubLen do
   begin
     Match := True;

@@ -130,7 +130,7 @@ type
     procedure SkipToElseOrEndif;
     procedure SkipToEndif;
   public
-    constructor Create(const ASource: string; const AFilename: string{$IFDEF FPC} = ''{$ENDIF});
+    constructor Create(const ASource: string; const AFilename: string = '');
     destructor Destroy; override;
     property Filename: string read FFilename;
     function Next: TToken;
@@ -146,7 +146,7 @@ begin
   Result := Ord(S[I]);
 end;
 
-constructor TLexer.Create(const ASource: string; const AFilename: string{$IFDEF FPC} = ''{$ENDIF});
+constructor TLexer.Create(const ASource: string; const AFilename: string = '');
 begin
   inherited Create;
   FTok := TFpgPascalTokeniser.Create;

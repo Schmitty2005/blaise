@@ -58,6 +58,7 @@ type
     function  PeekKind2: TTokenKind;  { two tokens ahead }
     procedure Expect(AKind: TTokenKind);
     function  Check(AKind: TTokenKind): Boolean;
+    function  CheckUnitNamePart: Boolean;
     function  ParseTypeName: string;  { reads Ident optionally followed by '<' ArgList '>' }
 
     function  ParseProgram: TProgram;
@@ -227,6 +228,20 @@ begin
   Result := FCurrent.Kind = AKind;
 end;
 
+function TParser.CheckUnitNamePart: Boolean;
+begin
+  Result := (FCurrent.Kind = tkIdent) or
+            (FCurrent.Kind in [tkInitialization, tkFinalization, tkProgram,
+              tkUses, tkType, tkRecord, tkClass, tkProcedure, tkFunction,
+              tkVar, tkBegin, tkEnd, tkIf, tkThen, tkElse, tkWhile, tkDo,
+              tkFor, tkTo, tkDownto, tkRepeat, tkUntil, tkTry, tkFinally,
+              tkExcept, tkRaise, tkNil, tkUnit, tkIntf, tkImplementation,
+              tkVirtual, tkOverride, tkExternal, tkIs, tkAs, tkAnd, tkOr,
+              tkNot, tkExit, tkBreak, tkContinue, tkInherited, tkCase,
+              tkOf, tkArray, tkSet, tkIn, tkShl, tkShr, tkXor, tkConst,
+              tkOut, tkConstructor, tkDestructor, tkDiv, tkMod]);
+end;
+
 { ------------------------------------------------------------------ }
 
 function TParser.Parse: TProgram;
@@ -273,7 +288,7 @@ var
   UName: string;
 begin
   Expect(tkUses);
-  if not Check(tkIdent) then
+  if not CheckUnitNamePart then
     raise EParseError.Create(Format('Expected unit name after ''uses'' at line %d col %d in %s',
       [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   UName := FCurrent.Value;
@@ -281,7 +296,7 @@ begin
   while Check(tkDot) do
   begin
     Advance;
-    if not Check(tkIdent) then
+    if not CheckUnitNamePart then
       raise EParseError.Create(Format('Expected identifier after ''.'' in unit name at line %d col %d in %s',
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     UName := UName + '.' + FCurrent.Value;
@@ -291,7 +306,7 @@ begin
   while Check(tkComma) do
   begin
     Advance;
-    if not Check(tkIdent) then
+    if not CheckUnitNamePart then
       raise EParseError.Create(Format('Expected unit name after '','' at line %d col %d in %s',
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     UName := FCurrent.Value;
@@ -299,7 +314,7 @@ begin
     while Check(tkDot) do
     begin
       Advance;
-      if not Check(tkIdent) then
+      if not CheckUnitNamePart then
         raise EParseError.Create(Format('Expected identifier after ''.'' in unit name at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       UName := UName + '.' + FCurrent.Value;
@@ -552,11 +567,45 @@ begin
       CD.IsString := False;
       Advance;
     end
-    else if Check(tkStringLit) then
+    else if Check(tkStringLit) or Check(tkIdent) then
     begin
-      CD.StrVal   := FCurrent.Value;
       CD.IsString := True;
+      if Check(tkIdent) then
+      begin
+        CD.ConstParts := TStringList.Create;
+        CD.ConstParts.AddObject(FCurrent.Value, TObject(1));
+      end
+      else
+        CD.StrVal := FCurrent.Value;
       Advance;
+      while Check(tkPlus) do
+      begin
+        Advance;
+        if Check(tkStringLit) or Check(tkIdent) then
+        begin
+          if CD.ConstParts <> nil then
+          begin
+            if Check(tkIdent) then
+              CD.ConstParts.AddObject(FCurrent.Value, TObject(1))
+            else
+              CD.ConstParts.AddObject(FCurrent.Value, nil);
+          end
+          else if Check(tkIdent) then
+          begin
+            CD.ConstParts := TStringList.Create;
+            CD.ConstParts.AddObject(CD.StrVal, nil);
+            CD.ConstParts.AddObject(FCurrent.Value, TObject(1));
+            CD.StrVal := '';
+          end
+          else
+            CD.StrVal := CD.StrVal + FCurrent.Value;
+          Advance;
+        end
+        else
+          raise EParseError.Create(Format(
+            'Expected string literal after ''+'' in const at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      end;
     end
     else
       raise EParseError.Create(Format(
@@ -1774,6 +1823,20 @@ begin
           Result := FldAssign;
           Exit;
         end;
+        { No-arg method call: Func(...).Field treated as Func(...).Method }
+        if CastRcv is TFieldAccessExpr then
+        begin
+          MCall            := TMethodCallStmt.Create;
+          MCall.Line       := Line;
+          MCall.Col        := Col;
+          MCall.ObjectName := '';
+          MCall.Name       := TFieldAccessExpr(CastRcv).FieldName;
+          MCall.ObjExpr    := TFieldAccessExpr(CastRcv).Base;
+          TFieldAccessExpr(CastRcv).Base := nil;
+          CastRcv.Free;
+          Result := MCall;
+          Exit;
+        end;
         raise EParseError.Create(Format(
           'Expected method call after typecast at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
@@ -2062,6 +2125,7 @@ function TParser.ParseExceptHandlerClause: TExceptHandlerClause;
 var
   Name1: string;
   H:     TExceptHandlerClause;
+  Stmt:  TASTStmt;
 begin
   { consume 'on' }
   Expect(tkIdent);  { value is 'on' — caller already checked }
@@ -2102,8 +2166,10 @@ begin
     end
     else
     begin
-      { Single statement }
-      H.Body.Stmts.Add(ParseStmt);
+      { Single statement — nil means empty (bare semicolon); skip it }
+      Stmt := ParseStmt;
+      if Stmt <> nil then
+        H.Body.Stmts.Add(Stmt);
     end;
     Result := H;
   except
@@ -2373,12 +2439,10 @@ begin
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     Result.Name := FCurrent.Value;
     Advance;
-    { Dotted unit names: 'unit bcl.testing;' / 'unit Generics.Collections;'.
-      Same shape as ParseUsesList — repeat (tkDot tkIdent). }
     while Check(tkDot) do
     begin
       Advance;
-      if not Check(tkIdent) then
+      if not CheckUnitNamePart then
         raise EParseError.Create(Format('Expected identifier after ''.'' in unit name at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       Result.Name := Result.Name + '.' + FCurrent.Value;

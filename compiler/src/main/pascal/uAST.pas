@@ -662,11 +662,15 @@ type
   { Constant declaration: const Name = Value; }
   TConstDecl = class(TASTNode)
   public
-    Name:     string;
-    IntVal:   Int64;    { used when kind = integer }
-    StrVal:   string;   { used when IsString = True or IsFloat = True (raw text) }
-    IsString: Boolean;
-    IsFloat:  Boolean;  { set when the rhs is a float literal }
+    Name:       string;
+    IntVal:     Int64;    { used when kind = integer }
+    StrVal:     string;   { used when IsString = True or IsFloat = True (raw text) }
+    IsString:   Boolean;
+    IsFloat:    Boolean;  { set when the rhs is a float literal }
+    ConstParts: TStringList; { non-nil when const expr has ident refs;
+                               Objects[i] = nil → string literal,
+                               Objects[i] <> nil → ident reference }
+    destructor Destroy; override;
   end;
 
   { ------------------------------------------------------------------ }
@@ -1314,6 +1318,12 @@ begin
   GenericInstances     := TObjectList.Create(True);
   GenericFuncInstances := TObjectList.Create(True);
   GenericIntfInstances := TObjectList.Create(True);
+end;
+
+destructor TConstDecl.Destroy;
+begin
+  ConstParts.Free;
+  inherited Destroy;
 end;
 
 destructor TProgram.Destroy;
