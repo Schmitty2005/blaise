@@ -136,6 +136,8 @@ type
     function Next: TToken;
   end;
 
+function TokenKindName(AKind: TTokenKind): string;
+
 implementation
 
 { Local helper matching the Blaise builtin — lets UnescapeString share one
@@ -564,6 +566,97 @@ begin
     raise Exception.Create(Format(
       'Unexpected token kind %d at line %d col %d',
       [Ord(raw.Kind), raw.Line, raw.Column]));
+  end;
+end;
+
+function TokenKindName(AKind: TTokenKind): string;
+begin
+  case AKind of
+    tkEOF:            Result := '<eof>';
+    tkIntLit:         Result := 'integer literal';
+    tkFloatLit:       Result := 'float literal';
+    tkStringLit:      Result := 'string literal';
+    tkInitialization: Result := 'initialization';
+    tkFinalization:   Result := 'finalization';
+    tkProgram:        Result := 'program';
+    tkUses:           Result := 'uses';
+    tkType:           Result := 'type';
+    tkRecord:         Result := 'record';
+    tkClass:          Result := 'class';
+    tkProcedure:      Result := 'procedure';
+    tkFunction:       Result := 'function';
+    tkVar:            Result := 'var';
+    tkBegin:          Result := 'begin';
+    tkEnd:            Result := 'end';
+    tkIf:             Result := 'if';
+    tkThen:           Result := 'then';
+    tkElse:           Result := 'else';
+    tkWhile:          Result := 'while';
+    tkDo:             Result := 'do';
+    tkFor:            Result := 'for';
+    tkTo:             Result := 'to';
+    tkDownto:         Result := 'downto';
+    tkRepeat:         Result := 'repeat';
+    tkUntil:          Result := 'until';
+    tkTry:            Result := 'try';
+    tkFinally:        Result := 'finally';
+    tkExcept:         Result := 'except';
+    tkRaise:          Result := 'raise';
+    tkNil:            Result := 'nil';
+    tkUnit:           Result := 'unit';
+    tkIntf:           Result := 'interface';
+    tkImplementation: Result := 'implementation';
+    tkVirtual:        Result := 'virtual';
+    tkOverride:       Result := 'override';
+    tkExternal:       Result := 'external';
+    tkIs:             Result := 'is';
+    tkAs:             Result := 'as';
+    tkAnd:            Result := 'and';
+    tkOr:             Result := 'or';
+    tkNot:            Result := 'not';
+    tkExit:           Result := 'exit';
+    tkBreak:          Result := 'break';
+    tkContinue:       Result := 'continue';
+    tkInherited:      Result := 'inherited';
+    tkCase:           Result := 'case';
+    tkOf:             Result := 'of';
+    tkArray:          Result := 'array';
+    tkSet:            Result := 'set';
+    tkIn:             Result := 'in';
+    tkShl:            Result := 'shl';
+    tkShr:            Result := 'shr';
+    tkXor:            Result := 'xor';
+    tkConst:          Result := 'const';
+    tkOut:            Result := 'out';
+    tkConstructor:    Result := 'constructor';
+    tkDestructor:     Result := 'destructor';
+    tkIdent:          Result := 'identifier';
+    tkPlus:           Result := '+';
+    tkMinus:          Result := '-';
+    tkStar:           Result := '*';
+    tkSlash:          Result := '/';
+    tkDiv:            Result := 'div';
+    tkMod:            Result := 'mod';
+    tkAssign:         Result := ':=';
+    tkEquals:         Result := '=';
+    tkNotEquals:      Result := '<>';
+    tkLessThan:       Result := '<';
+    tkGreaterThan:    Result := '>';
+    tkLessEqual:      Result := '<=';
+    tkGreaterEqual:   Result := '>=';
+    tkColon:          Result := ':';
+    tkLParen:         Result := '(';
+    tkRParen:         Result := ')';
+    tkLBracket:       Result := '[';
+    tkRBracket:       Result := ']';
+    tkComma:          Result := ',';
+    tkSemicolon:      Result := ';';
+    tkDot:            Result := '.';
+    tkDotDot:         Result := '..';
+    tkCaret:          Result := '^';
+    tkAt:             Result := '@';
+  else
+    Result := '<unknown(' + IntToStr(Ord(AKind)) + ')>';
   end;
 end;
 

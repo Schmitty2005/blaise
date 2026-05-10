@@ -214,12 +214,21 @@ begin
 end;
 
 procedure TParser.Expect(AKind: TTokenKind);
+var
+  gotName, gotDetail: string;
 begin
   if FCurrent.Kind <> AKind then
+  begin
+    gotName := TokenKindName(FCurrent.Kind);
+    if FCurrent.Value <> gotName then
+      gotDetail := ' (''' + FCurrent.Value + ''')'
+    else
+      gotDetail := '';
     raise EParseError.Create(Format(
-      'Expected token %d but got %d (''%s'') at line %d col %d in %s',
-      [Ord(AKind), Ord(FCurrent.Kind), FCurrent.Value,
+      'Expected ''%s'' but got ''%s''%s at line %d col %d in %s',
+      [TokenKindName(AKind), gotName, gotDetail,
        FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+  end;
   Advance;
 end;
 

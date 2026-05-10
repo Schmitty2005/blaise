@@ -75,7 +75,8 @@ uses
   cp.test.classof,
   cp.test.publishedrtti,
   cp.test.proctypes_ofobject,
-  cp.test.textblock;
+  cp.test.textblock,
+  cp.test.tokenkindname;
 
 var
   Application: TTestRunner;
