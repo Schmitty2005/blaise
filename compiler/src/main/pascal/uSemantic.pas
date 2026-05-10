@@ -2061,18 +2061,29 @@ begin
         if TClassTypeDef(TD.Def).ParentName <> '' then
         begin
           ParentSym := FTable.Lookup(TClassTypeDef(TD.Def).ParentName);
-          if (ParentSym = nil) or not (ParentSym.TypeDesc is TRecordTypeDesc) then
-            SemanticError(
-              Format('Unknown parent class ''%s'' for ''%s''',
-                [TClassTypeDef(TD.Def).ParentName, TD.Name]),
-              TD.Line, TD.Col);
-          ParentRT     := TRecordTypeDesc(ParentSym.TypeDesc);
-          RT.Parent    := ParentRT;
-          RT.CopyVTableFrom(ParentRT);
-          for K := 0 to ParentRT.Fields.Count - 1 do
+          { If the first name in class(...) is an interface, not a class,
+            treat it as an implements entry — TObject becomes the implicit parent. }
+          if (ParentSym <> nil) and (ParentSym.TypeDesc is TInterfaceTypeDesc) then
           begin
-            FldInfo := TFieldInfo(ParentRT.Fields.Items[K]);
-            RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
+            TClassTypeDef(TD.Def).ImplementsNames.Insert(
+              0, TClassTypeDef(TD.Def).ParentName);
+            TClassTypeDef(TD.Def).ParentName := '';
+          end
+          else
+          begin
+            if (ParentSym = nil) or not (ParentSym.TypeDesc is TRecordTypeDesc) then
+              SemanticError(
+                Format('Unknown parent class ''%s'' for ''%s''',
+                  [TClassTypeDef(TD.Def).ParentName, TD.Name]),
+                TD.Line, TD.Col);
+            ParentRT     := TRecordTypeDesc(ParentSym.TypeDesc);
+            RT.Parent    := ParentRT;
+            RT.CopyVTableFrom(ParentRT);
+            for K := 0 to ParentRT.Fields.Count - 1 do
+            begin
+              FldInfo := TFieldInfo(ParentRT.Fields.Items[K]);
+              RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
+            end;
           end;
         end;
       end;

@@ -41,6 +41,8 @@ type
     procedure TestSemantic_Interface_MethodsRegistered;
     procedure TestSemantic_ClassImplements_OK;
     procedure TestSemantic_ClassImplements_MissingMethod_RaisesError;
+    procedure TestSemantic_ClassWithInterfaceAsFirstParent_OK;
+    procedure TestSemantic_ClassWithInterfaceAsFirstParent_InheritsFromTObject;
 
     { ------------------------------------------------------------------ }
     { Semantic — is/as with interface types                                }
@@ -162,6 +164,22 @@ const
     '  end;'                                   + LineEnding +
     '  TFoo = class(TObject, IFoo)'            + LineEnding +
     '  end;'                                   + LineEnding +
+    'begin'                                    + LineEnding +
+    'end.';
+
+  { TFoo = class(IFoo) — interface as sole parent; TObject must be implied }
+  SrcClassInterfaceOnlyParent =
+    'program P;'                               + LineEnding +
+    'type'                                     + LineEnding +
+    '  IFoo = interface'                       + LineEnding +
+    '    procedure DoIt;'                      + LineEnding +
+    '  end;'                                   + LineEnding +
+    '  TFoo = class(IFoo)'                     + LineEnding +
+    '    procedure DoIt;'                      + LineEnding +
+    '  end;'                                   + LineEnding +
+    'procedure TFoo.DoIt;'                     + LineEnding +
+    'begin'                                    + LineEnding +
+    'end;'                                     + LineEnding +
     'begin'                                    + LineEnding +
     'end.';
 
@@ -443,6 +461,30 @@ end;
 procedure TInterfaceTests.TestSemantic_ClassImplements_MissingMethod_RaisesError;
 begin
   AnalyseExpectError(SrcClassMissingMethod);
+end;
+
+procedure TInterfaceTests.TestSemantic_ClassWithInterfaceAsFirstParent_OK;
+begin
+  { TFoo = class(IFoo) should succeed: IFoo is moved to ImplementsNames and
+    TObject is implicitly added as the class parent. }
+  AnalyseSrc(SrcClassInterfaceOnlyParent).Free;
+end;
+
+procedure TInterfaceTests.TestSemantic_ClassWithInterfaceAsFirstParent_InheritsFromTObject;
+var
+  Prog: TProgram;
+  RT:   TRecordTypeDesc;
+begin
+  Prog := AnalyseSrc(SrcClassInterfaceOnlyParent);
+  try
+    RT := TRecordTypeDesc(Prog.SymbolTable.FindType('TFoo'));
+    AssertNotNull('TFoo type exists', RT);
+    { When interface-only parent is specified, TObject vtable must be copied
+      so the vptr slot is present and field offsets start at offset 8. }
+    AssertTrue('TFoo has a vtable (vptr from TObject)', RT.HasVTable);
+  finally
+    Prog.Free;
+  end;
 end;
 
 { ------------------------------------------------------------------ }
