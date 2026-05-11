@@ -13,7 +13,7 @@ unit cp.test.records;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -171,12 +171,14 @@ var
   Prog: TProgram;
 begin
   Prog := ParseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        begin end.
+        ''');
   try
     AssertEquals('1 type decl', 1, Prog.Block.TypeDecls.Count);
   finally
@@ -190,12 +192,14 @@ var
   TD:   TTypeDecl;
 begin
   Prog := ParseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        begin end.
+        ''');
   try
     TD := TTypeDecl(Prog.Block.TypeDecls[0]);
     AssertEquals('Type name', 'TPoint', TD.Name);
@@ -212,12 +216,14 @@ var
   Fld:  TFieldDecl;
 begin
   Prog := ParseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        begin end.
+        ''');
   try
     Rec := TRecordTypeDef(TTypeDecl(Prog.Block.TypeDecls[0]).Def);
     AssertEquals('1 field', 1, Rec.Fields.Count);
@@ -235,13 +241,15 @@ var
   Rec:  TRecordTypeDef;
 begin
   Prog := ParseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '    Y: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+            Y: Integer;
+          end;
+        begin end.
+        ''');
   try
     Rec := TRecordTypeDef(TTypeDecl(Prog.Block.TypeDecls[0]).Def);
     AssertEquals('2 fields', 2, Rec.Fields.Count);
@@ -259,12 +267,14 @@ var
   Fld:  TFieldDecl;
 begin
   Prog := ParseSrc(
-    'program P;'              + LineEnding +
-    'type'                    + LineEnding +
-    '  TPoint = record'       + LineEnding +
-    '    X, Y: Integer;'      + LineEnding +
-    '  end;'                  + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X, Y: Integer;
+          end;
+        begin end.
+        ''');
   try
     Rec := TRecordTypeDef(TTypeDecl(Prog.Block.TypeDecls[0]).Def);
     AssertEquals('1 field group', 1, Rec.Fields.Count);
@@ -283,13 +293,15 @@ var
   Decl: TVarDecl;
 begin
   Prog := ParseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var P: TPoint;'      + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        var P: TPoint;
+        begin end.
+        ''');
   try
     AssertEquals('1 var', 1, Prog.Block.Decls.Count);
     Decl := TVarDecl(Prog.Block.Decls[0]);
@@ -306,15 +318,17 @@ var
   Stmt: TFieldAssignment;
 begin
   Prog := ParseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var Pt: TPoint;'     + LineEnding +
-    'begin'               + LineEnding +
-    '  Pt.X := 10'        + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        var Pt: TPoint;
+        begin
+          Pt.X := 10
+        end.
+        ''');
   try
     AssertEquals('1 stmt', 1, Prog.Block.Stmts.Count);
     AssertTrue('Is TFieldAssignment',
@@ -334,15 +348,17 @@ var
   Bin:  TBinaryExpr;
 begin
   Prog := ParseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var Pt: TPoint; N: Integer;' + LineEnding +
-    'begin'               + LineEnding +
-    '  N := Pt.X + 1'     + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        var Pt: TPoint; N: Integer;
+        begin
+          N := Pt.X + 1
+        end.
+        ''');
   try
     Bin := TBinaryExpr(TAssignment(Prog.Block.Stmts[0]).Expr);
     AssertTrue('Left is TFieldAccessExpr', Bin.Left is TFieldAccessExpr);
@@ -362,12 +378,14 @@ var
   Prog: TProgram;
 begin
   Prog := AnalyseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        begin end.
+        ''');
   try
     AssertNotNull('TPoint in symbol table',
       Prog.SymbolTable.FindType('TPoint'));
@@ -385,13 +403,15 @@ var
   RT:   TRecordTypeDesc;
 begin
   Prog := AnalyseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '    Y: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+            Y: Integer;
+          end;
+        begin end.
+        ''');
   try
     RT := TRecordTypeDesc(Prog.SymbolTable.FindType('TPoint'));
     AssertEquals('2 fields', 2, RT.Fields.Count);
@@ -409,13 +429,15 @@ var
   Prog: TProgram;
 begin
   Prog := AnalyseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var Pt: TPoint;'     + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        var Pt: TPoint;
+        begin end.
+        ''');
   try
     AssertEquals('Var is tyRecord',
       Ord(tyRecord),
@@ -428,30 +450,34 @@ end;
 procedure TRecordTests.TestSemantic_FieldAssign_OK;
 begin
   AnalyseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var Pt: TPoint;'     + LineEnding +
-    'begin'               + LineEnding +
-    '  Pt.X := 42'        + LineEnding +
-    'end.'
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        var Pt: TPoint;
+        begin
+          Pt.X := 42
+        end.
+        '''
   ).Free;
 end;
 
 procedure TRecordTests.TestSemantic_FieldAssign_TypeMismatch_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var Pt: TPoint;'     + LineEnding +
-    'begin'               + LineEnding +
-    '  Pt.X := ''hello''' + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        var Pt: TPoint;
+        begin
+          Pt.X := 'hello'
+        end.
+        ''');
 end;
 
 procedure TRecordTests.TestSemantic_FieldAccess_TypeIsFieldType;
@@ -460,15 +486,17 @@ var
   Access: TFieldAccessExpr;
 begin
   Prog := AnalyseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var Pt: TPoint; N: Integer;' + LineEnding +
-    'begin'               + LineEnding +
-    '  N := Pt.X'         + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        var Pt: TPoint; N: Integer;
+        begin
+          N := Pt.X
+        end.
+        ''');
   try
     Access := TFieldAccessExpr(TAssignment(Prog.Block.Stmts[0]).Expr);
     AssertEquals('Field access type',
@@ -481,25 +509,29 @@ end;
 procedure TRecordTests.TestSemantic_FieldAccess_UnknownField_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var Pt: TPoint; N: Integer;' + LineEnding +
-    'begin'               + LineEnding +
-    '  N := Pt.Z'         + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        var Pt: TPoint; N: Integer;
+        begin
+          N := Pt.Z
+        end.
+        ''');
 end;
 
 procedure TRecordTests.TestSemantic_FieldAccess_OnNonRecord_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'        + LineEnding +
-    'var N: Integer;'   + LineEnding +
-    'begin'             + LineEnding +
-    '  N := N.X'        + LineEnding +
-    'end.');
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := N.X
+        end.
+        ''');
 end;
 
 { ------------------------------------------------------------------ }
@@ -511,13 +543,15 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var Pt: TPoint;'     + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        var Pt: TPoint;
+        begin end.
+        ''');
   { Program-level record var Pt is a data-section global }
   AssertTrue('data decl for Pt', Pos('$Pt', IR) > 0);
 end;
@@ -527,15 +561,17 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var Pt: TPoint;'     + LineEnding +
-    'begin'               + LineEnding +
-    '  Pt.X := 10'        + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        var Pt: TPoint;
+        begin
+          Pt.X := 10
+        end.
+        ''');
   AssertTrue('storew in IR', Pos('storew', IR) > 0);
 end;
 
@@ -544,15 +580,17 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPoint = record'   + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var Pt: TPoint; N: Integer;' + LineEnding +
-    'begin'               + LineEnding +
-    '  N := Pt.X'         + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TPoint = record
+            X: Integer;
+          end;
+        var Pt: TPoint; N: Integer;
+        begin
+          N := Pt.X
+        end.
+        ''');
   AssertTrue('loadw in IR', Pos('loadw', IR) > 0);
 end;
 
@@ -561,14 +599,16 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TRect = record'    + LineEnding +
-    '    L: Integer;'     + LineEnding +
-    '    T: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var R: TRect;'       + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TRect = record
+            L: Integer;
+            T: Integer;
+          end;
+        var R: TRect;
+        begin end.
+        ''');
   { Two Integer fields = 8 bytes total; program-level record uses data section }
   AssertTrue('8-byte record in data section', Pos('z 8', IR) > 0);
 end;
@@ -578,13 +618,15 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TPerson = record'  + LineEnding +
-    '    Name: string;'   + LineEnding +
-    '  end;'              + LineEnding +
-    'var Person: TPerson;' + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPerson = record
+            Name: string;
+          end;
+        var Person: TPerson;
+        begin end.
+        ''');
   { One string field = 8 bytes; program-level record uses data section }
   AssertTrue('8-byte record in data section', Pos('z 8', IR) > 0);
 end;

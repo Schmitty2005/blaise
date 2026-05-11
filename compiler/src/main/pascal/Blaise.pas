@@ -47,6 +47,7 @@ begin
   WriteLn('  --target <id>       linux-x86_64 (default), macos-arm64');
   WriteLn('  --emit-ir           Print QBE IR to stdout and exit');
   WriteLn('  --debug-opdf        Emit OPDF debug info (.opdf.s companion file)');
+  WriteLn('  --cache-dir <dir>   Directory for per-unit IR cache (speeds up incremental builds)');
 end;
 
 { Handle FPC -i query flags: -iV (version), -iTP (target processor), -iTO (target OS).
@@ -179,7 +180,8 @@ function ParseArgs(
   out OutputFile:  string;
   out EmitIR:      Boolean;
   out OPDFEnabled: Boolean;
-  out SearchPaths: TStringList): Boolean;
+  out SearchPaths: TStringList;
+  out CacheDir:    string): Boolean;
 var
   I: Integer;
   Arg: string;
@@ -189,6 +191,7 @@ begin
   OutputFile  := '';
   EmitIR      := False;
   OPDFEnabled := False;
+  CacheDir    := '';
   SearchPaths := TStringList.Create;
 
   I := 1;
@@ -209,6 +212,11 @@ begin
     begin
       Inc(I);
       SearchPaths.Add(ParamStr(I));
+    end
+    else if (Arg = '--cache-dir') and (I < ParamCount) then
+    begin
+      Inc(I);
+      CacheDir := ParamStr(I);
     end
     else if Arg = '--emit-ir' then
       EmitIR := True
@@ -244,6 +252,80 @@ begin
   end;
 
   Result := True;
+end;
+
+{ Returns a cache key string for the given source file: "<mtime>:<size>".
+  Returns '' if the file cannot be stat'd. }
+function CacheKeyForFile(const APath: string): string;
+var
+  SR: TSearchRec;
+begin
+  Result := '';
+  if FindFirst(APath, faAnyFile, SR) = 0 then
+  begin
+    Result := IntToStr(SR.Time) + ':' + IntToStr(SR.Size);
+    FindClose(SR);
+  end;
+end;
+
+{ Try to load cached IR for a unit.  Returns '' on cache miss. }
+function LoadCachedIR(const ACacheDir, AUnitName, ASourcePath: string): string;
+var
+  IRFile, KeyFile: string;
+  StoredKey, CurrentKey: string;
+  SL: TStringList;
+begin
+  Result := '';
+  if ACacheDir = '' then Exit;
+  IRFile  := IncludeTrailingPathDelimiter(ACacheDir) + AUnitName + '.ssa';
+  KeyFile := IRFile + '.key';
+  if not FileExists(IRFile) or not FileExists(KeyFile) then Exit;
+  CurrentKey := CacheKeyForFile(ASourcePath);
+  if CurrentKey = '' then Exit;
+  SL := TStringList.Create;
+  try
+    SL.LoadFromFile(KeyFile);
+    StoredKey := Trim(SL.Text);
+  finally
+    SL.Free;
+  end;
+  if StoredKey <> CurrentKey then Exit;
+  SL := TStringList.Create;
+  try
+    SL.LoadFromFile(IRFile);
+    Result := SL.Text;
+  finally
+    SL.Free;
+  end;
+end;
+
+{ Write IR and its cache key to the cache directory. }
+procedure StoreCachedIR(const ACacheDir, AUnitName, ASourcePath, AIR: string);
+var
+  IRFile, KeyFile: string;
+  Key: string;
+  SL: TStringList;
+begin
+  if ACacheDir = '' then Exit;
+  if not ForceDirectories(ACacheDir) then Exit;
+  Key     := CacheKeyForFile(ASourcePath);
+  if Key = '' then Exit;
+  IRFile  := IncludeTrailingPathDelimiter(ACacheDir) + AUnitName + '.ssa';
+  KeyFile := IRFile + '.key';
+  SL := TStringList.Create;
+  try
+    SL.Text := AIR;
+    SL.SaveToFile(IRFile);
+  finally
+    SL.Free;
+  end;
+  SL := TStringList.Create;
+  try
+    SL.Text := Key;
+    SL.SaveToFile(KeyFile);
+  finally
+    SL.Free;
+  end;
 end;
 
 function ReadProcessChunk(AProc: TProcess): string;
@@ -369,6 +451,7 @@ var
   EmitIR:      Boolean;
   OPDFEnabled: Boolean;
   OPDFAsmFile: string;
+  CacheDir:    string;
   Source:   TStringList;
   Lexer:    TLexer;
   Parser:   TParser;
@@ -380,12 +463,16 @@ var
   Units:    TObjectList;
   I:        Integer;
   IR:       string;
+  UnitIR:   string;
   IRFile:   string;
+  UnitName: string;
+  UnitPath: string;
 
 begin
   SearchPaths := nil;
   OPDFEnabled := False;
   OPDFAsmFile := '';
+  CacheDir    := '';
   if IsFPCStyleInvocation then
   begin
     if not ParseFPCArgs(SourceFile, OutputFile, SearchPaths, OPDFEnabled) then
@@ -397,7 +484,7 @@ begin
   end
   else
   begin
-    if not ParseArgs(SourceFile, OutputFile, EmitIR, OPDFEnabled, SearchPaths) then
+    if not ParseArgs(SourceFile, OutputFile, EmitIR, OPDFEnabled, SearchPaths, CacheDir) then
     begin
       PrintUsage;
       Halt(1);
@@ -486,17 +573,86 @@ begin
     end;
 
     try
-      CG := TCodeGenQBE.Create;
-      if (Units <> nil) and (Units.Count > 0) then
+      IR := '';
+
+      { Build a composite cache key: "<prog-key>|<unitA>:<key>|<unitB>:<key>..."
+        The load order is deterministic (dependency-sorted), so the key is stable. }
+      if CacheDir <> '' then
       begin
-        CG.SetSymbolTable(Prog.SymbolTable);
-        for I := 0 to Units.Count - 1 do
-          CG.AppendUnit(TUnit(Units.Items[I]));
-        CG.AppendProgram(Prog);
-      end
-      else
-        CG.Generate(Prog);
-      IR := CG.GetOutput;
+        UnitIR := CacheKeyForFile(SourceFile);
+        if Units <> nil then
+          for I := 0 to Units.Count - 1 do
+          begin
+            UnitName := TUnit(Units.Items[I]).Name;
+            UnitPath := TUnit(Units.Items[I]).SourceFile;
+            UnitIR := UnitIR + '|' + UnitName + ':' + CacheKeyForFile(UnitPath);
+          end;
+
+        { Try cache hit }
+        IRFile := IncludeTrailingPathDelimiter(CacheDir) + '__full__.ssa';
+        Source := TStringList.Create;
+        try
+          if FileExists(IRFile) and FileExists(IRFile + '.key') then
+          begin
+            Source.LoadFromFile(IRFile + '.key');
+            if Trim(Source.Text) = UnitIR then
+            begin
+              Source.LoadFromFile(IRFile);
+              IR := Source.Text;
+            end;
+          end;
+        finally
+          Source.Free;
+          Source := nil;
+        end;
+      end;
+
+      if IR = '' then
+      begin
+        { Full codegen }
+        CG := TCodeGenQBE.Create;
+        try
+          if (Units <> nil) and (Units.Count > 0) then
+          begin
+            CG.SetSymbolTable(Prog.SymbolTable);
+            for I := 0 to Units.Count - 1 do
+              CG.AppendUnit(TUnit(Units.Items[I]));
+            CG.AppendProgram(Prog);
+          end
+          else
+            CG.Generate(Prog);
+          IR := CG.GetOutput;
+        finally
+          CG.Free;
+          CG := nil;
+        end;
+
+        { Store result in cache }
+        if CacheDir <> '' then
+        begin
+          if ForceDirectories(CacheDir) then
+          begin
+            IRFile := IncludeTrailingPathDelimiter(CacheDir) + '__full__.ssa';
+            Source := TStringList.Create;
+            try
+              Source.Text := IR;
+              Source.SaveToFile(IRFile);
+            finally
+              Source.Free;
+              Source := nil;
+            end;
+            Source := TStringList.Create;
+            try
+              Source.Text := UnitIR;
+              Source.SaveToFile(IRFile + '.key');
+            finally
+              Source.Free;
+              Source := nil;
+            end;
+          end;
+        end;
+      end;
+
       if OPDFEnabled then
       begin
         OPDFAsmFile := ChangeFileExt(OutputFile, '.opdf.s');

@@ -16,7 +16,7 @@ unit cp.test.caseenum;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -82,84 +82,98 @@ implementation
 
 const
   SrcCaseSimple =
-    'program P;'                                  + LineEnding +
-    'var N: Integer;'                             + LineEnding +
-    'begin'                                       + LineEnding +
-    '  N := 2;'                                   + LineEnding +
-    '  case N of'                                 + LineEnding +
-    '    1: WriteLn(1);'                          + LineEnding +
-    '    2: WriteLn(2);'                          + LineEnding +
-    '    3: WriteLn(3)'                           + LineEnding +
-    '  end'                                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 2;
+          case N of
+            1: WriteLn(1);
+            2: WriteLn(2);
+            3: WriteLn(3)
+          end
+        end.
+        ''';
 
   SrcCaseWithElse =
-    'program P;'                                  + LineEnding +
-    'var N: Integer;'                             + LineEnding +
-    'begin'                                       + LineEnding +
-    '  N := 5;'                                   + LineEnding +
-    '  case N of'                                 + LineEnding +
-    '    1: WriteLn(1);'                          + LineEnding +
-    '    2: WriteLn(2)'                           + LineEnding +
-    '  else'                                      + LineEnding +
-    '    WriteLn(99)'                             + LineEnding +
-    '  end'                                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 5;
+          case N of
+            1: WriteLn(1);
+            2: WriteLn(2)
+          else
+            WriteLn(99)
+          end
+        end.
+        ''';
 
   SrcCaseMultiValue =
-    'program P;'                                  + LineEnding +
-    'var N: Integer;'                             + LineEnding +
-    'begin'                                       + LineEnding +
-    '  N := 3;'                                   + LineEnding +
-    '  case N of'                                 + LineEnding +
-    '    1, 2: WriteLn(12);'                      + LineEnding +
-    '    3, 4: WriteLn(34)'                       + LineEnding +
-    '  end'                                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 3;
+          case N of
+            1, 2: WriteLn(12);
+            3, 4: WriteLn(34)
+          end
+        end.
+        ''';
 
   SrcEnumSimple =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TDir = (dNorth, dSouth, dEast, dWest);'   + LineEnding +
-    'begin'                                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TDir = (dNorth, dSouth, dEast, dWest);
+        begin
+        end.
+        ''';
 
   SrcEnumAssign =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TDir = (dNorth, dSouth, dEast, dWest);'   + LineEnding +
-    'var D: TDir;'                                + LineEnding +
-    'begin'                                       + LineEnding +
-    '  D := dSouth'                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TDir = (dNorth, dSouth, dEast, dWest);
+        var D: TDir;
+        begin
+          D := dSouth
+        end.
+        ''';
 
   SrcEnumCompare =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TDir = (dNorth, dSouth);'                  + LineEnding +
-    'var'                                         + LineEnding +
-    '  D: TDir;'                                  + LineEnding +
-    '  B: Boolean;'                               + LineEnding +
-    'begin'                                       + LineEnding +
-    '  D := dNorth;'                              + LineEnding +
-    '  B := (D = dNorth)'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TDir = (dNorth, dSouth);
+        var
+          D: TDir;
+          B: Boolean;
+        begin
+          D := dNorth;
+          B := (D = dNorth)
+        end.
+        ''';
 
   SrcEnumInCase =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TState = (sIdle, sRunning, sDone);'        + LineEnding +
-    'var'                                         + LineEnding +
-    '  S: TState;'                                + LineEnding +
-    '  N: Integer;'                               + LineEnding +
-    'begin'                                       + LineEnding +
-    '  S := sRunning;'                            + LineEnding +
-    '  case S of'                                 + LineEnding +
-    '    sIdle:    N := 0;'                       + LineEnding +
-    '    sRunning: N := 1;'                       + LineEnding +
-    '    sDone:    N := 2'                        + LineEnding +
-    '  end'                                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TState = (sIdle, sRunning, sDone);
+        var
+          S: TState;
+          N: Integer;
+        begin
+          S := sRunning;
+          case S of
+            sIdle:    N := 0;
+            sRunning: N := 1;
+            sDone:    N := 2
+          end
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                              }
@@ -370,17 +384,19 @@ end;
 procedure TCaseEnumTests.TestSemantic_CaseString_AcceptsStringSelector;
 const
   Src =
-    'program P;'                                    + LineEnding +
-    'var S: string; R: Integer;'                    + LineEnding +
-    'begin'                                         + LineEnding +
-    '  S := ''foo'';'                               + LineEnding +
-    '  case S of'                                   + LineEnding +
-    '    ''bar'': R := 1;'                          + LineEnding +
-    '    ''foo'': R := 2'                           + LineEnding +
-    '  else'                                        + LineEnding +
-    '    R := 99'                                   + LineEnding +
-    '  end'                                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string; R: Integer;
+        begin
+          S := 'foo';
+          case S of
+            'bar': R := 1;
+            'foo': R := 2
+          else
+            R := 99
+          end
+        end.
+        ''';
 begin
   SemanticOK(Src);
 end;
@@ -388,14 +404,16 @@ end;
 procedure TCaseEnumTests.TestSemantic_CaseString_RejectsIntLabelOnStringSelector;
 const
   Src =
-    'program P;'                                    + LineEnding +
-    'var S: string;'                                + LineEnding +
-    'begin'                                         + LineEnding +
-    '  S := ''foo'';'                               + LineEnding +
-    '  case S of'                                   + LineEnding +
-    '    1: S := ''one''  '                         + LineEnding +
-    '  end'                                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          S := 'foo';
+          case S of
+            1: S := 'one'  
+          end
+        end.
+        ''';
 var
   Raised: Boolean;
 begin
@@ -411,17 +429,19 @@ end;
 procedure TCaseEnumTests.TestCodegen_CaseString_EmitsStringEqualsCalls;
 const
   Src =
-    'program P;'                                    + LineEnding +
-    'var S: string; R: Integer;'                    + LineEnding +
-    'begin'                                         + LineEnding +
-    '  S := ''foo'';'                               + LineEnding +
-    '  case S of'                                   + LineEnding +
-    '    ''bar'': R := 1;'                          + LineEnding +
-    '    ''foo'': R := 2'                           + LineEnding +
-    '  else'                                        + LineEnding +
-    '    R := 99'                                   + LineEnding +
-    '  end'                                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string; R: Integer;
+        begin
+          S := 'foo';
+          case S of
+            'bar': R := 1;
+            'foo': R := 2
+          else
+            R := 99
+          end
+        end.
+        ''';
 var
   IR: string;
 begin

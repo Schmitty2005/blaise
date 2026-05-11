@@ -15,7 +15,7 @@ unit cp.test.booleanops;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -84,30 +84,36 @@ end;
 
 const
   SrcAnd =
-    'program P;'                         + LineEnding +
-    'var A, B: Boolean; C: Boolean;'     + LineEnding +
-    'begin'                              + LineEnding +
-    '  A := True;'                       + LineEnding +
-    '  B := False;'                      + LineEnding +
-    '  C := A and B'                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var A, B: Boolean; C: Boolean;
+        begin
+          A := True;
+          B := False;
+          C := A and B
+        end.
+        ''';
 
   SrcOr =
-    'program P;'                         + LineEnding +
-    'var A, B: Boolean; C: Boolean;'     + LineEnding +
-    'begin'                              + LineEnding +
-    '  A := True;'                       + LineEnding +
-    '  B := False;'                      + LineEnding +
-    '  C := A or B'                      + LineEnding +
-    'end.';
+    '''
+        program P;
+        var A, B: Boolean; C: Boolean;
+        begin
+          A := True;
+          B := False;
+          C := A or B
+        end.
+        ''';
 
   SrcNot =
-    'program P;'                         + LineEnding +
-    'var A: Boolean; C: Boolean;'        + LineEnding +
-    'begin'                              + LineEnding +
-    '  A := True;'                       + LineEnding +
-    '  C := not A'                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var A: Boolean; C: Boolean;
+        begin
+          A := True;
+          C := not A
+        end.
+        ''';
 
 procedure TBooleanOpsTests.TestLexer_And_Keyword;
 var L: TLexer; T: TToken;
@@ -195,23 +201,27 @@ end;
 procedure TBooleanOpsTests.TestSemantic_And_IntOperand_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                     + LineEnding +
-    'var I, J: Integer; C: Boolean;' + LineEnding +
-    'begin'                          + LineEnding +
-    '  I := 1; J := 2;'              + LineEnding +
-    '  C := I and J'                 + LineEnding +
-    'end.');
+    '''
+        program P;
+        var I, J: Integer; C: Boolean;
+        begin
+          I := 1; J := 2;
+          C := I and J
+        end.
+        ''');
 end;
 
 procedure TBooleanOpsTests.TestSemantic_Not_IntOperand_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                    + LineEnding +
-    'var I: Integer; C: Boolean;'   + LineEnding +
-    'begin'                         + LineEnding +
-    '  I := 1;'                     + LineEnding +
-    '  C := not I'                  + LineEnding +
-    'end.');
+    '''
+        program P;
+        var I: Integer; C: Boolean;
+        begin
+          I := 1;
+          C := not I
+        end.
+        ''');
 end;
 
 procedure TBooleanOpsTests.TestCodegen_And_EmitsAnd;

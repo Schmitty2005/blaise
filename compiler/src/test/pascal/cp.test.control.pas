@@ -16,7 +16,7 @@ unit cp.test.control;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -173,40 +173,46 @@ end;
 
 const
   SrcIfOnly =
-    'program P;'              + LineEnding +
-    'var N: Integer;'         + LineEnding +
-    'begin'                   + LineEnding +
-    '  N := 5;'               + LineEnding +
-    '  if N = 5 then'         + LineEnding +
-    '    N := 1'              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 5;
+          if N = 5 then
+            N := 1
+        end.
+        ''';
 
   SrcIfElse =
-    'program P;'              + LineEnding +
-    'var N: Integer;'         + LineEnding +
-    'begin'                   + LineEnding +
-    '  N := 3;'               + LineEnding +
-    '  if N > 0 then'         + LineEnding +
-    '    N := 1'              + LineEnding +
-    '  else'                  + LineEnding +
-    '    N := 0'              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 3;
+          if N > 0 then
+            N := 1
+          else
+            N := 0
+        end.
+        ''';
 
   SrcCompound =
-    'program P;'              + LineEnding +
-    'var N: Integer;'         + LineEnding +
-    'begin'                   + LineEnding +
-    '  N := 10;'              + LineEnding +
-    '  if N > 5 then'         + LineEnding +
-    '  begin'                 + LineEnding +
-    '    WriteLn(N);'         + LineEnding +
-    '    N := 0'              + LineEnding +
-    '  end'                   + LineEnding +
-    '  else'                  + LineEnding +
-    '  begin'                 + LineEnding +
-    '    N := 1'              + LineEnding +
-    '  end'                   + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 10;
+          if N > 5 then
+          begin
+            WriteLn(N);
+            N := 0
+          end
+          else
+          begin
+            N := 1
+          end
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Lexer tests                                                         }
@@ -450,13 +456,15 @@ var
   S:    TIfStmt;
 begin
   Prog := AnalyseSrc(
-    'program P;'       + LineEnding +
-    'var N: Integer;'  + LineEnding +
-    'begin'            + LineEnding +
-    '  N := 1;'        + LineEnding +
-    '  if N <> 0 then' + LineEnding +
-    '    N := 0'       + LineEnding +
-    'end.');
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 1;
+          if N <> 0 then
+            N := 0
+        end.
+        ''');
   try
     S := TIfStmt(Prog.Block.Stmts[1]);
     AssertEquals('NE result is Boolean',
@@ -470,13 +478,15 @@ var
   S:    TIfStmt;
 begin
   Prog := AnalyseSrc(
-    'program P;'       + LineEnding +
-    'var N: Integer;'  + LineEnding +
-    'begin'            + LineEnding +
-    '  N := 1;'        + LineEnding +
-    '  if N < 5 then'  + LineEnding +
-    '    N := 0'       + LineEnding +
-    'end.');
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 1;
+          if N < 5 then
+            N := 0
+        end.
+        ''');
   try
     S := TIfStmt(Prog.Block.Stmts[1]);
     AssertEquals('LT result is Boolean',
@@ -503,13 +513,15 @@ var
   S:    TIfStmt;
 begin
   Prog := AnalyseSrc(
-    'program P;'       + LineEnding +
-    'var N: Integer;'  + LineEnding +
-    'begin'            + LineEnding +
-    '  N := 1;'        + LineEnding +
-    '  if N <= 5 then' + LineEnding +
-    '    N := 0'       + LineEnding +
-    'end.');
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 1;
+          if N <= 5 then
+            N := 0
+        end.
+        ''');
   try
     S := TIfStmt(Prog.Block.Stmts[1]);
     AssertEquals('LE result is Boolean',
@@ -523,13 +535,15 @@ var
   S:    TIfStmt;
 begin
   Prog := AnalyseSrc(
-    'program P;'       + LineEnding +
-    'var N: Integer;'  + LineEnding +
-    'begin'            + LineEnding +
-    '  N := 1;'        + LineEnding +
-    '  if N >= 1 then' + LineEnding +
-    '    N := 0'       + LineEnding +
-    'end.');
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 1;
+          if N >= 1 then
+            N := 0
+        end.
+        ''');
   try
     S := TIfStmt(Prog.Block.Stmts[1]);
     AssertEquals('GE result is Boolean',
@@ -540,25 +554,29 @@ end;
 procedure TControlTests.TestSemantic_Comparison_TypeMismatch_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'          + LineEnding +
-    'var N: Integer;'     + LineEnding +
-    'begin'               + LineEnding +
-    '  N := 1;'           + LineEnding +
-    '  if N = ''hello'' then' + LineEnding +
-    '    N := 0'          + LineEnding +
-    'end.');
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 1;
+          if N = 'hello' then
+            N := 0
+        end.
+        ''');
 end;
 
 procedure TControlTests.TestSemantic_If_NonBooleanCondition_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'       + LineEnding +
-    'var N: Integer;'  + LineEnding +
-    'begin'            + LineEnding +
-    '  N := 1;'        + LineEnding +
-    '  if N then'      + LineEnding +
-    '    N := 0'       + LineEnding +
-    'end.');
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 1;
+          if N then
+            N := 0
+        end.
+        ''');
 end;
 
 { ------------------------------------------------------------------ }
@@ -598,12 +616,14 @@ end;
 procedure TControlTests.TestCodegen_Comparison_LT_UsescLtw;
 begin
   AssertTrue('csltw for <', Pos('csltw', GenIR(
-    'program P;' + LineEnding +
-    'var N: Integer;' + LineEnding +
-    'begin' + LineEnding +
-    '  N := 1;' + LineEnding +
-    '  if N < 5 then N := 0' + LineEnding +
-    'end.'
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 1;
+          if N < 5 then N := 0
+        end.
+        '''
   )) > 0);
 end;
 
@@ -615,12 +635,14 @@ end;
 procedure TControlTests.TestCodegen_Comparison_NE_UsescNew;
 begin
   AssertTrue('cnew for <>', Pos('cnew', GenIR(
-    'program P;' + LineEnding +
-    'var N: Integer;' + LineEnding +
-    'begin' + LineEnding +
-    '  N := 1;' + LineEnding +
-    '  if N <> 0 then N := 0' + LineEnding +
-    'end.'
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 1;
+          if N <> 0 then N := 0
+        end.
+        '''
   )) > 0);
 end;
 
@@ -638,26 +660,30 @@ end;
 
 const
   SrcWhile =
-    'program P;'              + LineEnding +
-    'var N: Integer;'         + LineEnding +
-    'begin'                   + LineEnding +
-    '  N := 5;'               + LineEnding +
-    '  while N > 0 do'        + LineEnding +
-    '    N := N - 1'          + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 5;
+          while N > 0 do
+            N := N - 1
+        end.
+        ''';
 
   SrcWhileCompound =
-    'program P;'              + LineEnding +
-    'var N, S: Integer;'      + LineEnding +
-    'begin'                   + LineEnding +
-    '  N := 3;'               + LineEnding +
-    '  S := 0;'               + LineEnding +
-    '  while N > 0 do'        + LineEnding +
-    '  begin'                 + LineEnding +
-    '    S := S + N;'         + LineEnding +
-    '    N := N - 1'          + LineEnding +
-    '  end'                   + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N, S: Integer;
+        begin
+          N := 3;
+          S := 0;
+          while N > 0 do
+          begin
+            S := S + N;
+            N := N - 1
+          end
+        end.
+        ''';
 
 procedure TControlTests.TestLexer_While_Keyword;
 var L: TLexer; T: TToken;
@@ -729,13 +755,15 @@ end;
 procedure TControlTests.TestSemantic_While_NonBooleanCondition_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'       + LineEnding +
-    'var N: Integer;'  + LineEnding +
-    'begin'            + LineEnding +
-    '  N := 1;'        + LineEnding +
-    '  while N do'     + LineEnding +
-    '    N := N - 1'   + LineEnding +
-    'end.');
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 1;
+          while N do
+            N := N - 1
+        end.
+        ''');
 end;
 
 procedure TControlTests.TestCodegen_While_EmitsCondLabel;

@@ -16,7 +16,7 @@ unit cp.test.sets;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -80,124 +80,148 @@ implementation
 
 const
   DirEnum =
-    'type' + LineEnding +
-    '  TDir = (dNorth, dSouth, dEast, dWest);' + LineEnding +
-    '  TDirSet = set of TDir;' + LineEnding;
+    '''
+        type
+          TDir = (dNorth, dSouth, dEast, dWest);
+          TDirSet = set of TDir;
+        ''';
 
   { dNorth=0 → bit 0 = 1; dEast=2 → bit 2 = 4; mask = 5 }
   SrcSetTypeDecl =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'begin' + LineEnding +
-    'end.';
+    '''
+        begin
+        end.
+        ''';
 
   SrcSetEmptyLiteral =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'var S: TDirSet;' + LineEnding +
-    'begin' + LineEnding +
-    '  S := []' + LineEnding +
-    'end.';
+    '''
+        var S: TDirSet;
+        begin
+          S := []
+        end.
+        ''';
 
   SrcSetTwoElementLiteral =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'var S: TDirSet;' + LineEnding +
-    'begin' + LineEnding +
-    '  S := [dNorth, dEast]' + LineEnding +   { mask = 1 + 4 = 5 }
+    'var S: TDirSet;' + #10 + 
+    'begin' + #10 + 
+    '  S := [dNorth, dEast]' + #10 +   { mask = 1 + 4 = 5 }
     'end.';
 
   SrcSetInOperator =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'var S: TDirSet; B: Boolean;' + LineEnding +
-    'begin' + LineEnding +
-    '  S := [dNorth, dEast];' + LineEnding +
-    '  B := dNorth in S' + LineEnding +
-    'end.';
+    '''
+        var S: TDirSet; B: Boolean;
+        begin
+          S := [dNorth, dEast];
+          B := dNorth in S
+        end.
+        ''';
 
   SrcSetInclude =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'var S: TDirSet;' + LineEnding +
-    'begin' + LineEnding +
-    '  S := [];' + LineEnding +
-    '  Include(S, dSouth)' + LineEnding +
-    'end.';
+    '''
+        var S: TDirSet;
+        begin
+          S := [];
+          Include(S, dSouth)
+        end.
+        ''';
 
   SrcSetExclude =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'var S: TDirSet;' + LineEnding +
-    'begin' + LineEnding +
-    '  S := [dNorth, dSouth];' + LineEnding +
-    '  Exclude(S, dNorth)' + LineEnding +
-    'end.';
+    '''
+        var S: TDirSet;
+        begin
+          S := [dNorth, dSouth];
+          Exclude(S, dNorth)
+        end.
+        ''';
 
   SrcSetUnion =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'var S1, S2, S3: TDirSet;' + LineEnding +
-    'begin' + LineEnding +
-    '  S1 := [dNorth];' + LineEnding +
-    '  S2 := [dEast];' + LineEnding +
-    '  S3 := S1 + S2' + LineEnding +
-    'end.';
+    '''
+        var S1, S2, S3: TDirSet;
+        begin
+          S1 := [dNorth];
+          S2 := [dEast];
+          S3 := S1 + S2
+        end.
+        ''';
 
   SrcSetDifference =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'var S1, S2, S3: TDirSet;' + LineEnding +
-    'begin' + LineEnding +
-    '  S1 := [dNorth, dEast];' + LineEnding +
-    '  S2 := [dNorth];' + LineEnding +
-    '  S3 := S1 - S2' + LineEnding +
-    'end.';
+    '''
+        var S1, S2, S3: TDirSet;
+        begin
+          S1 := [dNorth, dEast];
+          S2 := [dNorth];
+          S3 := S1 - S2
+        end.
+        ''';
 
   SrcSetIntersection =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'var S1, S2, S3: TDirSet;' + LineEnding +
-    'begin' + LineEnding +
-    '  S1 := [dNorth, dEast];' + LineEnding +
-    '  S2 := [dNorth];' + LineEnding +
-    '  S3 := S1 * S2' + LineEnding +
-    'end.';
+    '''
+        var S1, S2, S3: TDirSet;
+        begin
+          S1 := [dNorth, dEast];
+          S2 := [dNorth];
+          S3 := S1 * S2
+        end.
+        ''';
 
   SrcSetEquality =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'var S1, S2: TDirSet; B: Boolean;' + LineEnding +
-    'begin' + LineEnding +
-    '  S1 := [dNorth];' + LineEnding +
-    '  S2 := [dNorth];' + LineEnding +
-    '  B := S1 = S2' + LineEnding +
-    'end.';
+    '''
+        var S1, S2: TDirSet; B: Boolean;
+        begin
+          S1 := [dNorth];
+          S2 := [dNorth];
+          B := S1 = S2
+        end.
+        ''';
 
   SrcSetInequality =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'var S1, S2: TDirSet; B: Boolean;' + LineEnding +
-    'begin' + LineEnding +
-    '  S1 := [dNorth];' + LineEnding +
-    '  S2 := [dSouth];' + LineEnding +
-    '  B := S1 <> S2' + LineEnding +
-    'end.';
+    '''
+        var S1, S2: TDirSet; B: Boolean;
+        begin
+          S1 := [dNorth];
+          S2 := [dSouth];
+          B := S1 <> S2
+        end.
+        ''';
 
   SrcSetBadBaseType =
-    'program P;' + LineEnding +
-    'type TBad = set of Integer;' + LineEnding +
-    'begin' + LineEnding +
-    'end.';
+    '''
+        program P;
+        type TBad = set of Integer;
+        begin
+        end.
+        ''';
 
   SrcSetBadLiteralElement =
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'type TColors = (cRed, cBlue);' + LineEnding +
-    'type TColorSet = set of TColors;' + LineEnding +
-    'var S: TDirSet;' + LineEnding +
-    'begin' + LineEnding +
-    '  S := [cRed]' + LineEnding +  { TColors element in TDirSet → error }
+    'type TColors = (cRed, cBlue);' + #10 + 
+    'type TColorSet = set of TColors;' + #10 + 
+    'var S: TDirSet;' + #10 + 
+    'begin' + #10 + 
+    '  S := [cRed]' + #10 +  { TColors element in TDirSet → error }
     'end.';
 
 { ------------------------------------------------------------------ }
@@ -431,7 +455,7 @@ var
   IR: string;
 begin
   IR := GenIR(SrcSetEmptyLiteral);
-  { global set var emits data $S = { w 0 }; local would emit storew 0 }
+  // global set var emits data $S = { w 0 }; local would emit storew 0
   AssertTrue('set var zero-initialised in data section or stack alloc',
     (Pos('{ w 0 }', IR) > 0) or (Pos('storew 0', IR) > 0));
 end;
@@ -451,12 +475,14 @@ var
 begin
   { [dNorth] → ordinal 0 → bit 0 → mask 1 → emits "copy 1" }
   IR := GenIR(
-    'program P;' + LineEnding +
+    'program P;' + #10 + 
     DirEnum +
-    'var S: TDirSet;' + LineEnding +
-    'begin' + LineEnding +
-    '  S := [dNorth]' + LineEnding +
-    'end.');
+    '''
+        var S: TDirSet;
+        begin
+          S := [dNorth]
+        end.
+        ''');
   AssertTrue('single-element mask is 1', Pos('copy 1', IR) > 0);
 end;
 

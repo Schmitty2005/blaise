@@ -15,7 +15,7 @@ unit cp.test.inherit;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -147,68 +147,76 @@ end;
 
 const
   SrcNilAssign =
-    'program P;'          + LineEnding +
-    'var C: TNode;'       + LineEnding +  { forward ref — TNode defined after }
-    'type'                + LineEnding +
-    '  TNode = class'     + LineEnding +
-    '    Value: Integer;' + LineEnding +
-    '    Next:  TNode;'   + LineEnding +
-    '  end;'              + LineEnding +
-    'var N: TNode;'       + LineEnding +
-    'begin'               + LineEnding +
-    '  N := TNode.Create;'+ LineEnding +
-    '  N.Next := nil'     + LineEnding +
-    'end.';
+    'program P;' + #10 + 
+    'var C: TNode;'       + #10 +  { forward ref — TNode defined after }
+    '''
+        type
+          TNode = class
+            Value: Integer;
+            Next:  TNode;
+          end;
+        var N: TNode;
+        begin
+          N := TNode.Create;
+          N.Next := nil
+        end.
+        ''';
 
   SrcSelfRef =
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TNode = class'     + LineEnding +
-    '    Value: Integer;' + LineEnding +
-    '    Next:  TNode;'   + LineEnding +
-    '  end;'              + LineEnding +
-    'var N: TNode;'       + LineEnding +
-    'begin'               + LineEnding +
-    '  N := TNode.Create;'+ LineEnding +
-    '  N.Value := 1;'     + LineEnding +
-    '  N.Next := nil'     + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TNode = class
+            Value: Integer;
+            Next:  TNode;
+          end;
+        var N: TNode;
+        begin
+          N := TNode.Create;
+          N.Value := 1;
+          N.Next := nil
+        end.
+        ''';
 
   SrcInherit =
-    'program P;'               + LineEnding +
-    'type'                     + LineEnding +
-    '  TAnimal = class'        + LineEnding +
-    '    Age: Integer;'        + LineEnding +
-    '  end;'                   + LineEnding +
-    '  TDog = class(TAnimal)'  + LineEnding +
-    '    Legs: Integer;'       + LineEnding +
-    '  end;'                   + LineEnding +
-    'var D: TDog;'             + LineEnding +
-    'begin'                    + LineEnding +
-    '  D := TDog.Create;'      + LineEnding +
-    '  D.Age := 3;'            + LineEnding +
-    '  D.Legs := 4'            + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TAnimal = class
+            Age: Integer;
+          end;
+          TDog = class(TAnimal)
+            Legs: Integer;
+          end;
+        var D: TDog;
+        begin
+          D := TDog.Create;
+          D.Age := 3;
+          D.Legs := 4
+        end.
+        ''';
 
   SrcInheritMethod =
-    'program P;'                       + LineEnding +
-    'type'                             + LineEnding +
-    '  TBase = class'                  + LineEnding +
-    '    X: Integer;'                  + LineEnding +
-    '    procedure SetX(V: Integer);'  + LineEnding +
-    '    begin'                        + LineEnding +
-    '      Self.X := V'                + LineEnding +
-    '    end;'                         + LineEnding +
-    '  end;'                           + LineEnding +
-    '  TChild = class(TBase)'          + LineEnding +
-    '    Y: Integer;'                  + LineEnding +
-    '  end;'                           + LineEnding +
-    'var C: TChild;'                   + LineEnding +
-    'begin'                            + LineEnding +
-    '  C := TChild.Create;'            + LineEnding +
-    '  C.SetX(10);'                    + LineEnding +
-    '  C.Y := 20'                      + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase = class
+            X: Integer;
+            procedure SetX(V: Integer);
+            begin
+              Self.X := V
+            end;
+          end;
+          TChild = class(TBase)
+            Y: Integer;
+          end;
+        var C: TChild;
+        begin
+          C := TChild.Create;
+          C.SetX(10);
+          C.Y := 20
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { nil literal tests                                                   }
@@ -246,30 +254,34 @@ end;
 procedure TInheritTests.TestSemantic_Nil_AssignToIntVar_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'         + LineEnding +
-    'var N: Integer;'    + LineEnding +
-    'begin'              + LineEnding +
-    '  N := nil'         + LineEnding +
-    'end.');
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := nil
+        end.
+        ''');
 end;
 
 procedure TInheritTests.TestSemantic_Nil_CompareWithClassVar_OK;
 begin
   AnalyseSrc(
-    'program P;'               + LineEnding +
-    'type'                     + LineEnding +
-    '  TFoo = class'           + LineEnding +
-    '    X: Integer;'          + LineEnding +
-    '  end;'                   + LineEnding +
-    'var F: TFoo;'             + LineEnding +
-    'var N: Integer;'          + LineEnding +
-    'begin'                    + LineEnding +
-    '  F := TFoo.Create;'      + LineEnding +
-    '  if F = nil then'        + LineEnding +
-    '    N := 0'               + LineEnding +
-    '  else'                   + LineEnding +
-    '    N := 1'               + LineEnding +
-    'end.').Free;
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        var N: Integer;
+        begin
+          F := TFoo.Create;
+          if F = nil then
+            N := 0
+          else
+            N := 1
+        end.
+        ''').Free;
 end;
 
 procedure TInheritTests.TestCodegen_Nil_StoresZero;
@@ -285,18 +297,20 @@ procedure TInheritTests.TestCodegen_Nil_CompareEmitsCeql;
 var IR: string;
 begin
   IR := GenIR(
-    'program P;'               + LineEnding +
-    'type'                     + LineEnding +
-    '  TFoo = class'           + LineEnding +
-    '    X: Integer;'          + LineEnding +
-    '  end;'                   + LineEnding +
-    'var F: TFoo;'             + LineEnding +
-    'var N: Integer;'          + LineEnding +
-    'begin'                    + LineEnding +
-    '  F := TFoo.Create;'      + LineEnding +
-    '  if F = nil then'        + LineEnding +
-    '    N := 0'               + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        var N: Integer;
+        begin
+          F := TFoo.Create;
+          if F = nil then
+            N := 0
+        end.
+        ''');
   AssertTrue('ceql for pointer comparison', Pos('ceql', IR) > 0);
 end;
 
@@ -432,19 +446,21 @@ end;
 procedure TInheritTests.TestSemantic_Inherit_UnknownMethod_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                      + LineEnding +
-    'type'                            + LineEnding +
-    '  TBase = class'                 + LineEnding +
-    '    X: Integer;'                 + LineEnding +
-    '  end;'                          + LineEnding +
-    '  TChild = class(TBase)'         + LineEnding +
-    '    Y: Integer;'                 + LineEnding +
-    '  end;'                          + LineEnding +
-    'var C: TChild;'                  + LineEnding +
-    'begin'                           + LineEnding +
-    '  C := TChild.Create;'           + LineEnding +
-    '  C.NoSuchMethod'                + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TBase = class
+            X: Integer;
+          end;
+          TChild = class(TBase)
+            Y: Integer;
+          end;
+        var C: TChild;
+        begin
+          C := TChild.Create;
+          C.NoSuchMethod
+        end.
+        ''');
 end;
 
 procedure TInheritTests.TestCodegen_Inherit_MethodCallUsesParentFunctionName;
@@ -464,52 +480,56 @@ end;
 
 const
   SrcInheritedNoArgs =
-    'program P;'                      + LineEnding +
-    'type'                            + LineEnding +
-    '  TBase = class'                 + LineEnding +
-    '    X: Integer;'                 + LineEnding +
-    '    procedure Init;'             + LineEnding +
-    '  end;'                          + LineEnding +
-    '  TChild = class(TBase)'         + LineEnding +
-    '    Y: Integer;'                 + LineEnding +
-    '    procedure Init;'             + LineEnding +
-    '  end;'                          + LineEnding +
-    'procedure TBase.Init;'           + LineEnding +
-    'begin'                           + LineEnding +
-    '  Self.X := 0'                   + LineEnding +
-    'end;'                            + LineEnding +
-    'procedure TChild.Init;'          + LineEnding +
-    'begin'                           + LineEnding +
-    '  inherited Init;'               + LineEnding +
-    '  Self.Y := 0'                   + LineEnding +
-    'end;'                            + LineEnding +
-    'var C: TChild;'                  + LineEnding +
-    'begin'                           + LineEnding +
-    '  C := TChild.Create'            + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase = class
+            X: Integer;
+            procedure Init;
+          end;
+          TChild = class(TBase)
+            Y: Integer;
+            procedure Init;
+          end;
+        procedure TBase.Init;
+        begin
+          Self.X := 0
+        end;
+        procedure TChild.Init;
+        begin
+          inherited Init;
+          Self.Y := 0
+        end;
+        var C: TChild;
+        begin
+          C := TChild.Create
+        end.
+        ''';
 
   SrcInheritedWithArgs =
-    'program P;'                      + LineEnding +
-    'type'                            + LineEnding +
-    '  TBase = class'                 + LineEnding +
-    '    X: Integer;'                 + LineEnding +
-    '    procedure SetX(V: Integer);' + LineEnding +
-    '  end;'                          + LineEnding +
-    '  TChild = class(TBase)'         + LineEnding +
-    '    procedure SetX(V: Integer);' + LineEnding +
-    '  end;'                          + LineEnding +
-    'procedure TBase.SetX(V: Integer);' + LineEnding +
-    'begin'                           + LineEnding +
-    '  Self.X := V'                   + LineEnding +
-    'end;'                            + LineEnding +
-    'procedure TChild.SetX(V: Integer);' + LineEnding +
-    'begin'                           + LineEnding +
-    '  inherited SetX(V)'             + LineEnding +
-    'end;'                            + LineEnding +
-    'var C: TChild;'                  + LineEnding +
-    'begin'                           + LineEnding +
-    '  C := TChild.Create'            + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase = class
+            X: Integer;
+            procedure SetX(V: Integer);
+          end;
+          TChild = class(TBase)
+            procedure SetX(V: Integer);
+          end;
+        procedure TBase.SetX(V: Integer);
+        begin
+          Self.X := V
+        end;
+        procedure TChild.SetX(V: Integer);
+        begin
+          inherited SetX(V)
+        end;
+        var C: TChild;
+        begin
+          C := TChild.Create
+        end.
+        ''';
 
 procedure TInheritTests.TestLexer_Inherited_IsOwnToken;
 var L: TLexer; T: TToken;
@@ -571,23 +591,27 @@ end;
 
 const
   SrcInheritsFromPointer =
-    'program P;'                    + LineEnding +
-    'var C: Pointer;'               + LineEnding +
-    '    D: Pointer;'               + LineEnding +
-    '    B: Boolean;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  B := C.InheritsFrom(D);'     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var C: Pointer;
+            D: Pointer;
+            B: Boolean;
+        begin
+          B := C.InheritsFrom(D);
+        end.
+        ''';
 
   SrcInheritsFromClassInstance =
-    'program P;'                            + LineEnding +
-    'type TBase = class end;'               + LineEnding +
-    '     TChild = class(TBase) end;'       + LineEnding +
-    'var Obj: TChild;'                      + LineEnding +
-    '    B: Boolean;'                       + LineEnding +
-    'begin'                                 + LineEnding +
-    '  B := Obj.InheritsFrom(TBase);'       + LineEnding +
-    'end.';
+    '''
+        program P;
+        type TBase = class end;
+             TChild = class(TBase) end;
+        var Obj: TChild;
+            B: Boolean;
+        begin
+          B := Obj.InheritsFrom(TBase);
+        end.
+        ''';
 
 procedure TInheritTests.TestSemantic_InheritsFrom_OnPointerVar_OK;
 var Prog: TProgram;

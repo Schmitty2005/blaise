@@ -13,7 +13,7 @@ unit cp.test.parser;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST;
 
 type

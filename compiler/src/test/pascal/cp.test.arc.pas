@@ -13,7 +13,7 @@ unit cp.test.arc;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSemantic, uCodeGenQBE;
 
 type
@@ -102,11 +102,13 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'         + LineEnding +
-    'var s: string;'     + LineEnding +
-    'begin'              + LineEnding +
-    '  s := ''hello'''   + LineEnding +
-    'end.');
+    '''
+        program P;
+        var s: string;
+        begin
+          s := 'hello'
+        end.
+        ''');
   AssertTrue('retain call present', IRContains(IR, 'call $_StringAddRef'));
 end;
 
@@ -115,11 +117,13 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'         + LineEnding +
-    'var s: string;'     + LineEnding +
-    'begin'              + LineEnding +
-    '  s := ''hello'''   + LineEnding +
-    'end.');
+    '''
+        program P;
+        var s: string;
+        begin
+          s := 'hello'
+        end.
+        ''');
   AssertTrue('release call present', IRContains(IR, 'call $_StringRelease'));
 end;
 
@@ -129,11 +133,13 @@ var
   PosTain, PosLease: Integer;
 begin
   IR := GenIR(
-    'program P;'         + LineEnding +
-    'var s: string;'     + LineEnding +
-    'begin'              + LineEnding +
-    '  s := ''hello'''   + LineEnding +
-    'end.');
+    '''
+        program P;
+        var s: string;
+        begin
+          s := 'hello'
+        end.
+        ''');
   PosTain  := Pos('call $_StringAddRef', IR);
   PosLease := Pos('call $_StringRelease', IR);
   AssertTrue('retain before first release', PosTain < PosLease);
@@ -144,9 +150,11 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'         + LineEnding +
-    'var s: string;'     + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        var s: string;
+        begin end.
+        ''');
   AssertTrue('release at block exit', IRContains(IR, 'call $_StringRelease'));
 end;
 
@@ -157,18 +165,21 @@ var
   Pos1, Pos2: Integer;
 begin
   IR := GenIR(
-    'program P;'            + LineEnding +
-    'var a, b: string;'     + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        var a, b: string;
+        begin end.
+        ''');
   { Two string vars → two release calls at exit }
   Pos1 := Pos('call $_StringRelease', IR);
   AssertTrue('at least one release', Pos1 > 0);
-  Pos2 := Pos('call $_StringRelease', IR, Pos1 + 1);
+  { 3-arg Pos not supported; emulate via Copy to skip past first match }
+  Pos2 := Pos('call $_StringRelease', Copy(IR, Pos1 + 1, MaxInt));
   AssertTrue('second release', Pos2 > 0);
   Count := 0;
   Pos1 := 1;
   repeat
-    Pos1 := Pos('call $_StringRelease', IR, Pos1);
+    Pos1 := Pos('call $_StringRelease', Copy(IR, Pos1, MaxInt));
     if Pos1 > 0 then begin Inc(Count); Inc(Pos1); end;
   until Pos1 = 0;
   AssertTrue('at least 2 releases', Count >= 2);
@@ -179,11 +190,13 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'         + LineEnding +
-    'var n: Integer;'    + LineEnding +
-    'begin'              + LineEnding +
-    '  n := 42'          + LineEnding +
-    'end.');
+    '''
+        program P;
+        var n: Integer;
+        begin
+          n := 42
+        end.
+        ''');
   AssertFalse('no retain for int', IRContains(IR, 'call $_StringAddRef'));
 end;
 
@@ -192,11 +205,13 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'         + LineEnding +
-    'var n: Integer;'    + LineEnding +
-    'begin'              + LineEnding +
-    '  n := 42'          + LineEnding +
-    'end.');
+    '''
+        program P;
+        var n: Integer;
+        begin
+          n := 42
+        end.
+        ''');
   AssertFalse('no release for int', IRContains(IR, 'call $_StringRelease'));
 end;
 
@@ -214,34 +229,42 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'         + LineEnding +
-    'var s: string;'     + LineEnding +
-    'begin'              + LineEnding +
-    '  s := ''world'';'  + LineEnding +
-    '  WriteLn(s)'       + LineEnding +
-    'end.');
+    '''
+        program P;
+        var s: string;
+        begin
+          s := 'world';
+          WriteLn(s)
+        end.
+        ''');
   AssertTrue('_SysWriteStr called', IRContains(IR, 'call $_SysWriteStr'));
 end;
 
 const
   SrcValParam =
-    'program P;'                  + LineEnding +
-    'procedure Greet(S: string);' + LineEnding +
-    'begin end;'                  + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        procedure Greet(S: string);
+        begin end;
+        begin end.
+        ''';
 
   SrcVarParam =
-    'program P;'                      + LineEnding +
-    'procedure Greet(var S: string);' + LineEnding +
-    'begin end;'                      + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        procedure Greet(var S: string);
+        begin end;
+        begin end.
+        ''';
 
   SrcConcat =
-    'program P;'              + LineEnding +
-    'var a, b, c: string;'   + LineEnding +
-    'begin'                   + LineEnding +
-    '  c := a + b'            + LineEnding +
-    'end.';
+    '''
+        program P;
+        var a, b, c: string;
+        begin
+          c := a + b
+        end.
+        ''';
 
 procedure TARCTests.TestARC_StringValueParam_AddRefOnEntry;
 var
@@ -311,47 +334,53 @@ end;
 
 const
   SrcDestroyClass =
-    'program P;'              + LineEnding +
-    'type'                    + LineEnding +
-    '  TBuf = class'          + LineEnding +
-    '    FData: ^Integer;'    + LineEnding +
-    '    procedure Destroy;'  + LineEnding +
-    '  end;'                  + LineEnding +
-    'procedure TBuf.Destroy;' + LineEnding +
-    'begin'                   + LineEnding +
-    '  FreeMem(Self.FData)'   + LineEnding +
-    'end;'                    + LineEnding +
-    'var B: TBuf;'            + LineEnding +
-    'begin'                   + LineEnding +
-    '  B := TBuf.Create'      + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBuf = class
+            FData: ^Integer;
+            procedure Destroy;
+          end;
+        procedure TBuf.Destroy;
+        begin
+          FreeMem(Self.FData)
+        end;
+        var B: TBuf;
+        begin
+          B := TBuf.Create
+        end.
+        ''';
 
   SrcNoDestroyClass =
-    'program P;'            + LineEnding +
-    'type'                  + LineEnding +
-    '  TFoo = class'        + LineEnding +
-    '    V: Integer;'       + LineEnding +
-    '  end;'                + LineEnding +
-    'var F: TFoo;'          + LineEnding +
-    'begin'                 + LineEnding +
-    '  F := TFoo.Create'    + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+            V: Integer;
+          end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create
+        end.
+        ''';
 
   SrcGenericDestroy =
-    'program P;'                                           + LineEnding +
-    'type'                                                 + LineEnding +
-    '  TBox<T> = class'                                    + LineEnding +
-    '    FData: ^T;'                                       + LineEnding +
-    '    procedure Destroy;'                               + LineEnding +
-    '  end;'                                               + LineEnding +
-    'procedure TBox<T>.Destroy;'                           + LineEnding +
-    'begin'                                                + LineEnding +
-    '  FreeMem(Self.FData)'                                + LineEnding +
-    'end;'                                                 + LineEnding +
-    'var B: TBox<Integer>;'                                + LineEnding +
-    'begin'                                                + LineEnding +
-    '  B := TBox<Integer>.Create'                          + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox<T> = class
+            FData: ^T;
+            procedure Destroy;
+          end;
+        procedure TBox<T>.Destroy;
+        begin
+          FreeMem(Self.FData)
+        end;
+        var B: TBox<Integer>;
+        begin
+          B := TBox<Integer>.Create
+        end.
+        ''';
 
 procedure TARCTests.TestARC_ClassDestroy_FieldCleanupCallsIt;
 var

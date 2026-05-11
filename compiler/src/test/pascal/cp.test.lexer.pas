@@ -13,7 +13,7 @@ unit cp.test.lexer;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer;
 
 type
@@ -83,13 +83,15 @@ implementation
 
 procedure TLexerTests.SetLexer(const ASource: string);
 begin
-  FreeAndNil(FLexer);
+  FLexer.Free;
+  FLexer := nil;
   FLexer := TLexer.Create(ASource);
 end;
 
 procedure TLexerTests.TearDown;
 begin
-  FreeAndNil(FLexer);
+  FLexer.Free;
+  FLexer := nil;
 end;
 
 { EOF and whitespace }
@@ -107,7 +109,7 @@ procedure TLexerTests.TestWhitespaceOnly_ReturnsEOF;
 var
   tok: TToken;
 begin
-  SetLexer('   ' + LineEnding + '  ');
+  SetLexer('   ' + #10 + '  ');
   tok := FLexer.Next;
   AssertEquals('Kind', Ord(tkEOF), Ord(tok.Kind));
 end;
@@ -118,7 +120,7 @@ procedure TLexerTests.TestLineComment_Skipped;
 var
   tok: TToken;
 begin
-  SetLexer('// comment' + LineEnding + 'begin');
+  SetLexer('// comment' + #10 + 'begin');
   tok := FLexer.Next;
   AssertEquals('Kind after //', Ord(tkBegin), Ord(tok.Kind));
 end;
@@ -136,7 +138,7 @@ procedure TLexerTests.TestBlockComment_MultiLine_Skipped;
 var
   tok: TToken;
 begin
-  SetLexer('{ line one' + LineEnding + '  line two }' + LineEnding + 'end');
+  SetLexer('{ line one' + #10 + '  line two }' + #10 + 'end');
   tok := FLexer.Next;
   AssertEquals('Kind after multiline {}', Ord(tkEnd), Ord(tok.Kind));
 end;
@@ -412,7 +414,7 @@ procedure TLexerTests.TestLineTracking_SecondLine;
 var
   tok: TToken;
 begin
-  SetLexer('begin' + LineEnding + 'end');
+  SetLexer('begin' + #10 + 'end');
   tok := FLexer.Next;
   AssertEquals('begin line', 1, tok.Line);
   tok := FLexer.Next;

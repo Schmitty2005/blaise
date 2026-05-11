@@ -17,7 +17,7 @@ unit cp.test.genericdefaults;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -61,84 +61,94 @@ implementation
 
 const
   SrcIEqualityComparerDecl =
-    'program P;'                                                   + LineEnding +
-    'type'                                                         + LineEnding +
-    '  IEqualityComparer<T> = interface'                           + LineEnding +
-    '    function Equals(A, B: T): Boolean;'                       + LineEnding +
-    '    function GetHashCode(Value: T): Integer;'                 + LineEnding +
-    '  end;'                                                       + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          IEqualityComparer<T> = interface
+            function Equals(A, B: T): Boolean;
+            function GetHashCode(Value: T): Integer;
+          end;
+        begin end.
+        ''';
 
   SrcIComparerDecl =
-    'program P;'                                                   + LineEnding +
-    'type'                                                         + LineEnding +
-    '  IComparer<T> = interface'                                   + LineEnding +
-    '    function Compare(A, B: T): Integer;'                      + LineEnding +
-    '  end;'                                                       + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          IComparer<T> = interface
+            function Compare(A, B: T): Integer;
+          end;
+        begin end.
+        ''';
 
   SrcTIntegerEqualityComparerDecl =
-    'program P;'                                                   + LineEnding +
-    'type'                                                         + LineEnding +
-    '  IEqualityComparer<T> = interface'                           + LineEnding +
-    '    function Equals(A, B: T): Boolean;'                       + LineEnding +
-    '    function GetHashCode(Value: T): Integer;'                 + LineEnding +
-    '  end;'                                                       + LineEnding +
-    '  TIntegerEqualityComparer = class(IEqualityComparer<Integer>)' + LineEnding +
-    '    function Equals(A, B: Integer): Boolean;'                 + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Result := A = B'                                        + LineEnding +
-    '    end;'                                                     + LineEnding +
-    '    function GetHashCode(Value: Integer): Integer;'           + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Result := Value'                                        + LineEnding +
-    '    end;'                                                     + LineEnding +
-    '  end;'                                                       + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          IEqualityComparer<T> = interface
+            function Equals(A, B: T): Boolean;
+            function GetHashCode(Value: T): Integer;
+          end;
+          TIntegerEqualityComparer = class(IEqualityComparer<Integer>)
+            function Equals(A, B: Integer): Boolean;
+            begin
+              Result := A = B
+            end;
+            function GetHashCode(Value: Integer): Integer;
+            begin
+              Result := Value
+            end;
+          end;
+        begin end.
+        ''';
 
   SrcTIntegerComparerDecl =
-    'program P;'                                                   + LineEnding +
-    'type'                                                         + LineEnding +
-    '  IComparer<T> = interface'                                   + LineEnding +
-    '    function Compare(A, B: T): Integer;'                      + LineEnding +
-    '  end;'                                                       + LineEnding +
-    '  TIntegerComparer = class(IComparer<Integer>)'               + LineEnding +
-    '    function Compare(A, B: Integer): Integer;'                + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      if A < B then'                                          + LineEnding +
-    '        Result := -1'                                         + LineEnding +
-    '      else if A > B then'                                     + LineEnding +
-    '        Result := 1'                                          + LineEnding +
-    '      else'                                                   + LineEnding +
-    '        Result := 0'                                          + LineEnding +
-    '    end;'                                                     + LineEnding +
-    '  end;'                                                       + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          IComparer<T> = interface
+            function Compare(A, B: T): Integer;
+          end;
+          TIntegerComparer = class(IComparer<Integer>)
+            function Compare(A, B: Integer): Integer;
+            begin
+              if A < B then
+                Result := -1
+              else if A > B then
+                Result := 1
+              else
+                Result := 0
+            end;
+          end;
+        begin end.
+        ''';
 
   SrcVarIEqualityComparerInteger =
-    'program P;'                                                   + LineEnding +
-    'type'                                                         + LineEnding +
-    '  IEqualityComparer<T> = interface'                           + LineEnding +
-    '    function Equals(A, B: T): Boolean;'                       + LineEnding +
-    '    function GetHashCode(Value: T): Integer;'                 + LineEnding +
-    '  end;'                                                       + LineEnding +
-    '  TIntegerEqualityComparer = class(IEqualityComparer<Integer>)' + LineEnding +
-    '    function Equals(A, B: Integer): Boolean;'                 + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Result := A = B'                                        + LineEnding +
-    '    end;'                                                     + LineEnding +
-    '    function GetHashCode(Value: Integer): Integer;'           + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Result := Value'                                        + LineEnding +
-    '    end;'                                                     + LineEnding +
-    '  end;'                                                       + LineEnding +
-    'var'                                                          + LineEnding +
-    '  C: IEqualityComparer<Integer>;'                             + LineEnding +
-    '  OK: Boolean;'                                               + LineEnding +
-    'begin'                                                        + LineEnding +
-    '  C  := TIntegerEqualityComparer.Create;'                     + LineEnding +
-    '  OK := C.Equals(1, 1)'                                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IEqualityComparer<T> = interface
+            function Equals(A, B: T): Boolean;
+            function GetHashCode(Value: T): Integer;
+          end;
+          TIntegerEqualityComparer = class(IEqualityComparer<Integer>)
+            function Equals(A, B: Integer): Boolean;
+            begin
+              Result := A = B
+            end;
+            function GetHashCode(Value: Integer): Integer;
+            begin
+              Result := Value
+            end;
+          end;
+        var
+          C: IEqualityComparer<Integer>;
+          OK: Boolean;
+        begin
+          C  := TIntegerEqualityComparer.Create;
+          OK := C.Equals(1, 1)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                              }

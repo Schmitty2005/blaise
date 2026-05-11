@@ -16,7 +16,7 @@ unit cp.test.stringops;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -215,66 +215,82 @@ end;
 
 const
   SrcLength =
-    'program P;'            + LineEnding +
-    'var s: string;'        + LineEnding +
-    'var n: Integer;'       + LineEnding +
-    'begin'                 + LineEnding +
-    '  n := Length(s)'      + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s: string;
+        var n: Integer;
+        begin
+          n := Length(s)
+        end.
+        ''';
 
   SrcPos =
-    'program P;'                + LineEnding +
-    'var s, sub: string;'       + LineEnding +
-    'var n: Integer;'           + LineEnding +
-    'begin'                     + LineEnding +
-    '  n := Pos(sub, s)'        + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s, sub: string;
+        var n: Integer;
+        begin
+          n := Pos(sub, s)
+        end.
+        ''';
 
   SrcCopy =
-    'program P;'                          + LineEnding +
-    'var s, t: string;'                   + LineEnding +
-    'var i, n: Integer;'                  + LineEnding +
-    'begin'                               + LineEnding +
-    '  t := Copy(s, i, n)'               + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s, t: string;
+        var i, n: Integer;
+        begin
+          t := Copy(s, i, n)
+        end.
+        ''';
 
   SrcUpperCase =
-    'program P;'                + LineEnding +
-    'var s, t: string;'         + LineEnding +
-    'begin'                     + LineEnding +
-    '  t := UpperCase(s)'       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s, t: string;
+        begin
+          t := UpperCase(s)
+        end.
+        ''';
 
   SrcLowerCase =
-    'program P;'                + LineEnding +
-    'var s, t: string;'         + LineEnding +
-    'begin'                     + LineEnding +
-    '  t := LowerCase(s)'       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s, t: string;
+        begin
+          t := LowerCase(s)
+        end.
+        ''';
 
   SrcSameText =
-    'program P;'                    + LineEnding +
-    'var s, t: string;'             + LineEnding +
-    'var b: Boolean;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  b := SameText(s, t)'         + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s, t: string;
+        var b: Boolean;
+        begin
+          b := SameText(s, t)
+        end.
+        ''';
 
   SrcIntToStr =
-    'program P;'               + LineEnding +
-    'var n: Integer;'          + LineEnding +
-    'var s: string;'           + LineEnding +
-    'begin'                    + LineEnding +
-    '  s := IntToStr(n)'       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var n: Integer;
+        var s: string;
+        begin
+          s := IntToStr(n)
+        end.
+        ''';
 
   SrcStrToInt =
-    'program P;'               + LineEnding +
-    'var s: string;'           + LineEnding +
-    'var n: Integer;'          + LineEnding +
-    'begin'                    + LineEnding +
-    '  n := StrToInt(s)'       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s: string;
+        var n: Integer;
+        begin
+          n := StrToInt(s)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Length tests                                                          }
@@ -288,12 +304,14 @@ end;
 procedure TStringOpsTests.TestSemantic_Length_IntArg_Error;
 begin
   SemanticError(
-    'program P;'          + LineEnding +
-    'var n: Integer;'     + LineEnding +
-    'var r: Integer;'     + LineEnding +
-    'begin'               + LineEnding +
-    '  r := Length(n)'    + LineEnding +
-    'end.');
+    '''
+        program P;
+        var n: Integer;
+        var r: Integer;
+        begin
+          r := Length(n)
+        end.
+        ''');
 end;
 
 procedure TStringOpsTests.TestSemantic_Length_ReturnsInteger;
@@ -589,33 +607,39 @@ end;
 
 const
   SrcFormatOneInt =
-    'program P;'                          + LineEnding +
-    'var n: Integer;'                     + LineEnding +
-    'var s: string;'                      + LineEnding +
-    'begin'                               + LineEnding +
-    '  n := 42;'                          + LineEnding +
-    '  s := Format(''value=%d'', n)'      + LineEnding +
-    'end.';
+    '''
+        program P;
+        var n: Integer;
+        var s: string;
+        begin
+          n := 42;
+          s := Format('value=%d', n)
+        end.
+        ''';
 
   SrcFormatOneStr =
-    'program P;'                          + LineEnding +
-    'var t: string;'                      + LineEnding +
-    'var s: string;'                      + LineEnding +
-    'begin'                               + LineEnding +
-    '  t := ''hello'';'                   + LineEnding +
-    '  s := Format(''say %s'', t)'        + LineEnding +
-    'end.';
+    '''
+        program P;
+        var t: string;
+        var s: string;
+        begin
+          t := 'hello';
+          s := Format('say %s', t)
+        end.
+        ''';
 
   SrcFormatMixed =
-    'program P;'                              + LineEnding +
-    'var name: string;'                       + LineEnding +
-    'var age: Integer;'                       + LineEnding +
-    'var s: string;'                          + LineEnding +
-    'begin'                                   + LineEnding +
-    '  name := ''Bob'';'                      + LineEnding +
-    '  age  := 30;'                           + LineEnding +
-    '  s := Format(''%s is %d'', name, age)'  + LineEnding +
-    'end.';
+    '''
+        program P;
+        var name: string;
+        var age: Integer;
+        var s: string;
+        begin
+          name := 'Bob';
+          age  := 30;
+          s := Format('%s is %d', name, age)
+        end.
+        ''';
 
 procedure TStringOpsTests.TestSemantic_Format_OneIntArg_OK;
 begin
@@ -687,13 +711,15 @@ end;
 procedure TStringOpsTests.TestCodegen_StringSubscript_EmitsLoadub;
 const
   Src =
-    'program T;'                   + LineEnding +
-    'var S: string;'               + LineEnding +
-    'var B: Integer;'              + LineEnding +
-    'begin'                        + LineEnding +
-    '  S := ''hello'';'            + LineEnding +
-    '  B := S[0]'                  + LineEnding +
-    'end.';
+    '''
+        program T;
+        var S: string;
+        var B: Integer;
+        begin
+          S := 'hello';
+          B := S[0]
+        end.
+        ''';
 var
   IR: string;
 begin
@@ -704,12 +730,14 @@ end;
 procedure TStringOpsTests.TestCodegen_StringSubscript_CharLiteralCoerce;
 const
   Src =
-    'program T;'                   + LineEnding +
-    'var S: string;'               + LineEnding +
-    'begin'                        + LineEnding +
-    '  S := ''hello'';'            + LineEnding +
-    '  if S[0] = ''h'' then WriteLn(''yes'')' + LineEnding +
-    'end.';
+    '''
+        program T;
+        var S: string;
+        begin
+          S := 'hello';
+          if S[0] = 'h' then WriteLn('yes')
+        end.
+        ''';
 var
   IR: string;
 begin
@@ -721,12 +749,14 @@ end;
 procedure TStringOpsTests.TestSemantic_StringSubscript_NonStringError;
 const
   Src =
-    'program T;'                   + LineEnding +
-    'var N: Integer;'              + LineEnding +
-    'var B: Integer;'              + LineEnding +
-    'begin'                        + LineEnding +
-    '  B := N[0]'                  + LineEnding +
-    'end.';
+    '''
+        program T;
+        var N: Integer;
+        var B: Integer;
+        begin
+          B := N[0]
+        end.
+        ''';
 begin
   SemanticError(Src);
 end;
@@ -734,11 +764,13 @@ end;
 procedure TStringOpsTests.TestSemantic_StringSubscript_MultiByteCharError;
 const
   Src =
-    'program T;'                   + LineEnding +
-    'var S: string;'               + LineEnding +
-    'begin'                        + LineEnding +
-    '  if S[0] = ''😀'' then WriteLn(''yes'')' + LineEnding +
-    'end.';
+    '''
+        program T;
+        var S: string;
+        begin
+          if S[0] = '😀' then WriteLn('yes')
+        end.
+        ''';
 begin
   SemanticError(Src);
 end;
@@ -766,23 +798,29 @@ end;
 procedure TStringOpsTests.TestSemantic_Delete_OK;
 begin
   SemanticOK(
-    'program P; var S: string;'           + LineEnding +
-    'begin S := ''hello''; Delete(S, 2, 3) end.');
+    '''
+        program P; var S: string;
+        begin S := 'hello'; Delete(S, 2, 3) end.
+        ''');
 end;
 
 procedure TStringOpsTests.TestSemantic_Delete_NonStringError;
 begin
   SemanticError(
-    'program P; var N: Integer;'          + LineEnding +
-    'begin Delete(N, 1, 1) end.');
+    '''
+        program P; var N: Integer;
+        begin Delete(N, 1, 1) end.
+        ''');
 end;
 
 procedure TStringOpsTests.TestCodegen_Delete_CallsRTL;
 var IR: string;
 begin
   IR := GenIR(
-    'program P; var S: string;'           + LineEnding +
-    'begin S := ''hello''; Delete(S, 2, 3) end.');
+    '''
+        program P; var S: string;
+        begin S := 'hello'; Delete(S, 2, 3) end.
+        ''');
   AssertTrue('emits _StringDelete call', IRContains(IR, 'call $_StringDelete('));
   AssertTrue('addrefs result',           IRContains(IR, 'call $_StringAddRef'));
   AssertTrue('releases old value',       IRContains(IR, 'call $_StringRelease'));
@@ -791,23 +829,29 @@ end;
 procedure TStringOpsTests.TestSemantic_SetLength_OK;
 begin
   SemanticOK(
-    'program P; var S: string;'           + LineEnding +
-    'begin S := ''hello''; SetLength(S, 3) end.');
+    '''
+        program P; var S: string;
+        begin S := 'hello'; SetLength(S, 3) end.
+        ''');
 end;
 
 procedure TStringOpsTests.TestSemantic_SetLength_NonStringError;
 begin
   SemanticError(
-    'program P; var N: Integer;'          + LineEnding +
-    'begin SetLength(N, 5) end.');
+    '''
+        program P; var N: Integer;
+        begin SetLength(N, 5) end.
+        ''');
 end;
 
 procedure TStringOpsTests.TestCodegen_SetLength_CallsRTL;
 var IR: string;
 begin
   IR := GenIR(
-    'program P; var S: string;'           + LineEnding +
-    'begin S := ''hello''; SetLength(S, 3) end.');
+    '''
+        program P; var S: string;
+        begin S := 'hello'; SetLength(S, 3) end.
+        ''');
   AssertTrue('emits _StringSetLength call',
     IRContains(IR, 'call $_StringSetLength('));
 end;

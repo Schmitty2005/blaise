@@ -16,7 +16,7 @@ unit cp.test.staticarray;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -122,60 +122,72 @@ end;
 
 const
   SrcByteBuf =
-    'program SA;'                                          + LineEnding +
-    'procedure Foo;'                                       + LineEnding +
-    'var Buf: array[0..7] of Byte;'                        + LineEnding +
-    'begin'                                                + LineEnding +
-    '  Buf[0] := 42'                                       + LineEnding +
-    'end;'                                                 + LineEnding +
-    'begin end.';
+    '''
+        program SA;
+        procedure Foo;
+        var Buf: array[0..7] of Byte;
+        begin
+          Buf[0] := 42
+        end;
+        begin end.
+        ''';
 
   SrcIntArray =
-    'program SA;'                                          + LineEnding +
-    'procedure Foo;'                                       + LineEnding +
-    'var A: array[0..3] of Integer;'                       + LineEnding +
-    'begin'                                                + LineEnding +
-    '  A[2] := 99'                                         + LineEnding +
-    'end;'                                                 + LineEnding +
-    'begin end.';
+    '''
+        program SA;
+        procedure Foo;
+        var A: array[0..3] of Integer;
+        begin
+          A[2] := 99
+        end;
+        begin end.
+        ''';
 
   SrcReadBack =
-    'program SA;'                                          + LineEnding +
-    'function GetFirst: Integer;'                          + LineEnding +
-    'var A: array[0..3] of Integer;'                       + LineEnding +
-    'begin'                                                + LineEnding +
-    '  A[0] := 7;'                                        + LineEnding +
-    '  Result := A[0]'                                     + LineEnding +
-    'end;'                                                 + LineEnding +
-    'begin end.';
+    '''
+        program SA;
+        function GetFirst: Integer;
+        var A: array[0..3] of Integer;
+        begin
+          A[0] := 7;
+          Result := A[0]
+        end;
+        begin end.
+        ''';
 
   SrcNonZero =
-    'program SA;'                                          + LineEnding +
-    'procedure Foo;'                                       + LineEnding +
-    'var R: array[5..9] of Integer;'                       + LineEnding +
-    'begin'                                                + LineEnding +
-    '  R[5] := 1'                                         + LineEnding +
-    'end;'                                                 + LineEnding +
-    'begin end.';
+    '''
+        program SA;
+        procedure Foo;
+        var R: array[5..9] of Integer;
+        begin
+          R[5] := 1
+        end;
+        begin end.
+        ''';
 
   SrcAddrOf =
-    'program SA;'                                          + LineEnding +
-    'procedure Foo;'                                       + LineEnding +
-    'var Buf: array[0..7] of Byte;'                        + LineEnding +
-    '    P: ^Byte;'                                        + LineEnding +
-    'begin'                                                + LineEnding +
-    '  P := @Buf[0]'                                       + LineEnding +
-    'end;'                                                 + LineEnding +
-    'begin end.';
+    '''
+        program SA;
+        procedure Foo;
+        var Buf: array[0..7] of Byte;
+            P: ^Byte;
+        begin
+          P := @Buf[0]
+        end;
+        begin end.
+        ''';
 
   SrcLowHigh =
-    'program SA;'                                          + LineEnding +
-    'function Len: Integer;'                               + LineEnding +
-    'var A: array[3..7] of Integer;'                       + LineEnding +
-    'begin'                                                + LineEnding +
-    '  Result := High(A) - Low(A) + 1'                    + LineEnding +
-    'end;'                                                 + LineEnding +
-    'begin end.';
+    '''
+        program SA;
+        function Len: Integer;
+        var A: array[3..7] of Integer;
+        begin
+          Result := High(A) - Low(A) + 1
+        end;
+        begin end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Parser tests                                                        }

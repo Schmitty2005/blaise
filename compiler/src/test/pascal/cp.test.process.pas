@@ -21,7 +21,7 @@ unit cp.test.process;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -69,81 +69,99 @@ implementation
 
 const
   SrcProcessCreate =
-    'program P;'                    + LineEnding +
-    'var H: Pointer;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  H := ProcessCreate'          + LineEnding +
-    'end.';
+    '''
+        program P;
+        var H: Pointer;
+        begin
+          H := ProcessCreate
+        end.
+        ''';
 
   SrcProcessRunning =
-    'program P;'                    + LineEnding +
-    'var H: Pointer;'               + LineEnding +
-    '    B: Boolean;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  H := ProcessCreate;'         + LineEnding +
-    '  B := ProcessRunning(H)'      + LineEnding +
-    'end.';
+    '''
+        program P;
+        var H: Pointer;
+            B: Boolean;
+        begin
+          H := ProcessCreate;
+          B := ProcessRunning(H)
+        end.
+        ''';
 
   SrcProcessReadOutput =
-    'program P;'                    + LineEnding +
-    'var H: Pointer;'               + LineEnding +
-    '    S: string;'                + LineEnding +
-    'begin'                         + LineEnding +
-    '  H := ProcessCreate;'         + LineEnding +
-    '  S := ProcessReadOutput(H)'   + LineEnding +
-    'end.';
+    '''
+        program P;
+        var H: Pointer;
+            S: string;
+        begin
+          H := ProcessCreate;
+          S := ProcessReadOutput(H)
+        end.
+        ''';
 
   SrcProcessExitCode =
-    'program P;'                    + LineEnding +
-    'var H: Pointer;'               + LineEnding +
-    '    N: Integer;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  H := ProcessCreate;'         + LineEnding +
-    '  N := ProcessExitCode(H)'     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var H: Pointer;
+            N: Integer;
+        begin
+          H := ProcessCreate;
+          N := ProcessExitCode(H)
+        end.
+        ''';
 
   SrcProcessSetExe =
-    'program P;'                    + LineEnding +
-    'var H: Pointer;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  H := ProcessCreate;'         + LineEnding +
-    '  ProcessSetExe(H, ''echo'')'  + LineEnding +
-    'end.';
+    '''
+        program P;
+        var H: Pointer;
+        begin
+          H := ProcessCreate;
+          ProcessSetExe(H, 'echo')
+        end.
+        ''';
 
   SrcProcessAddArg =
-    'program P;'                      + LineEnding +
-    'var H: Pointer;'                 + LineEnding +
-    'begin'                           + LineEnding +
-    '  H := ProcessCreate;'           + LineEnding +
-    '  ProcessAddArg(H, ''hello'')'   + LineEnding +
-    'end.';
+    '''
+        program P;
+        var H: Pointer;
+        begin
+          H := ProcessCreate;
+          ProcessAddArg(H, 'hello')
+        end.
+        ''';
 
   SrcProcessExecute =
-    'program P;'                    + LineEnding +
-    'var H: Pointer;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  H := ProcessCreate;'         + LineEnding +
-    '  ProcessSetExe(H, ''echo'');'  + LineEnding +
-    '  ProcessExecute(H)'           + LineEnding +
-    'end.';
+    '''
+        program P;
+        var H: Pointer;
+        begin
+          H := ProcessCreate;
+          ProcessSetExe(H, 'echo');
+          ProcessExecute(H)
+        end.
+        ''';
 
   SrcProcessWaitOnExit =
-    'program P;'                    + LineEnding +
-    'var H: Pointer;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  H := ProcessCreate;'         + LineEnding +
-    '  ProcessSetExe(H, ''echo'');'  + LineEnding +
-    '  ProcessExecute(H);'          + LineEnding +
-    '  ProcessWaitOnExit(H)'        + LineEnding +
-    'end.';
+    '''
+        program P;
+        var H: Pointer;
+        begin
+          H := ProcessCreate;
+          ProcessSetExe(H, 'echo');
+          ProcessExecute(H);
+          ProcessWaitOnExit(H)
+        end.
+        ''';
 
   SrcProcessFree =
-    'program P;'                    + LineEnding +
-    'var H: Pointer;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  H := ProcessCreate;'         + LineEnding +
-    '  ProcessFree(H)'              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var H: Pointer;
+        begin
+          H := ProcessCreate;
+          ProcessFree(H)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                              }

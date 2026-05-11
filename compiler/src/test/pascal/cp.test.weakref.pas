@@ -30,7 +30,7 @@ unit cp.test.weakref;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -140,12 +140,12 @@ begin
     on E: ESemanticError do
     begin
       Raised := True;
-      Msg    := E.Message;
+      Msg    := E.FMessage;
     end;
   end;
   AssertTrue('expected ESemanticError', Raised);
   AssertTrue(
-    Format('error message %s did not contain %s', [QuotedStr(Msg), QuotedStr(AExpectedFragment)]),
+    Format('error message ''%s'' did not contain ''%s''', [Msg, AExpectedFragment]),
     Pos(LowerCase(AExpectedFragment), LowerCase(Msg)) > 0);
 end;
 
@@ -187,46 +187,54 @@ end;
 
 const
   SrcWeakOnVar =
-    'program P;'                         + LineEnding +
-    'type'                               + LineEnding +
-    '  TFoo = class'                     + LineEnding +
-    '    X: Integer;'                    + LineEnding +
-    '  end;'                             + LineEnding +
-    'var'                                + LineEnding +
-    '  [Weak] F: TFoo;'                  + LineEnding +
-    'begin'                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var
+          [Weak] F: TFoo;
+        begin
+        end.
+        ''';
 
   SrcWeakOnField =
-    'program P;'                         + LineEnding +
-    'type'                               + LineEnding +
-    '  TParent = class'                  + LineEnding +
-    '  end;'                             + LineEnding +
-    '  TChild = class'                   + LineEnding +
-    '    [Weak] Parent: TParent;'        + LineEnding +
-    '  end;'                             + LineEnding +
-    'begin'                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TParent = class
+          end;
+          TChild = class
+            [Weak] Parent: TParent;
+          end;
+        begin
+        end.
+        ''';
 
   SrcUnknownAttr =
-    'program P;'                         + LineEnding +
-    'type'                               + LineEnding +
-    '  TFoo = class'                     + LineEnding +
-    '  end;'                             + LineEnding +
-    'var'                                + LineEnding +
-    '  [SomeUnknown] F: TFoo;'           + LineEnding +
-    'begin'                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+          end;
+        var
+          [SomeUnknown] F: TFoo;
+        begin
+        end.
+        ''';
 
   SrcMultiAttr =
-    'program P;'                         + LineEnding +
-    'type'                               + LineEnding +
-    '  TFoo = class'                     + LineEnding +
-    '  end;'                             + LineEnding +
-    'var'                                + LineEnding +
-    '  [Weak][SomeOther] F: TFoo;'       + LineEnding +
-    'begin'                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+          end;
+        var
+          [Weak][SomeOther] F: TFoo;
+        begin
+        end.
+        ''';
 
 procedure TWeakRefTests.TestParse_WeakAttribute_OnVarDecl;
 var
@@ -313,49 +321,59 @@ end;
 
 const
   SrcSemWeakClassVar =
-    'program P;'                         + LineEnding +
-    'type'                               + LineEnding +
-    '  TFoo = class'                     + LineEnding +
-    '  end;'                             + LineEnding +
-    'var'                                + LineEnding +
-    '  [Weak] F: TFoo;'                  + LineEnding +
-    'begin'                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+          end;
+        var
+          [Weak] F: TFoo;
+        begin
+        end.
+        ''';
 
   SrcSemWeakInterfaceVar =
-    'program P;'                         + LineEnding +
-    'type'                               + LineEnding +
-    '  IFoo = interface'                 + LineEnding +
-    '    procedure DoIt;'                + LineEnding +
-    '  end;'                             + LineEnding +
-    'var'                                + LineEnding +
-    '  [Weak] F: IFoo;'                  + LineEnding +
-    'begin'                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IFoo = interface
+            procedure DoIt;
+          end;
+        var
+          [Weak] F: IFoo;
+        begin
+        end.
+        ''';
 
   SrcSemWeakInt =
-    'program P;'                         + LineEnding +
-    'var'                                + LineEnding +
-    '  [Weak] N: Integer;'               + LineEnding +
-    'begin'                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          [Weak] N: Integer;
+        begin
+        end.
+        ''';
 
   SrcSemWeakString =
-    'program P;'                         + LineEnding +
-    'var'                                + LineEnding +
-    '  [Weak] S: string;'                + LineEnding +
-    'begin'                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          [Weak] S: string;
+        begin
+        end.
+        ''';
 
   SrcSemWeakSuffix =
-    'program P;'                         + LineEnding +
-    'type'                               + LineEnding +
-    '  TFoo = class'                     + LineEnding +
-    '  end;'                             + LineEnding +
-    'var'                                + LineEnding +
-    '  [WeakAttribute] F: TFoo;'         + LineEnding +
-    'begin'                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+          end;
+        var
+          [WeakAttribute] F: TFoo;
+        begin
+        end.
+        ''';
 
 procedure TWeakRefTests.TestSemantic_Weak_OnClassVar_OK;
 var
@@ -417,17 +435,19 @@ end;
 
 const
   SrcCodegenWeakAssign =
-    'program P;'                         + LineEnding +
-    'type'                               + LineEnding +
-    '  TFoo = class'                     + LineEnding +
-    '  end;'                             + LineEnding +
-    'var'                                + LineEnding +
-    '  Owner:       TFoo;'               + LineEnding +
-    '  [Weak] Peek: TFoo;'               + LineEnding +
-    'begin'                              + LineEnding +
-    '  Owner := TFoo.Create;'            + LineEnding +
-    '  Peek  := Owner'                   + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+          end;
+        var
+          Owner:       TFoo;
+          [Weak] Peek: TFoo;
+        begin
+          Owner := TFoo.Create;
+          Peek  := Owner
+        end.
+        ''';
 
 procedure TWeakRefTests.TestCodegen_WeakVarAssign_UsesWeakAssign;
 var

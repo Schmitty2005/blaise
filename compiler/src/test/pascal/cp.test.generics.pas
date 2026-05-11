@@ -17,7 +17,7 @@ unit cp.test.generics;
 interface
 
 uses
-  Classes, SysUtils, StrUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -72,86 +72,100 @@ implementation
 
 const
   SrcGenericOneParam =
-    'program P;'                        + LineEnding +
-    'type'                              + LineEnding +
-    '  TBox<T> = class'                 + LineEnding +
-    '    FValue: T;'                    + LineEnding +
-    '  end;'                            + LineEnding +
-    'begin'                             + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox<T> = class
+            FValue: T;
+          end;
+        begin
+        end.
+        ''';
 
   SrcGenericTwoParams =
-    'program P;'                        + LineEnding +
-    'type'                              + LineEnding +
-    '  TPair<K, V> = class'             + LineEnding +
-    '    FKey: K;'                      + LineEnding +
-    '    FVal: V;'                      + LineEnding +
-    '  end;'                            + LineEnding +
-    'begin'                             + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TPair<K, V> = class
+            FKey: K;
+            FVal: V;
+          end;
+        begin
+        end.
+        ''';
 
   SrcGenericWithMethod =
-    'program P;'                        + LineEnding +
-    'type'                              + LineEnding +
-    '  TBox<T> = class'                 + LineEnding +
-    '    FValue: T;'                    + LineEnding +
-    '    function GetValue: T;'         + LineEnding +
-    '    procedure SetValue(AVal: T);'  + LineEnding +
-    '  end;'                            + LineEnding +
-    'begin'                             + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox<T> = class
+            FValue: T;
+            function GetValue: T;
+            procedure SetValue(AVal: T);
+          end;
+        begin
+        end.
+        ''';
 
   SrcGenericVarInteger =
-    'program P;'                        + LineEnding +
-    'type'                              + LineEnding +
-    '  TBox<T> = class'                 + LineEnding +
-    '    FValue: T;'                    + LineEnding +
-    '  end;'                            + LineEnding +
-    'var B: TBox<Integer>;'             + LineEnding +
-    'begin'                             + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox<T> = class
+            FValue: T;
+          end;
+        var B: TBox<Integer>;
+        begin
+        end.
+        ''';
 
   SrcGenericVarString =
-    'program P;'                        + LineEnding +
-    'type'                              + LineEnding +
-    '  TBox<T> = class'                 + LineEnding +
-    '    FValue: T;'                    + LineEnding +
-    '  end;'                            + LineEnding +
-    'var S: TBox<string>;'              + LineEnding +
-    'begin'                             + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox<T> = class
+            FValue: T;
+          end;
+        var S: TBox<string>;
+        begin
+        end.
+        ''';
 
   SrcGenericTwoParamVar =
-    'program P;'                        + LineEnding +
-    'type'                              + LineEnding +
-    '  TPair<K, V> = class'             + LineEnding +
-    '    FKey: K;'                      + LineEnding +
-    '    FVal: V;'                      + LineEnding +
-    '  end;'                            + LineEnding +
-    'var P: TPair<string, Integer>;'    + LineEnding +
-    'begin'                             + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TPair<K, V> = class
+            FKey: K;
+            FVal: V;
+          end;
+        var P: TPair<string, Integer>;
+        begin
+        end.
+        ''';
 
   SrcGenericUsage =
-    'program P;'                                     + LineEnding +
-    'type'                                           + LineEnding +
-    '  TBox<T> = class'                              + LineEnding +
-    '    FValue: T;'                                 + LineEnding +
-    '    function GetValue: T;'                      + LineEnding +
-    '    begin'                                      + LineEnding +
-    '      Result := Self.FValue'                    + LineEnding +
-    '    end;'                                       + LineEnding +
-    '    procedure SetValue(AVal: T);'               + LineEnding +
-    '    begin'                                      + LineEnding +
-    '      Self.FValue := AVal'                      + LineEnding +
-    '    end;'                                       + LineEnding +
-    '  end;'                                         + LineEnding +
-    'var B: TBox<Integer>;'                          + LineEnding +
-    'begin'                                          + LineEnding +
-    '  B := TBox<Integer>.Create;'                   + LineEnding +
-    '  B.SetValue(42);'                              + LineEnding +
-    '  WriteLn(B.GetValue())'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox<T> = class
+            FValue: T;
+            function GetValue: T;
+            begin
+              Result := Self.FValue
+            end;
+            procedure SetValue(AVal: T);
+            begin
+              Self.FValue := AVal
+            end;
+          end;
+        var B: TBox<Integer>;
+        begin
+          B := TBox<Integer>.Create;
+          B.SetValue(42);
+          WriteLn(B.GetValue())
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                             }

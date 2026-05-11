@@ -23,7 +23,7 @@ unit cp.test.genericforin;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -66,122 +66,130 @@ implementation
 const
   { Minimal generic enumerator with a property backed by a getter. }
   SrcGenericEnumerator =
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TGenEnum<T> = class'                         + LineEnding +
-    '    FData:  T;'                                + LineEnding +
-    '    FDone:  Boolean;'                          + LineEnding +
-    '    function MoveNext: Boolean;'               + LineEnding +
-    '    begin'                                     + LineEnding +
-    '      Result := not Self.FDone;'               + LineEnding +
-    '      Self.FDone := True'                      + LineEnding +
-    '    end;'                                      + LineEnding +
-    '    function GetCurrent: T;'                   + LineEnding +
-    '    begin'                                     + LineEnding +
-    '      Result := Self.FData'                    + LineEnding +
-    '    end;'                                      + LineEnding +
-    '    property Current: T read GetCurrent;'      + LineEnding +
-    '  end;'                                        + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TGenEnum<T> = class
+            FData:  T;
+            FDone:  Boolean;
+            function MoveNext: Boolean;
+            begin
+              Result := not Self.FDone;
+              Self.FDone := True
+            end;
+            function GetCurrent: T;
+            begin
+              Result := Self.FData
+            end;
+            property Current: T read GetCurrent;
+          end;
+        begin end.
+        ''';
 
   { A minimal generic collection that exposes GetEnumerator. }
   SrcGenericCollection =
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TGenEnum<T> = class'                         + LineEnding +
-    '    FData:  T;'                                + LineEnding +
-    '    FDone:  Boolean;'                          + LineEnding +
-    '    function MoveNext: Boolean;'               + LineEnding +
-    '    begin'                                     + LineEnding +
-    '      Result := not Self.FDone;'               + LineEnding +
-    '      Self.FDone := True'                      + LineEnding +
-    '    end;'                                      + LineEnding +
-    '    function GetCurrent: T;'                   + LineEnding +
-    '    begin'                                     + LineEnding +
-    '      Result := Self.FData'                    + LineEnding +
-    '    end;'                                      + LineEnding +
-    '    property Current: T read GetCurrent;'      + LineEnding +
-    '  end;'                                        + LineEnding +
-    '  TColl<T> = class'                            + LineEnding +
-    '    FItem: T;'                                 + LineEnding +
-    '    function GetEnumerator: TGenEnum<T>;'      + LineEnding +
-    '    begin'                                     + LineEnding +
-    '      Result := TGenEnum<T>.Create'            + LineEnding +
-    '    end;'                                      + LineEnding +
-    '  end;'                                        + LineEnding +
-    'var'                                           + LineEnding +
-    '  C: TColl<Integer>;'                          + LineEnding +
-    '  X: Integer;'                                 + LineEnding +
-    'begin'                                         + LineEnding +
-    '  C := TColl<Integer>.Create;'                 + LineEnding +
-    '  for X in C do'                              + LineEnding +
-    '    WriteLn(X)'                                + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TGenEnum<T> = class
+            FData:  T;
+            FDone:  Boolean;
+            function MoveNext: Boolean;
+            begin
+              Result := not Self.FDone;
+              Self.FDone := True
+            end;
+            function GetCurrent: T;
+            begin
+              Result := Self.FData
+            end;
+            property Current: T read GetCurrent;
+          end;
+          TColl<T> = class
+            FItem: T;
+            function GetEnumerator: TGenEnum<T>;
+            begin
+              Result := TGenEnum<T>.Create
+            end;
+          end;
+        var
+          C: TColl<Integer>;
+          X: Integer;
+        begin
+          C := TColl<Integer>.Create;
+          for X in C do
+            WriteLn(X)
+        end.
+        ''';
 
   { Source that requires TList<T> and TListEnumerator<T> from the RTL.
     Uses a minimal inline definition so the test is self-contained. }
   SrcTListEnumeratorDecl =
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TListEnumerator<T> = class'                  + LineEnding +
-    '    FList:  ^T;'                               + LineEnding +
-    '    FIndex: Integer;'                          + LineEnding +
-    '    FCount: Integer;'                          + LineEnding +
-    '    function MoveNext: Boolean;'               + LineEnding +
-    '    begin'                                     + LineEnding +
-    '      Self.FIndex := Self.FIndex + 1;'         + LineEnding +
-    '      Result := Self.FIndex < Self.FCount'     + LineEnding +
-    '    end;'                                      + LineEnding +
-    '    function GetCurrent: T;'                   + LineEnding +
-    '    begin'                                     + LineEnding +
-    '      Result := (Self.FList + Self.FIndex)^'   + LineEnding +
-    '    end;'                                      + LineEnding +
-    '    property Current: T read GetCurrent;'      + LineEnding +
-    '  end;'                                        + LineEnding +
-    '  TMyList<T> = class'                          + LineEnding +
-    '    FData:  ^T;'                               + LineEnding +
-    '    FCount: Integer;'                          + LineEnding +
-    '    function GetEnumerator: TListEnumerator<T>;' + LineEnding +
-    '    begin'                                     + LineEnding +
-    '      Result := TListEnumerator<T>.Create'     + LineEnding +
-    '    end;'                                      + LineEnding +
-    '  end;'                                        + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TListEnumerator<T> = class
+            FList:  ^T;
+            FIndex: Integer;
+            FCount: Integer;
+            function MoveNext: Boolean;
+            begin
+              Self.FIndex := Self.FIndex + 1;
+              Result := Self.FIndex < Self.FCount
+            end;
+            function GetCurrent: T;
+            begin
+              Result := (Self.FList + Self.FIndex)^
+            end;
+            property Current: T read GetCurrent;
+          end;
+          TMyList<T> = class
+            FData:  ^T;
+            FCount: Integer;
+            function GetEnumerator: TListEnumerator<T>;
+            begin
+              Result := TListEnumerator<T>.Create
+            end;
+          end;
+        begin end.
+        ''';
 
   SrcForInGenericList =
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TListEnumerator<T> = class'                  + LineEnding +
-    '    FList:  ^T;'                               + LineEnding +
-    '    FIndex: Integer;'                          + LineEnding +
-    '    FCount: Integer;'                          + LineEnding +
-    '    function MoveNext: Boolean;'               + LineEnding +
-    '    begin'                                     + LineEnding +
-    '      Self.FIndex := Self.FIndex + 1;'         + LineEnding +
-    '      Result := Self.FIndex < Self.FCount'     + LineEnding +
-    '    end;'                                      + LineEnding +
-    '    function GetCurrent: T;'                   + LineEnding +
-    '    begin'                                     + LineEnding +
-    '      Result := (Self.FList + Self.FIndex)^'   + LineEnding +
-    '    end;'                                      + LineEnding +
-    '    property Current: T read GetCurrent;'      + LineEnding +
-    '  end;'                                        + LineEnding +
-    '  TMyList<T> = class'                          + LineEnding +
-    '    FData:  ^T;'                               + LineEnding +
-    '    FCount: Integer;'                          + LineEnding +
-    '    function GetEnumerator: TListEnumerator<T>;' + LineEnding +
-    '    begin'                                     + LineEnding +
-    '      Result := TListEnumerator<T>.Create'     + LineEnding +
-    '    end;'                                      + LineEnding +
-    '  end;'                                        + LineEnding +
-    'var'                                           + LineEnding +
-    '  L: TMyList<Integer>;'                        + LineEnding +
-    '  X: Integer;'                                 + LineEnding +
-    'begin'                                         + LineEnding +
-    '  L := TMyList<Integer>.Create;'               + LineEnding +
-    '  for X in L do'                              + LineEnding +
-    '    WriteLn(X)'                                + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TListEnumerator<T> = class
+            FList:  ^T;
+            FIndex: Integer;
+            FCount: Integer;
+            function MoveNext: Boolean;
+            begin
+              Self.FIndex := Self.FIndex + 1;
+              Result := Self.FIndex < Self.FCount
+            end;
+            function GetCurrent: T;
+            begin
+              Result := (Self.FList + Self.FIndex)^
+            end;
+            property Current: T read GetCurrent;
+          end;
+          TMyList<T> = class
+            FData:  ^T;
+            FCount: Integer;
+            function GetEnumerator: TListEnumerator<T>;
+            begin
+              Result := TListEnumerator<T>.Create
+            end;
+          end;
+        var
+          L: TMyList<Integer>;
+          X: Integer;
+        begin
+          L := TMyList<Integer>.Create;
+          for X in L do
+            WriteLn(X)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                             }

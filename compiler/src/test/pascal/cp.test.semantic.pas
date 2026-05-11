@@ -13,7 +13,7 @@ unit cp.test.semantic;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic;
 
 type
@@ -362,22 +362,26 @@ end;
 procedure TSemanticTests.TestProgram_HelloWorld_OK;
 begin
   Analyse(
-    'program Hello;'            + LineEnding +
-    'begin'                     + LineEnding +
-    '  WriteLn(''Hello!'');'    + LineEnding +
-    'end.'
+    '''
+        program Hello;
+        begin
+          WriteLn('Hello!');
+        end.
+        '''
   ).Free;
 end;
 
 procedure TSemanticTests.TestProgram_ArithmeticAndPrint_OK;
 begin
   Analyse(
-    'program Arith;'                        + LineEnding +
-    'var n: Integer;'                       + LineEnding +
-    'begin'                                 + LineEnding +
-    '  n := 3 * 4 + 2;'                    + LineEnding +
-    '  WriteLn(n);'                         + LineEnding +
-    'end.'
+    '''
+        program Arith;
+        var n: Integer;
+        begin
+          n := 3 * 4 + 2;
+          WriteLn(n);
+        end.
+        '''
   ).Free;
 end;
 

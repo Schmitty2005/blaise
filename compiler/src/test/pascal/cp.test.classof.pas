@@ -15,7 +15,7 @@ unit cp.test.classof;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -116,11 +116,13 @@ end;
 procedure TClassOfTests.TestParse_ClassOf_AsAlias;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase = class(TObject) end;'          + LineEnding +
-    '  TBaseClass = class of TBase;'         + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TBase = class(TObject) end;
+          TBaseClass = class of TBase;
+        begin end.
+        ''';
 var Prog: TProgram;
 begin
   Prog := ParseSrc(Src);
@@ -134,11 +136,13 @@ end;
 procedure TClassOfTests.TestParse_ClassOf_VarDecl;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase = class(TObject) end;'          + LineEnding +
-    'var C: class of TBase;'                 + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TBase = class(TObject) end;
+        var C: class of TBase;
+        begin end.
+        ''';
 var Prog: TProgram;
 begin
   Prog := ParseSrc(Src);
@@ -152,13 +156,15 @@ end;
 procedure TClassOfTests.TestParse_ClassOf_FieldType;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase = class(TObject) end;'          + LineEnding +
-    '  TWrap = class(TObject)'               + LineEnding +
-    '    Cls: class of TBase;'               + LineEnding +
-    '  end;'                                 + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TBase = class(TObject) end;
+          TWrap = class(TObject)
+            Cls: class of TBase;
+          end;
+        begin end.
+        ''';
 var Prog: TProgram;
 begin
   Prog := ParseSrc(Src);
@@ -176,11 +182,13 @@ end;
 procedure TClassOfTests.TestSemantic_ClassOf_TypeIsMetaClass;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase = class(TObject) end;'          + LineEnding +
-    'var C: class of TBase;'                 + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TBase = class(TObject) end;
+        var C: class of TBase;
+        begin end.
+        ''';
 var
   Prog: TProgram;
   VD:   TVarDecl;
@@ -198,11 +206,13 @@ end;
 procedure TClassOfTests.TestSemantic_ClassOf_BaseClass;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase = class(TObject) end;'          + LineEnding +
-    'var C: class of TBase;'                 + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TBase = class(TObject) end;
+        var C: class of TBase;
+        begin end.
+        ''';
 var
   Prog: TProgram;
   VD:   TVarDecl;
@@ -222,13 +232,15 @@ end;
 procedure TClassOfTests.TestSemantic_AssignClassIdent_ToMetaClass;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase = class(TObject) end;'          + LineEnding +
-    'var C: class of TBase;'                 + LineEnding +
-    'begin'                                  + LineEnding +
-    '  C := TBase'                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase = class(TObject) end;
+        var C: class of TBase;
+        begin
+          C := TBase
+        end.
+        ''';
 var Prog: TProgram;
 begin
   { Should analyse without error. }
@@ -243,14 +255,16 @@ end;
 procedure TClassOfTests.TestSemantic_AssignDescendant_ToBaseMetaClass;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase    = class(TObject) end;'       + LineEnding +
-    '  TDerived = class(TBase) end;'         + LineEnding +
-    'var C: class of TBase;'                 + LineEnding +
-    'begin'                                  + LineEnding +
-    '  C := TDerived'                        + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase    = class(TObject) end;
+          TDerived = class(TBase) end;
+        var C: class of TBase;
+        begin
+          C := TDerived
+        end.
+        ''';
 var Prog: TProgram;
 begin
   Prog := AnalyseSrc(Src);
@@ -264,14 +278,16 @@ end;
 procedure TClassOfTests.TestSemantic_RejectUnrelatedClass_ToMetaClass;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase  = class(TObject) end;'         + LineEnding +
-    '  TOther = class(TObject) end;'         + LineEnding +
-    'var C: class of TBase;'                 + LineEnding +
-    'begin'                                  + LineEnding +
-    '  C := TOther'                          + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase  = class(TObject) end;
+          TOther = class(TObject) end;
+        var C: class of TBase;
+        begin
+          C := TOther
+        end.
+        ''';
 begin
   AnalyseExpectError(Src);
 end;
@@ -279,10 +295,12 @@ end;
 procedure TClassOfTests.TestSemantic_RejectClassOf_Nonclass;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TInt = class of Integer;'             + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TInt = class of Integer;
+        begin end.
+        ''';
 begin
   AnalyseExpectError(Src);
 end;
@@ -290,14 +308,16 @@ end;
 procedure TClassOfTests.TestSemantic_MetaClass_AcceptedAsPointerArg;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase = class(TObject) end;'          + LineEnding +
-    'procedure Take(const P: Pointer);'      + LineEnding +
-    'begin end;'                             + LineEnding +
-    'begin'                                  + LineEnding +
-    '  Take(TBase)'                          + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase = class(TObject) end;
+        procedure Take(const P: Pointer);
+        begin end;
+        begin
+          Take(TBase)
+        end.
+        ''';
 var Prog: TProgram;
 begin
   { A metaclass-typed value passes through an untyped Pointer arg. }
@@ -312,14 +332,16 @@ end;
 procedure TClassOfTests.TestSemantic_CompareTwoMetaClassValues;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase    = class(TObject) end;'       + LineEnding +
-    '  TDerived = class(TBase) end;'         + LineEnding +
-    'var B: Boolean;'                        + LineEnding +
-    'begin'                                  + LineEnding +
-    '  B := TBase = TDerived'                + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase    = class(TObject) end;
+          TDerived = class(TBase) end;
+        var B: Boolean;
+        begin
+          B := TBase = TDerived
+        end.
+        ''';
 var Prog: TProgram;
 begin
   Prog := AnalyseSrc(Src);
@@ -337,13 +359,15 @@ end;
 procedure TClassOfTests.TestCodegen_ClassIdent_EmitsTypeinfo;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase = class(TObject) end;'          + LineEnding +
-    'var C: class of TBase;'                 + LineEnding +
-    'begin'                                  + LineEnding +
-    '  C := TBase'                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase = class(TObject) end;
+        var C: class of TBase;
+        begin
+          C := TBase
+        end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -354,13 +378,15 @@ end;
 procedure TClassOfTests.TestCodegen_MetaClassVar_StorelTypeinfo;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase = class(TObject) end;'          + LineEnding +
-    'var C: class of TBase;'                 + LineEnding +
-    'begin'                                  + LineEnding +
-    '  C := TBase'                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase = class(TObject) end;
+        var C: class of TBase;
+        begin
+          C := TBase
+        end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -374,13 +400,15 @@ end;
 procedure TClassOfTests.TestCodegen_MetaClassEquality_UsesCEQL;
 const
   Src =
-    'program P;'                             + LineEnding +
-    'type'                                   + LineEnding +
-    '  TBase = class(TObject) end;'          + LineEnding +
-    'var B: Boolean;'                        + LineEnding +
-    'begin'                                  + LineEnding +
-    '  B := TBase = TBase'                   + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase = class(TObject) end;
+        var B: Boolean;
+        begin
+          B := TBase = TBase
+        end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -395,31 +423,35 @@ end;
 procedure TClassOfTests.TestSemantic_ClassCreate_RejectsNonMetaclassFirstArg;
 begin
   AnalyseExpectError(
-    'program P;'                                       + LineEnding +
-    'type TFoo = class(TObject) end;'                  + LineEnding +
-    'var F: TFoo;'                                     + LineEnding +
-    'begin'                                            + LineEnding +
-    '  F := ClassCreate(F)'                            + LineEnding +
-    'end.'
+    '''
+        program P;
+        type TFoo = class(TObject) end;
+        var F: TFoo;
+        begin
+          F := ClassCreate(F)
+        end.
+        '''
   );
 end;
 
 procedure TClassOfTests.TestCodegen_ClassCreate_EmitsAllocAndCtorCall;
 const
   Src =
-    'program P;'                                       + LineEnding +
-    'type'                                             + LineEnding +
-    '  TFoo = class(TObject)'                          + LineEnding +
-    '    Value: Integer;'                              + LineEnding +
-    '    constructor Create(N: Integer);'              + LineEnding +
-    '  end;'                                           + LineEnding +
-    'constructor TFoo.Create(N: Integer);'             + LineEnding +
-    'begin Self.Value := N end;'                       + LineEnding +
-    'var C: class of TFoo; F: TFoo;'                   + LineEnding +
-    'begin'                                            + LineEnding +
-    '  C := TFoo;'                                     + LineEnding +
-    '  F := ClassCreate(C, 7)'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+            Value: Integer;
+            constructor Create(N: Integer);
+          end;
+        constructor TFoo.Create(N: Integer);
+        begin Self.Value := N end;
+        var C: class of TFoo; F: TFoo;
+        begin
+          C := TFoo;
+          F := ClassCreate(C, 7)
+        end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -431,13 +463,15 @@ end;
 procedure TClassOfTests.TestCodegen_ClassCreate_NoCtor_OnlyAllocCalled;
 const
   Src =
-    'program P;'                                       + LineEnding +
-    'type TFoo = class(TObject) end;'                  + LineEnding +
-    'var C: class of TFoo; F: TFoo;'                   + LineEnding +
-    'begin'                                            + LineEnding +
-    '  C := TFoo;'                                     + LineEnding +
-    '  F := ClassCreate(C)'                            + LineEnding +
-    'end.';
+    '''
+        program P;
+        type TFoo = class(TObject) end;
+        var C: class of TFoo; F: TFoo;
+        begin
+          C := TFoo;
+          F := ClassCreate(C)
+        end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);

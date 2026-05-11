@@ -15,7 +15,7 @@ unit cp.test.repeatloop;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -122,37 +122,43 @@ end;
 
 const
   SrcRepeatSingle =
-    'program P;'           + LineEnding +
-    'var I: Integer;'      + LineEnding +
-    'begin'                + LineEnding +
-    '  I := 0;'            + LineEnding +
-    '  repeat'             + LineEnding +
-    '    I := I + 1'       + LineEnding +
-    '  until I >= 5'       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var I: Integer;
+        begin
+          I := 0;
+          repeat
+            I := I + 1
+          until I >= 5
+        end.
+        ''';
 
   SrcRepeatMulti =
-    'program P;'           + LineEnding +
-    'var I: Integer;'      + LineEnding +
-    'var S: Integer;'      + LineEnding +
-    'begin'                + LineEnding +
-    '  I := 0;'            + LineEnding +
-    '  S := 0;'            + LineEnding +
-    '  repeat'             + LineEnding +
-    '    I := I + 1;'      + LineEnding +
-    '    S := S + I'       + LineEnding +
-    '  until I >= 3'       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var I: Integer;
+        var S: Integer;
+        begin
+          I := 0;
+          S := 0;
+          repeat
+            I := I + 1;
+            S := S + I
+          until I >= 3
+        end.
+        ''';
 
   SrcRepeatBadCond =
-    'program P;'           + LineEnding +
-    'var I: Integer;'      + LineEnding +
-    'begin'                + LineEnding +
-    '  I := 0;'            + LineEnding +
-    '  repeat'             + LineEnding +
-    '    I := I + 1'       + LineEnding +
-    '  until I'            + LineEnding +
-    'end.';
+    '''
+        program P;
+        var I: Integer;
+        begin
+          I := 0;
+          repeat
+            I := I + 1
+          until I
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Lexer tests                                                          }

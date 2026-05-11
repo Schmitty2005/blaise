@@ -16,7 +16,7 @@ unit cp.test.genericintfs;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -60,78 +60,88 @@ implementation
 
 const
   SrcGenericIntfOneParam =
-    'program P;'                                              + LineEnding +
-    'type'                                                    + LineEnding +
-    '  IComparer<T> = interface'                              + LineEnding +
-    '    function Compare(A, B: T): Integer;'                 + LineEnding +
-    '  end;'                                                  + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          IComparer<T> = interface
+            function Compare(A, B: T): Integer;
+          end;
+        begin end.
+        ''';
 
   SrcGenericIntfTwoParams =
-    'program P;'                                              + LineEnding +
-    'type'                                                    + LineEnding +
-    '  IConverter<TIn, TOut> = interface'                     + LineEnding +
-    '    function Convert(Value: TIn): TOut;'                 + LineEnding +
-    '  end;'                                                  + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          IConverter<TIn, TOut> = interface
+            function Convert(Value: TIn): TOut;
+          end;
+        begin end.
+        ''';
 
   SrcEqualityComparer =
-    'program P;'                                              + LineEnding +
-    'type'                                                    + LineEnding +
-    '  IEqualityComparer<T> = interface'                      + LineEnding +
-    '    function Equals(A, B: T): Boolean;'                  + LineEnding +
-    '    function GetHashCode(Value: T): Integer;'            + LineEnding +
-    '  end;'                                                  + LineEnding +
-    'var C: IEqualityComparer<Integer>;'                      + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          IEqualityComparer<T> = interface
+            function Equals(A, B: T): Boolean;
+            function GetHashCode(Value: T): Integer;
+          end;
+        var C: IEqualityComparer<Integer>;
+        begin end.
+        ''';
 
   SrcClassImplementsGenericIntf =
-    'program P;'                                              + LineEnding +
-    'type'                                                    + LineEnding +
-    '  IEqualityComparer<T> = interface'                      + LineEnding +
-    '    function Equals(A, B: T): Boolean;'                  + LineEnding +
-    '    function GetHashCode(Value: T): Integer;'            + LineEnding +
-    '  end;'                                                  + LineEnding +
-    '  TIntegerComparer = class(IEqualityComparer<Integer>)'  + LineEnding +
-    '    function Equals(A, B: Integer): Boolean;'            + LineEnding +
-    '    begin'                                               + LineEnding +
-    '      Result := A = B'                                   + LineEnding +
-    '    end;'                                                + LineEnding +
-    '    function GetHashCode(Value: Integer): Integer;'      + LineEnding +
-    '    begin'                                               + LineEnding +
-    '      Result := Value'                                   + LineEnding +
-    '    end;'                                                + LineEnding +
-    '  end;'                                                  + LineEnding +
-    'var'                                                     + LineEnding +
-    '  C: IEqualityComparer<Integer>;'                        + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  C := TIntegerComparer.Create'                          + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IEqualityComparer<T> = interface
+            function Equals(A, B: T): Boolean;
+            function GetHashCode(Value: T): Integer;
+          end;
+          TIntegerComparer = class(IEqualityComparer<Integer>)
+            function Equals(A, B: Integer): Boolean;
+            begin
+              Result := A = B
+            end;
+            function GetHashCode(Value: Integer): Integer;
+            begin
+              Result := Value
+            end;
+          end;
+        var
+          C: IEqualityComparer<Integer>;
+        begin
+          C := TIntegerComparer.Create
+        end.
+        ''';
 
   SrcGenericIntfDispatch =
-    'program P;'                                              + LineEnding +
-    'type'                                                    + LineEnding +
-    '  IEqualityComparer<T> = interface'                      + LineEnding +
-    '    function Equals(A, B: T): Boolean;'                  + LineEnding +
-    '    function GetHashCode(Value: T): Integer;'            + LineEnding +
-    '  end;'                                                  + LineEnding +
-    '  TIntegerComparer = class(IEqualityComparer<Integer>)'  + LineEnding +
-    '    function Equals(A, B: Integer): Boolean;'            + LineEnding +
-    '    begin'                                               + LineEnding +
-    '      Result := A = B'                                   + LineEnding +
-    '    end;'                                                + LineEnding +
-    '    function GetHashCode(Value: Integer): Integer;'      + LineEnding +
-    '    begin'                                               + LineEnding +
-    '      Result := Value'                                   + LineEnding +
-    '    end;'                                                + LineEnding +
-    '  end;'                                                  + LineEnding +
-    'var'                                                     + LineEnding +
-    '  C: IEqualityComparer<Integer>;'                        + LineEnding +
-    '  OK: Boolean;'                                          + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  C  := TIntegerComparer.Create;'                        + LineEnding +
-    '  OK := C.Equals(1, 1)'                                  + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IEqualityComparer<T> = interface
+            function Equals(A, B: T): Boolean;
+            function GetHashCode(Value: T): Integer;
+          end;
+          TIntegerComparer = class(IEqualityComparer<Integer>)
+            function Equals(A, B: Integer): Boolean;
+            begin
+              Result := A = B
+            end;
+            function GetHashCode(Value: Integer): Integer;
+            begin
+              Result := Value
+            end;
+          end;
+        var
+          C: IEqualityComparer<Integer>;
+          OK: Boolean;
+        begin
+          C  := TIntegerComparer.Create;
+          OK := C.Equals(1, 1)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                              }

@@ -13,7 +13,7 @@ unit cp.test.constants;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSemantic, uCodeGenQBE;
 
 type
@@ -109,21 +109,25 @@ end;
 procedure TConstTests.TestExportedConstVisibleInProgram;
 const
   UnitSrc =
-    'unit MyConsts;'               + LineEnding +
-    'interface'                    + LineEnding +
-    'const'                        + LineEnding +
-    '  dupAccept = 0;'             + LineEnding +
-    '  dupIgnore = 1;'             + LineEnding +
-    '  dupError  = 2;'             + LineEnding +
-    'implementation'               + LineEnding +
-    'end.';
+    '''
+        unit MyConsts;
+        interface
+        const
+          dupAccept = 0;
+          dupIgnore = 1;
+          dupError  = 2;
+        implementation
+        end.
+        ''';
   ProgSrc =
-    'program TestP;'               + LineEnding +
-    'uses MyConsts;'               + LineEnding +
-    'var x: Integer;'              + LineEnding +
-    'begin'                        + LineEnding +
-    '  x := dupIgnore'             + LineEnding +
-    'end.';
+    '''
+        program TestP;
+        uses MyConsts;
+        var x: Integer;
+        begin
+          x := dupIgnore
+        end.
+        ''';
 var
   U:    TUnit;
   Prog: TProgram;
@@ -159,12 +163,14 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                + LineEnding +
-    'const MaxItems = 10;'         + LineEnding +
-    'var x: Integer;'              + LineEnding +
-    'begin'                        + LineEnding +
-    '  x := MaxItems;'             + LineEnding +
-    'end.'
+    '''
+        program Test;
+        const MaxItems = 10;
+        var x: Integer;
+        begin
+          x := MaxItems;
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty for program with integer const', IR <> '');
 end;
@@ -174,12 +180,14 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                + LineEnding +
-    'const MinVal = -1;'           + LineEnding +
-    'var x: Integer;'              + LineEnding +
-    'begin'                        + LineEnding +
-    '  x := MinVal;'               + LineEnding +
-    'end.'
+    '''
+        program Test;
+        const MinVal = -1;
+        var x: Integer;
+        begin
+          x := MinVal;
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty', IR <> '');
   AssertTrue('Negative const should fold to -1', IRContains(IR, '-1'));
@@ -190,11 +198,13 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                    + LineEnding +
-    'const AppName = ''MyApp'';'       + LineEnding +
-    'begin'                            + LineEnding +
-    '  WriteLn(AppName);'              + LineEnding +
-    'end.'
+    '''
+        program Test;
+        const AppName = 'MyApp';
+        begin
+          WriteLn(AppName);
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty', IR <> '');
   AssertTrue('String const value should appear in IR', IRContains(IR, 'MyApp'));
@@ -205,14 +215,16 @@ var
   U: TUnit;
 begin
   U := ParseUnit(
-    'unit MyConsts;'               + LineEnding +
-    'interface'                    + LineEnding +
-    'const'                        + LineEnding +
-    '  dupAccept = 0;'             + LineEnding +
-    '  dupIgnore = 1;'             + LineEnding +
-    '  dupError  = 2;'             + LineEnding +
-    'implementation'               + LineEnding +
-    'end.'
+    '''
+        unit MyConsts;
+        interface
+        const
+          dupAccept = 0;
+          dupIgnore = 1;
+          dupError  = 2;
+        implementation
+        end.
+        '''
   );
   try
     AssertEquals('Interface const block should have 3 entries',
@@ -237,12 +249,14 @@ var
   U: TUnit;
 begin
   U := ParseUnit(
-    'unit MyConsts;'               + LineEnding +
-    'interface'                    + LineEnding +
-    'implementation'               + LineEnding +
-    'const'                        + LineEnding +
-    '  InternalVal = 42;'          + LineEnding +
-    'end.'
+    '''
+        unit MyConsts;
+        interface
+        implementation
+        const
+          InternalVal = 42;
+        end.
+        '''
   );
   try
     AssertEquals('Impl const block should have 1 entry',
@@ -259,17 +273,19 @@ end;
 procedure TConstTests.TestImplConstUsableInMethodBody;
 const
   UnitSrc =
-    'unit Checker;'                + LineEnding +
-    'interface'                    + LineEnding +
-    'function GetLimit: Integer;'  + LineEnding +
-    'implementation'               + LineEnding +
-    'const'                        + LineEnding +
-    '  Limit = 99;'                + LineEnding +
-    'function GetLimit: Integer;'  + LineEnding +
-    'begin'                        + LineEnding +
-    '  Result := Limit'            + LineEnding +
-    'end;'                         + LineEnding +
-    'end.';
+    '''
+        unit Checker;
+        interface
+        function GetLimit: Integer;
+        implementation
+        const
+          Limit = 99;
+        function GetLimit: Integer;
+        begin
+          Result := Limit
+        end;
+        end.
+        ''';
 var
   U:  TUnit;
   SA: TSemanticAnalyser;
@@ -291,12 +307,14 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                + LineEnding +
-    'const Limit = 5;'             + LineEnding +
-    'var x: Integer;'              + LineEnding +
-    'begin'                        + LineEnding +
-    '  x := Limit;'                + LineEnding +
-    'end.'
+    '''
+        program Test;
+        const Limit = 5;
+        var x: Integer;
+        begin
+          x := Limit;
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty', IR <> '');
   AssertTrue('Const value should appear in IR', IRContains(IR, '5'));
@@ -307,11 +325,13 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                + LineEnding +
-    'const ErrCode = 42;'          + LineEnding +
-    'begin'                        + LineEnding +
-    '  WriteLn(ErrCode);'          + LineEnding +
-    'end.'
+    '''
+        program Test;
+        const ErrCode = 42;
+        begin
+          WriteLn(ErrCode);
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty', IR <> '');
   AssertTrue('Constant value should appear in IR', IRContains(IR, '42'));
@@ -322,15 +342,17 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                + LineEnding +
-    'const'                        + LineEnding +
-    '  A = 1;'                     + LineEnding +
-    '  B = 2;'                     + LineEnding +
-    '  C = 3;'                     + LineEnding +
-    'var x: Integer;'              + LineEnding +
-    'begin'                        + LineEnding +
-    '  x := A;'                    + LineEnding +
-    'end.'
+    '''
+        program Test;
+        const
+          A = 1;
+          B = 2;
+          C = 3;
+        var x: Integer;
+        begin
+          x := A;
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty', IR <> '');
 end;
@@ -340,13 +362,15 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                + LineEnding +
-    'const First = 10;'            + LineEnding +
-    'var x: Integer;'              + LineEnding +
-    'const Second = 20;'           + LineEnding +
-    'begin'                        + LineEnding +
-    '  x := First + Second;'       + LineEnding +
-    'end.'
+    '''
+        program Test;
+        const First = 10;
+        var x: Integer;
+        const Second = 20;
+        begin
+          x := First + Second;
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty', IR <> '');
 end;
@@ -356,16 +380,18 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                + LineEnding +
-    'procedure DoWork;'            + LineEnding +
-    'const Threshold = 7;'         + LineEnding +
-    'var x: Integer;'              + LineEnding +
-    'begin'                        + LineEnding +
-    '  x := Threshold'             + LineEnding +
-    'end;'                         + LineEnding +
-    'begin'                        + LineEnding +
-    '  DoWork'                     + LineEnding +
-    'end.'
+    '''
+        program Test;
+        procedure DoWork;
+        const Threshold = 7;
+        var x: Integer;
+        begin
+          x := Threshold
+        end;
+        begin
+          DoWork
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty', IR <> '');
   AssertTrue('Local const value should appear in IR', IRContains(IR, '7'));
@@ -376,16 +402,18 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                + LineEnding +
-    'function Compute: Integer;'   + LineEnding +
-    'const Base = 100;'            + LineEnding +
-    'begin'                        + LineEnding +
-    '  Result := Base'             + LineEnding +
-    'end;'                         + LineEnding +
-    'var r: Integer;'              + LineEnding +
-    'begin'                        + LineEnding +
-    '  r := Compute'               + LineEnding +
-    'end.'
+    '''
+        program Test;
+        function Compute: Integer;
+        const Base = 100;
+        begin
+          Result := Base
+        end;
+        var r: Integer;
+        begin
+          r := Compute
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty', IR <> '');
   AssertTrue('Local const value should appear in IR', IRContains(IR, '100'));
@@ -396,22 +424,24 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                + LineEnding +
-    'type'                         + LineEnding +
-    '  TFoo = class'               + LineEnding +
-    '    function Bar: Integer;'   + LineEnding +
-    '  end;'                       + LineEnding +
-    'function TFoo.Bar: Integer;'  + LineEnding +
-    'const Magic = 55;'            + LineEnding +
-    'begin'                        + LineEnding +
-    '  Result := Magic'            + LineEnding +
-    'end;'                         + LineEnding +
-    'var f: TFoo;'                 + LineEnding +
-    'begin'                        + LineEnding +
-    '  f := TFoo.Create;'          + LineEnding +
-    '  WriteLn(f.Bar);'            + LineEnding +
-    '  f.Free'                     + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TFoo = class
+            function Bar: Integer;
+          end;
+        function TFoo.Bar: Integer;
+        const Magic = 55;
+        begin
+          Result := Magic
+        end;
+        var f: TFoo;
+        begin
+          f := TFoo.Create;
+          WriteLn(f.Bar);
+          f.Free
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty', IR <> '');
   AssertTrue('Local const value should appear in IR', IRContains(IR, '55'));
@@ -422,18 +452,20 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                + LineEnding +
-    'type'                         + LineEnding +
-    '  TFoo = class'               + LineEnding +
-    '  const'                      + LineEnding +
-    '    MaxItems = 100;'          + LineEnding +
-    '  var'                        + LineEnding +
-    '    FCount: Integer;'         + LineEnding +
-    '  end;'                       + LineEnding +
-    'var x: Integer;'              + LineEnding +
-    'begin'                        + LineEnding +
-    '  x := TFoo.MaxItems'         + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TFoo = class
+          const
+            MaxItems = 100;
+          var
+            FCount: Integer;
+          end;
+        var x: Integer;
+        begin
+          x := TFoo.MaxItems
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty', IR <> '');
   AssertTrue('Class const value should appear in IR', IRContains(IR, '100'));

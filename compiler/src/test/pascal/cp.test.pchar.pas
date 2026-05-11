@@ -16,7 +16,7 @@ unit cp.test.pchar;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -83,21 +83,25 @@ end;
 
 const
   SrcPCharCast =
-    'program PC;'                                          + LineEnding +
-    'procedure Foo(s: string);'                            + LineEnding +
-    'var p: PChar;'                                        + LineEnding +
-    'begin'                                                + LineEnding +
-    '  p := PChar(s)'                                      + LineEnding +
-    'end;'                                                 + LineEnding +
-    'begin end.';
+    '''
+        program PC;
+        procedure Foo(s: string);
+        var p: PChar;
+        begin
+          p := PChar(s)
+        end;
+        begin end.
+        ''';
 
   SrcStringCast =
-    'program PC;'                                          + LineEnding +
-    'function Bar(p: PChar): string;'                      + LineEnding +
-    'begin'                                                + LineEnding +
-    '  Result := string(p)'                                + LineEnding +
-    'end;'                                                 + LineEnding +
-    'begin end.';
+    '''
+        program PC;
+        function Bar(p: PChar): string;
+        begin
+          Result := string(p)
+        end;
+        begin end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Semantic tests                                                      }

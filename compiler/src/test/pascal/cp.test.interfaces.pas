@@ -13,7 +13,7 @@ unit cp.test.interfaces;
 interface
 
 uses
-  Classes, SysUtils, StrUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -84,88 +84,100 @@ implementation
 
 const
   SrcInterfaceEmpty =
-    'program P;'                + LineEnding +
-    'type'                      + LineEnding +
-    '  IFoo = interface'        + LineEnding +
-    '  end;'                    + LineEnding +
-    'begin'                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IFoo = interface
+          end;
+        begin
+        end.
+        ''';
 
   SrcInterfaceWithMethods =
-    'program P;'                        + LineEnding +
-    'type'                              + LineEnding +
-    '  IFoo = interface'                + LineEnding +
-    '    procedure DoIt;'               + LineEnding +
-    '    function GetVal: Integer;'     + LineEnding +
-    '  end;'                            + LineEnding +
-    'begin'                             + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IFoo = interface
+            procedure DoIt;
+            function GetVal: Integer;
+          end;
+        begin
+        end.
+        ''';
 
   SrcInterfaceWithParent =
-    'program P;'                    + LineEnding +
-    'type'                          + LineEnding +
-    '  IBase = interface'           + LineEnding +
-    '    procedure Base;'           + LineEnding +
-    '  end;'                        + LineEnding +
-    '  IChild = interface(IBase)'   + LineEnding +
-    '    procedure Child;'          + LineEnding +
-    '  end;'                        + LineEnding +
-    'begin'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IBase = interface
+            procedure Base;
+          end;
+          IChild = interface(IBase)
+            procedure Child;
+          end;
+        begin
+        end.
+        ''';
 
   SrcClassImplements =
-    'program P;'                               + LineEnding +
-    'type'                                     + LineEnding +
-    '  IFoo = interface'                       + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '    function GetVal: Integer;'            + LineEnding +
-    '  end;'                                   + LineEnding +
-    '  TFoo = class(TObject, IFoo)'            + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '    function GetVal: Integer;'            + LineEnding +
-    '  end;'                                   + LineEnding +
-    'procedure TFoo.DoIt;'                     + LineEnding +
-    'begin'                                    + LineEnding +
-    'end;'                                     + LineEnding +
-    'function TFoo.GetVal: Integer;'           + LineEnding +
-    'begin'                                    + LineEnding +
-    '  Result := 42'                           + LineEnding +
-    'end;'                                     + LineEnding +
-    'begin'                                    + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IFoo = interface
+            procedure DoIt;
+            function GetVal: Integer;
+          end;
+          TFoo = class(TObject, IFoo)
+            procedure DoIt;
+            function GetVal: Integer;
+          end;
+        procedure TFoo.DoIt;
+        begin
+        end;
+        function TFoo.GetVal: Integer;
+        begin
+          Result := 42
+        end;
+        begin
+        end.
+        ''';
 
   SrcClassImplementsMultiple =
-    'program P;'                               + LineEnding +
-    'type'                                     + LineEnding +
-    '  IFoo = interface'                       + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '  end;'                                   + LineEnding +
-    '  IBar = interface'                       + LineEnding +
-    '    procedure DoBar;'                     + LineEnding +
-    '  end;'                                   + LineEnding +
-    '  TFoo = class(TObject, IFoo, IBar)'      + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '    procedure DoBar;'                     + LineEnding +
-    '  end;'                                   + LineEnding +
-    'procedure TFoo.DoIt;'                     + LineEnding +
-    'begin'                                    + LineEnding +
-    'end;'                                     + LineEnding +
-    'procedure TFoo.DoBar;'                    + LineEnding +
-    'begin'                                    + LineEnding +
-    'end;'                                     + LineEnding +
-    'begin'                                    + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IFoo = interface
+            procedure DoIt;
+          end;
+          IBar = interface
+            procedure DoBar;
+          end;
+          TFoo = class(TObject, IFoo, IBar)
+            procedure DoIt;
+            procedure DoBar;
+          end;
+        procedure TFoo.DoIt;
+        begin
+        end;
+        procedure TFoo.DoBar;
+        begin
+        end;
+        begin
+        end.
+        ''';
 
   SrcClassMissingMethod =
-    'program P;'                               + LineEnding +
-    'type'                                     + LineEnding +
-    '  IFoo = interface'                       + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '  end;'                                   + LineEnding +
-    '  TFoo = class(TObject, IFoo)'            + LineEnding +
-    '  end;'                                   + LineEnding +
-    'begin'                                    + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IFoo = interface
+            procedure DoIt;
+          end;
+          TFoo = class(TObject, IFoo)
+          end;
+        begin
+        end.
+        ''';
 
   { TFoo = class(IFoo) — interface as sole parent; TObject must be implied }
   SrcClassInterfaceOnlyParent =
@@ -184,65 +196,71 @@ const
     'end.';
 
   SrcIsExprInterface =
-    'program P;'                               + LineEnding +
-    'type'                                     + LineEnding +
-    '  IFoo = interface'                       + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '  end;'                                   + LineEnding +
-    '  TFoo = class(TObject, IFoo)'            + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '  end;'                                   + LineEnding +
-    'procedure TFoo.DoIt;'                     + LineEnding +
-    'begin'                                    + LineEnding +
-    'end;'                                     + LineEnding +
-    'var'                                      + LineEnding +
-    '  T: TFoo;'                               + LineEnding +
-    '  R: Boolean;'                            + LineEnding +
-    'begin'                                    + LineEnding +
-    '  T := TFoo.Create;'                      + LineEnding +
-    '  R := T is IFoo'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IFoo = interface
+            procedure DoIt;
+          end;
+          TFoo = class(TObject, IFoo)
+            procedure DoIt;
+          end;
+        procedure TFoo.DoIt;
+        begin
+        end;
+        var
+          T: TFoo;
+          R: Boolean;
+        begin
+          T := TFoo.Create;
+          R := T is IFoo
+        end.
+        ''';
 
   SrcAsExprInterface =
-    'program P;'                               + LineEnding +
-    'type'                                     + LineEnding +
-    '  IFoo = interface'                       + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '  end;'                                   + LineEnding +
-    '  TFoo = class(TObject, IFoo)'            + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '  end;'                                   + LineEnding +
-    'procedure TFoo.DoIt;'                     + LineEnding +
-    'begin'                                    + LineEnding +
-    'end;'                                     + LineEnding +
-    'var'                                      + LineEnding +
-    '  T: TFoo;'                               + LineEnding +
-    '  F: IFoo;'                               + LineEnding +
-    'begin'                                    + LineEnding +
-    '  T := TFoo.Create;'                      + LineEnding +
-    '  F := T as IFoo'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IFoo = interface
+            procedure DoIt;
+          end;
+          TFoo = class(TObject, IFoo)
+            procedure DoIt;
+          end;
+        procedure TFoo.DoIt;
+        begin
+        end;
+        var
+          T: TFoo;
+          F: IFoo;
+        begin
+          T := TFoo.Create;
+          F := T as IFoo
+        end.
+        ''';
 
   SrcInterfaceVar =
-    'program P;'                               + LineEnding +
-    'type'                                     + LineEnding +
-    '  IFoo = interface'                       + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '  end;'                                   + LineEnding +
-    '  TFoo = class(TObject, IFoo)'            + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '  end;'                                   + LineEnding +
-    'procedure TFoo.DoIt;'                     + LineEnding +
-    'begin'                                    + LineEnding +
-    'end;'                                     + LineEnding +
-    'var'                                      + LineEnding +
-    '  F: IFoo;'                               + LineEnding +
-    '  T: TFoo;'                               + LineEnding +
-    'begin'                                    + LineEnding +
-    '  T := TFoo.Create;'                      + LineEnding +
-    '  F := T;'                                + LineEnding +
-    '  F.DoIt'                                 + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IFoo = interface
+            procedure DoIt;
+          end;
+          TFoo = class(TObject, IFoo)
+            procedure DoIt;
+          end;
+        procedure TFoo.DoIt;
+        begin
+        end;
+        var
+          F: IFoo;
+          T: TFoo;
+        begin
+          T := TFoo.Create;
+          F := T;
+          F.DoIt
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                             }
@@ -673,25 +691,27 @@ end;
 
 const
   SrcIntfToIntf =
-    'program P;'                               + LineEnding +
-    'type'                                     + LineEnding +
-    '  IFoo = interface'                       + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '  end;'                                   + LineEnding +
-    '  TFoo = class(TObject, IFoo)'            + LineEnding +
-    '    procedure DoIt;'                      + LineEnding +
-    '  end;'                                   + LineEnding +
-    'procedure TFoo.DoIt;'                     + LineEnding +
-    'begin'                                    + LineEnding +
-    'end;'                                     + LineEnding +
-    'var'                                      + LineEnding +
-    '  T:    TFoo;'                            + LineEnding +
-    '  F, G: IFoo;'                            + LineEnding +
-    'begin'                                    + LineEnding +
-    '  T := TFoo.Create;'                      + LineEnding +
-    '  F := T;'                                + LineEnding +
-    '  G := F'                                 + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          IFoo = interface
+            procedure DoIt;
+          end;
+          TFoo = class(TObject, IFoo)
+            procedure DoIt;
+          end;
+        procedure TFoo.DoIt;
+        begin
+        end;
+        var
+          T:    TFoo;
+          F, G: IFoo;
+        begin
+          T := TFoo.Create;
+          F := T;
+          G := F
+        end.
+        ''';
 
 procedure TInterfaceTests.TestCodegen_InterfaceAssign_ClassSrc_AddrefsObj;
 var IR: string;

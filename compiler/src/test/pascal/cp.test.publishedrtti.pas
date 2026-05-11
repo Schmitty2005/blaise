@@ -22,8 +22,11 @@ unit cp.test.publishedrtti;
 interface
 
 uses
-  Classes, SysUtils, Process, fpcunit, testregistry,
+  Classes, SysUtils, Process, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
+
+function ProjectRootRTTI: string;
+function RunCmd(const AExe: string; const AArgs: array of string): Integer;
 
 type
   TPublishedRTTITests = class(TTestCase)
@@ -96,39 +99,58 @@ begin
   end;
 end;
 
+function ProjectRootRTTI: string;
+var
+  Dir, Parent: string;
+  Steps:       Integer;
+begin
+  Result := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
+  if Result <> '' then
+  begin
+    Result := IncludeTrailingPathDelimiter(Result);
+    Exit;
+  end;
+  Dir := GetCurrentDir;
+  for Steps := 0 to 5 do
+  begin
+    if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
+       DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'rtl') then
+    begin
+      Result := IncludeTrailingPathDelimiter(Dir);
+      Exit;
+    end;
+    Parent := ExtractFileDir(Dir);
+    if (Parent = '') or (Parent = Dir) then Break;
+    Dir := Parent;
+  end;
+  Result := IncludeTrailingPathDelimiter(GetCurrentDir);
+end;
+
 { Compile, assemble with QBE, link with the RTL static library, run, and
   capture stdout.  Used by the end-to-end tests below to confirm that the
   published-method table laid out by codegen is read correctly by
   _MethodAddress at runtime. }
-function TPublishedRTTITests.CompileAndRun(const ASrc: string): string;
-
-  function ProjectRoot: string;
-  var
-    Dir, Parent: string;
-    Steps:       Integer;
-  begin
-    Result := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
-    if Result <> '' then
-    begin
-      Result := IncludeTrailingPathDelimiter(Result);
-      Exit;
-    end;
-    Dir := GetCurrentDir;
-    for Steps := 0 to 5 do
-    begin
-      if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
-         DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'rtl') then
-      begin
-        Result := IncludeTrailingPathDelimiter(Dir);
-        Exit;
-      end;
-      Parent := ExtractFileDir(Dir);
-      if (Parent = '') or (Parent = Dir) then Break;
-      Dir := Parent;
-    end;
-    Result := IncludeTrailingPathDelimiter(GetCurrentDir);
+function RunCmd(const AExe: string; const AArgs: array of string): Integer;
+var
+  Proc:  TProcess;
+  I:     Integer;
+  Chunk: string;
+begin
+  Proc := TProcess.Create(nil);
+  try
+    Proc.Executable := AExe;
+    for I := Low(AArgs) to High(AArgs) do
+      Proc.Parameters.Add(AArgs[I]);
+    Proc.Execute;
+    repeat Chunk := Proc.ReadOutput; until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit;
+    Result := Proc.ExitCode;
+  finally
+    Proc.Free;
   end;
+end;
 
+function TPublishedRTTITests.CompileAndRun(const ASrc: string): string;
 var
   IR:                       string;
   Root:                     string;
@@ -136,10 +158,10 @@ var
   IRFile, AsmFile, BinFile: string;
   Lst:                      TStringList;
   Proc:                     TProcess;
-  OutLst:                   TStringList;
+  Chunk:                    string;
 begin
   Result := '';
-  Root   := ProjectRoot;
+  Root   := ProjectRootRTTI;
   QBE    := Root + 'vendor/qbe/qbe';
   RTL    := Root + 'compiler/target/blaise_rtl.a';
   if not (FileExists(QBE) and FileExists(RTL)) then
@@ -162,54 +184,31 @@ begin
     Lst.Free;
   end;
 
-  { qbe }
-  Proc := TProcess.Create(nil);
-  try
-    Proc.Executable := QBE;
-    Proc.Parameters.Add('-o');
-    Proc.Parameters.Add(AsmFile);
-    Proc.Parameters.Add(IRFile);
-    Proc.Options := [poWaitOnExit];
-    Proc.Execute;
-    if Proc.ExitStatus <> 0 then
-    begin
-      Result := '<qbe-failed>';
-      Exit;
-    end;
-  finally
-    Proc.Free;
+  if RunCmd(QBE, ['-o', AsmFile, IRFile]) <> 0 then
+  begin
+    Result := '<qbe-failed>';
+    Exit;
   end;
 
-  { link }
-  Proc := TProcess.Create(nil);
-  try
-    Proc.Executable := 'cc';
-    Proc.Parameters.Add('-o');
-    Proc.Parameters.Add(BinFile);
-    Proc.Parameters.Add(AsmFile);
-    Proc.Parameters.Add(RTL);
-    Proc.Options := [poWaitOnExit];
-    Proc.Execute;
-    if Proc.ExitStatus <> 0 then
-    begin
-      Result := '<link-failed>';
-      Exit;
-    end;
-  finally
-    Proc.Free;
+  if RunCmd('cc', ['-o', BinFile, AsmFile, RTL]) <> 0 then
+  begin
+    Result := '<link-failed>';
+    Exit;
   end;
 
   { run + capture stdout }
   Proc := TProcess.Create(nil);
-  OutLst := TStringList.Create;
   try
     Proc.Executable := BinFile;
-    Proc.Options := [poWaitOnExit, poUsePipes];
     Proc.Execute;
-    OutLst.LoadFromStream(Proc.Output);
-    Result := TrimRight(OutLst.Text);
+    Result := '';
+    repeat
+      Chunk := Proc.ReadOutput;
+      Result := Result + Chunk;
+    until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit;
+    Result := Trim(Result);
   finally
-    OutLst.Free;
     Proc.Free;
   end;
 end;
@@ -221,16 +220,18 @@ end;
 procedure TPublishedRTTITests.TestParse_Published_Sets_IsPublished;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TFoo = class(TObject)'                            + LineEnding +
-    '  published'                                        + LineEnding +
-    '    procedure Bar;'                                 + LineEnding +
-    '    procedure Baz;'                                 + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TFoo.Bar; begin end;'                     + LineEnding +
-    'procedure TFoo.Baz; begin end;'                     + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          published
+            procedure Bar;
+            procedure Baz;
+          end;
+        procedure TFoo.Bar; begin end;
+        procedure TFoo.Baz; begin end;
+        begin end.
+        ''';
 var
   Prog: TProgram;
   TD:   TTypeDecl;
@@ -251,14 +252,16 @@ end;
 procedure TPublishedRTTITests.TestParse_Public_Does_Not_Set_IsPublished;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TFoo = class(TObject)'                            + LineEnding +
-    '  public'                                           + LineEnding +
-    '    procedure Bar;'                                 + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TFoo.Bar; begin end;'                     + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          public
+            procedure Bar;
+          end;
+        procedure TFoo.Bar; begin end;
+        begin end.
+        ''';
 var
   Prog: TProgram;
   CD:   TClassTypeDef;
@@ -276,17 +279,19 @@ end;
 procedure TPublishedRTTITests.TestParse_PublishedThenPublic_Boundary;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TFoo = class(TObject)'                            + LineEnding +
-    '  published'                                        + LineEnding +
-    '    procedure InPub;'                               + LineEnding +
-    '  public'                                           + LineEnding +
-    '    procedure InPlain;'                             + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TFoo.InPub;   begin end;'                 + LineEnding +
-    'procedure TFoo.InPlain; begin end;'                 + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          published
+            procedure InPub;
+          public
+            procedure InPlain;
+          end;
+        procedure TFoo.InPub;   begin end;
+        procedure TFoo.InPlain; begin end;
+        begin end.
+        ''';
 var
   Prog: TProgram;
   CD:   TClassTypeDef;
@@ -309,9 +314,11 @@ end;
 procedure TPublishedRTTITests.TestCodegen_TypeInfo_HasFourSlots;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type TFoo = class(TObject) end;'                    + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type TFoo = class(TObject) end;
+        begin end.
+        ''';
 var IR: string;
 begin
   { Layout: parent, impllist, name, methods, totalsize, fieldcleanup, vtable.
@@ -326,14 +333,16 @@ end;
 procedure TPublishedRTTITests.TestCodegen_NoPublishedMethods_MethodsSlotZero;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TFoo = class(TObject)'                            + LineEnding +
-    '  public'                                           + LineEnding +
-    '    procedure Bar;'                                 + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TFoo.Bar; begin end;'                     + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          public
+            procedure Bar;
+          end;
+        procedure TFoo.Bar; begin end;
+        begin end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -345,14 +354,16 @@ end;
 procedure TPublishedRTTITests.TestCodegen_PublishedMethods_TableEmitted;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TFoo = class(TObject)'                            + LineEnding +
-    '  published'                                        + LineEnding +
-    '    procedure Bar;'                                 + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TFoo.Bar; begin end;'                     + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          published
+            procedure Bar;
+          end;
+        procedure TFoo.Bar; begin end;
+        begin end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -364,18 +375,20 @@ end;
 procedure TPublishedRTTITests.TestCodegen_PublishedMethods_TableCount;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TFoo = class(TObject)'                            + LineEnding +
-    '  published'                                        + LineEnding +
-    '    procedure Bar;'                                 + LineEnding +
-    '    procedure Baz;'                                 + LineEnding +
-    '    procedure Qux;'                                 + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TFoo.Bar; begin end;'                     + LineEnding +
-    'procedure TFoo.Baz; begin end;'                     + LineEnding +
-    'procedure TFoo.Qux; begin end;'                     + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          published
+            procedure Bar;
+            procedure Baz;
+            procedure Qux;
+          end;
+        procedure TFoo.Bar; begin end;
+        procedure TFoo.Baz; begin end;
+        procedure TFoo.Qux; begin end;
+        begin end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -386,14 +399,16 @@ end;
 procedure TPublishedRTTITests.TestCodegen_PublishedMethods_NameAndAddrPairs;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TFoo = class(TObject)'                            + LineEnding +
-    '  published'                                        + LineEnding +
-    '    procedure Bar;'                                 + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TFoo.Bar; begin end;'                     + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          published
+            procedure Bar;
+          end;
+        procedure TFoo.Bar; begin end;
+        begin end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -404,19 +419,21 @@ end;
 procedure TPublishedRTTITests.TestCodegen_MethodAddress_BuiltinCall;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TFoo = class(TObject)'                            + LineEnding +
-    '  published'                                        + LineEnding +
-    '    procedure Bar;'                                 + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TFoo.Bar; begin end;'                     + LineEnding +
-    'var F: TFoo; P: Pointer;'                           + LineEnding +
-    'begin'                                              + LineEnding +
-    '  F := TFoo.Create;'                                + LineEnding +
-    '  P := MethodAddress(F, ''Bar'');'                  + LineEnding +
-    '  F.Free'                                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          published
+            procedure Bar;
+          end;
+        procedure TFoo.Bar; begin end;
+        var F: TFoo; P: Pointer;
+        begin
+          F := TFoo.Create;
+          P := MethodAddress(F, 'Bar');
+          F.Free
+        end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -431,22 +448,24 @@ end;
 procedure TPublishedRTTITests.TestE2E_MethodAddress_Found;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TFoo = class(TObject)'                            + LineEnding +
-    '  published'                                        + LineEnding +
-    '    procedure Bar;'                                 + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TFoo.Bar; begin end;'                     + LineEnding +
-    'var F: TFoo;'                                       + LineEnding +
-    'begin'                                              + LineEnding +
-    '  F := TFoo.Create;'                                + LineEnding +
-    '  if MethodAddress(F, ''Bar'') = nil then'          + LineEnding +
-    '    WriteLn(''nil'')'                               + LineEnding +
-    '  else'                                             + LineEnding +
-    '    WriteLn(''found'');'                            + LineEnding +
-    '  F.Free'                                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          published
+            procedure Bar;
+          end;
+        procedure TFoo.Bar; begin end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          if MethodAddress(F, 'Bar') = nil then
+            WriteLn('nil')
+          else
+            WriteLn('found');
+          F.Free
+        end.
+        ''';
 begin
   AssertEquals('Bar is found in the published-method table',
     'found', CompileAndRun(Src));
@@ -455,22 +474,24 @@ end;
 procedure TPublishedRTTITests.TestE2E_MethodAddress_NotFound;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TFoo = class(TObject)'                            + LineEnding +
-    '  published'                                        + LineEnding +
-    '    procedure Bar;'                                 + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TFoo.Bar; begin end;'                     + LineEnding +
-    'var F: TFoo;'                                       + LineEnding +
-    'begin'                                              + LineEnding +
-    '  F := TFoo.Create;'                                + LineEnding +
-    '  if MethodAddress(F, ''NoSuch'') = nil then'       + LineEnding +
-    '    WriteLn(''nil'')'                               + LineEnding +
-    '  else'                                             + LineEnding +
-    '    WriteLn(''found'');'                            + LineEnding +
-    '  F.Free'                                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          published
+            procedure Bar;
+          end;
+        procedure TFoo.Bar; begin end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          if MethodAddress(F, 'NoSuch') = nil then
+            WriteLn('nil')
+          else
+            WriteLn('found');
+          F.Free
+        end.
+        ''';
 begin
   AssertEquals('Unknown method name returns nil',
     'nil', CompileAndRun(Src));
@@ -479,57 +500,61 @@ end;
 procedure TPublishedRTTITests.TestE2E_MethodAddress_WalksParent;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TBase = class(TObject)'                           + LineEnding +
-    '  published'                                        + LineEnding +
-    '    procedure FromBase;'                            + LineEnding +
-    '  end;'                                             + LineEnding +
-    '  TDerived = class(TBase)'                          + LineEnding +
-    '  published'                                        + LineEnding +
-    '    procedure FromDerived;'                         + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TBase.FromBase;       begin end;'         + LineEnding +
-    'procedure TDerived.FromDerived; begin end;'         + LineEnding +
-    'var D: TDerived;'                                   + LineEnding +
-    'begin'                                              + LineEnding +
-    '  D := TDerived.Create;'                            + LineEnding +
-    '  if MethodAddress(D, ''FromBase'') = nil then'     + LineEnding +
-    '    WriteLn(''base nil'')'                          + LineEnding +
-    '  else'                                             + LineEnding +
-    '    WriteLn(''base found'');'                       + LineEnding +
-    '  if MethodAddress(D, ''FromDerived'') = nil then'  + LineEnding +
-    '    WriteLn(''derived nil'')'                       + LineEnding +
-    '  else'                                             + LineEnding +
-    '    WriteLn(''derived found'');'                    + LineEnding +
-    '  D.Free'                                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase = class(TObject)
+          published
+            procedure FromBase;
+          end;
+          TDerived = class(TBase)
+          published
+            procedure FromDerived;
+          end;
+        procedure TBase.FromBase;       begin end;
+        procedure TDerived.FromDerived; begin end;
+        var D: TDerived;
+        begin
+          D := TDerived.Create;
+          if MethodAddress(D, 'FromBase') = nil then
+            WriteLn('base nil')
+          else
+            WriteLn('base found');
+          if MethodAddress(D, 'FromDerived') = nil then
+            WriteLn('derived nil')
+          else
+            WriteLn('derived found');
+          D.Free
+        end.
+        ''';
 begin
   AssertEquals('inherited and own published methods both reachable',
-    'base found' + LineEnding + 'derived found', CompileAndRun(Src));
+    'base found' + #10 + 'derived found', CompileAndRun(Src));
 end;
 
 procedure TPublishedRTTITests.TestE2E_MethodAddress_DistinctMethodsHaveDistinctAddresses;
 const
   Src =
-    'program P;'                                         + LineEnding +
-    'type'                                               + LineEnding +
-    '  TFoo = class(TObject)'                            + LineEnding +
-    '  published'                                        + LineEnding +
-    '    procedure Bar;'                                 + LineEnding +
-    '    procedure Baz;'                                 + LineEnding +
-    '  end;'                                             + LineEnding +
-    'procedure TFoo.Bar; begin end;'                     + LineEnding +
-    'procedure TFoo.Baz; begin end;'                     + LineEnding +
-    'var F: TFoo;'                                       + LineEnding +
-    'begin'                                              + LineEnding +
-    '  F := TFoo.Create;'                                + LineEnding +
-    '  if MethodAddress(F, ''Bar'') = MethodAddress(F, ''Baz'') then' + LineEnding +
-    '    WriteLn(''same'')'                              + LineEnding +
-    '  else'                                             + LineEnding +
-    '    WriteLn(''different'');'                        + LineEnding +
-    '  F.Free'                                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          published
+            procedure Bar;
+            procedure Baz;
+          end;
+        procedure TFoo.Bar; begin end;
+        procedure TFoo.Baz; begin end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          if MethodAddress(F, 'Bar') = MethodAddress(F, 'Baz') then
+            WriteLn('same')
+          else
+            WriteLn('different');
+          F.Free
+        end.
+        ''';
 begin
   AssertEquals('two distinct methods have distinct code pointers',
     'different', CompileAndRun(Src));

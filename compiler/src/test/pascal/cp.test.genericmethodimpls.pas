@@ -19,7 +19,7 @@ unit cp.test.genericmethodimpls;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -60,61 +60,67 @@ implementation
 const
   { Class with forward-only method signatures — bodies supplied separately }
   SrcForwardOnly =
-    'program P;'                                                + LineEnding +
-    'type'                                                      + LineEnding +
-    '  TBox<T> = class'                                         + LineEnding +
-    '    FVal: T;'                                              + LineEnding +
-    '    procedure SetVal(V: T);'                               + LineEnding +
-    '    function GetVal: T;'                                   + LineEnding +
-    '  end;'                                                    + LineEnding +
-    'procedure TBox<T>.SetVal(V: T);'                           + LineEnding +
-    'begin'                                                     + LineEnding +
-    '  Self.FVal := V'                                          + LineEnding +
-    'end;'                                                      + LineEnding +
-    'function TBox<T>.GetVal: T;'                               + LineEnding +
-    'begin'                                                     + LineEnding +
-    '  Result := Self.FVal'                                     + LineEnding +
-    'end;'                                                      + LineEnding +
-    'var B: TBox<Integer>;'                                     + LineEnding +
-    'begin'                                                     + LineEnding +
-    '  B := TBox<Integer>.Create'                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox<T> = class
+            FVal: T;
+            procedure SetVal(V: T);
+            function GetVal: T;
+          end;
+        procedure TBox<T>.SetVal(V: T);
+        begin
+          Self.FVal := V
+        end;
+        function TBox<T>.GetVal: T;
+        begin
+          Result := Self.FVal
+        end;
+        var B: TBox<Integer>;
+        begin
+          B := TBox<Integer>.Create
+        end.
+        ''';
 
   { Identical logic, but methods defined inline — used to check IR equivalence }
   SrcInline =
-    'program P;'                                                + LineEnding +
-    'type'                                                      + LineEnding +
-    '  TBox<T> = class'                                         + LineEnding +
-    '    FVal: T;'                                              + LineEnding +
-    '    procedure SetVal(V: T);'                               + LineEnding +
-    '    begin'                                                 + LineEnding +
-    '      Self.FVal := V'                                      + LineEnding +
-    '    end;'                                                  + LineEnding +
-    '    function GetVal: T;'                                   + LineEnding +
-    '    begin'                                                 + LineEnding +
-    '      Result := Self.FVal'                                 + LineEnding +
-    '    end;'                                                  + LineEnding +
-    '  end;'                                                    + LineEnding +
-    'var B: TBox<Integer>;'                                     + LineEnding +
-    'begin'                                                     + LineEnding +
-    '  B := TBox<Integer>.Create'                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox<T> = class
+            FVal: T;
+            procedure SetVal(V: T);
+            begin
+              Self.FVal := V
+            end;
+            function GetVal: T;
+            begin
+              Result := Self.FVal
+            end;
+          end;
+        var B: TBox<Integer>;
+        begin
+          B := TBox<Integer>.Create
+        end.
+        ''';
 
   { Two type params — exercises multi-param parsing }
   SrcTwoTypeParams =
-    'program P;'                                                + LineEnding +
-    'type'                                                      + LineEnding +
-    '  TPair<K, V> = class'                                     + LineEnding +
-    '    FKey: K;'                                              + LineEnding +
-    '    FVal: V;'                                              + LineEnding +
-    '    procedure Assign(AKey: K; AVal: V);'                   + LineEnding +
-    '  end;'                                                    + LineEnding +
-    'procedure TPair<K, V>.Assign(AKey: K; AVal: V);'           + LineEnding +
-    'begin'                                                     + LineEnding +
-    '  Self.FKey := AKey;'                                      + LineEnding +
-    '  Self.FVal := AVal'                                       + LineEnding +
-    'end;'                                                      + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TPair<K, V> = class
+            FKey: K;
+            FVal: V;
+            procedure Assign(AKey: K; AVal: V);
+          end;
+        procedure TPair<K, V>.Assign(AKey: K; AVal: V);
+        begin
+          Self.FKey := AKey;
+          Self.FVal := AVal
+        end;
+        begin end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                              }

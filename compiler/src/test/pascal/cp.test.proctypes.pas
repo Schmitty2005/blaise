@@ -13,7 +13,7 @@ unit cp.test.proctypes;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSemantic, uSymbolTable, uCodeGenQBE;
 
 type
@@ -127,11 +127,13 @@ var
   TD:   TTypeDecl;
 begin
   Prog := ParseSrc(
-    'program Test;'                    + LineEnding +
-    'type'                             + LineEnding +
-    '  TIntFn = function: Integer;'    + LineEnding +
-    'begin'                            + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TIntFn = function: Integer;
+        begin
+        end.
+        '''
   );
   try
     TD := FindTypeDecl(Prog, 'TIntFn');
@@ -150,11 +152,13 @@ var
   Def:  TProceduralTypeDef;
 begin
   Prog := ParseSrc(
-    'program Test;'                    + LineEnding +
-    'type'                             + LineEnding +
-    '  TIntFn = function: Integer;'    + LineEnding +
-    'begin'                            + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TIntFn = function: Integer;
+        begin
+        end.
+        '''
   );
   try
     TD  := FindTypeDecl(Prog, 'TIntFn');
@@ -174,11 +178,13 @@ var
   Def:  TProceduralTypeDef;
 begin
   Prog := ParseSrc(
-    'program Test;'                                     + LineEnding +
-    'type'                                              + LineEnding +
-    '  TBinFn = function(A: Integer; B: Integer): Integer;' + LineEnding +
-    'begin'                                             + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TBinFn = function(A: Integer; B: Integer): Integer;
+        begin
+        end.
+        '''
   );
   try
     TD  := FindTypeDecl(Prog, 'TBinFn');
@@ -197,11 +203,13 @@ var
   P1:   TMethodParam;
 begin
   Prog := ParseSrc(
-    'program Test;'                                     + LineEnding +
-    'type'                                              + LineEnding +
-    '  TBinFn = function(A: Integer; B: Integer): Integer;' + LineEnding +
-    'begin'                                             + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TBinFn = function(A: Integer; B: Integer): Integer;
+        begin
+        end.
+        '''
   );
   try
     TD  := FindTypeDecl(Prog, 'TBinFn');
@@ -222,11 +230,13 @@ var
   P1:   TMethodParam;
 begin
   Prog := ParseSrc(
-    'program Test;'                                          + LineEnding +
-    'type'                                                   + LineEnding +
-    '  TStrFn = function(const S: string): Integer;'         + LineEnding +
-    'begin'                                                  + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TStrFn = function(const S: string): Integer;
+        begin
+        end.
+        '''
   );
   try
     TD  := FindTypeDecl(Prog, 'TStrFn');
@@ -246,11 +256,13 @@ var
   TD:   TTypeDecl;
 begin
   Prog := ParseSrc(
-    'program Test;'                + LineEnding +
-    'type'                         + LineEnding +
-    '  TVoidProc = procedure;'     + LineEnding +
-    'begin'                        + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TVoidProc = procedure;
+        begin
+        end.
+        '''
   );
   try
     TD := FindTypeDecl(Prog, 'TVoidProc');
@@ -269,11 +281,13 @@ var
   Def:  TProceduralTypeDef;
 begin
   Prog := ParseSrc(
-    'program Test;'                + LineEnding +
-    'type'                         + LineEnding +
-    '  TVoidProc = procedure;'     + LineEnding +
-    'begin'                        + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TVoidProc = procedure;
+        begin
+        end.
+        '''
   );
   try
     TD  := FindTypeDecl(Prog, 'TVoidProc');
@@ -293,11 +307,13 @@ var
   P1:   TMethodParam;
 begin
   Prog := ParseSrc(
-    'program Test;'                                  + LineEnding +
-    'type'                                           + LineEnding +
-    '  TIncProc = procedure(var X: Integer);'        + LineEnding +
-    'begin'                                          + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TIncProc = procedure(var X: Integer);
+        begin
+        end.
+        '''
   );
   try
     TD  := FindTypeDecl(Prog, 'TIncProc');
@@ -318,17 +334,19 @@ var
 begin
   { Should not raise. Assigning @MyFn to a TIntFn variable type-checks. }
   IR := GenIR(
-    'program Test;'                       + LineEnding +
-    'type'                                + LineEnding +
-    '  TIntFn = function: Integer;'       + LineEnding +
-    'function MyFn: Integer;'             + LineEnding +
-    'begin'                               + LineEnding +
-    '  Result := 42;'                     + LineEnding +
-    'end;'                                + LineEnding +
-    'var F: TIntFn;'                      + LineEnding +
-    'begin'                               + LineEnding +
-    '  F := @MyFn;'                       + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TIntFn = function: Integer;
+        function MyFn: Integer;
+        begin
+          Result := 42;
+        end;
+        var F: TIntFn;
+        begin
+          F := @MyFn;
+        end.
+        '''
   );
   AssertTrue('IR should be non-empty', Length(IR) > 0);
 end;
@@ -340,17 +358,19 @@ begin
   Raised := False;
   try
     GenIR(
-      'program Test;'                       + LineEnding +
-      'type'                                + LineEnding +
-      '  TIntFn = function: Integer;'       + LineEnding +
-      'function MyFn: string;'              + LineEnding +
-      'begin'                               + LineEnding +
-      '  Result := ''nope'';'               + LineEnding +
-      'end;'                                + LineEnding +
-      'var F: TIntFn;'                      + LineEnding +
-      'begin'                               + LineEnding +
-      '  F := @MyFn;'                       + LineEnding +
-      'end.'
+      '''
+          program Test;
+          type
+            TIntFn = function: Integer;
+          function MyFn: string;
+          begin
+            Result := 'nope';
+          end;
+          var F: TIntFn;
+          begin
+            F := @MyFn;
+          end.
+          '''
     );
   except
     Raised := True;
@@ -365,17 +385,19 @@ begin
   Raised := False;
   try
     GenIR(
-      'program Test;'                                 + LineEnding +
-      'type'                                          + LineEnding +
-      '  TIntFn = function: Integer;'                 + LineEnding +
-      'function MyFn(X: Integer): Integer;'           + LineEnding +
-      'begin'                                         + LineEnding +
-      '  Result := X;'                                + LineEnding +
-      'end;'                                          + LineEnding +
-      'var F: TIntFn;'                                + LineEnding +
-      'begin'                                         + LineEnding +
-      '  F := @MyFn;'                                 + LineEnding +
-      'end.'
+      '''
+          program Test;
+          type
+            TIntFn = function: Integer;
+          function MyFn(X: Integer): Integer;
+          begin
+            Result := X;
+          end;
+          var F: TIntFn;
+          begin
+            F := @MyFn;
+          end.
+          '''
     );
   except
     Raised := True;
@@ -392,17 +414,19 @@ begin
   Raised := False;
   try
     GenIR(
-      'program Test;'                                 + LineEnding +
-      'type'                                          + LineEnding +
-      '  THandler = procedure(N: Integer);'           + LineEnding +
-      'procedure DoIt(N: Integer);'                   + LineEnding +
-      'begin'                                         + LineEnding +
-      'end;'                                          + LineEnding +
-      'var H: THandler;'                              + LineEnding +
-      'begin'                                         + LineEnding +
-      '  H := @DoIt;'                                 + LineEnding +
-      '  H(''oops'')'                                 + LineEnding +
-      'end.'
+      '''
+          program Test;
+          type
+            THandler = procedure(N: Integer);
+          procedure DoIt(N: Integer);
+          begin
+          end;
+          var H: THandler;
+          begin
+            H := @DoIt;
+            H('oops')
+          end.
+          '''
     );
   except
     Raised := True;
@@ -421,18 +445,20 @@ begin
   Raised := False;
   try
     GenIR(
-      'program Test;'                                 + LineEnding +
-      'type'                                          + LineEnding +
-      '  TIntFn = function(N: Integer): Integer;'     + LineEnding +
-      'function Square(N: Integer): Integer;'         + LineEnding +
-      'begin'                                         + LineEnding +
-      '  Result := N * N'                             + LineEnding +
-      'end;'                                          + LineEnding +
-      'var F: TIntFn; R: Integer;'                    + LineEnding +
-      'begin'                                         + LineEnding +
-      '  F := @Square;'                               + LineEnding +
-      '  R := F(''oops'')'                            + LineEnding +
-      'end.'
+      '''
+          program Test;
+          type
+            TIntFn = function(N: Integer): Integer;
+          function Square(N: Integer): Integer;
+          begin
+            Result := N * N
+          end;
+          var F: TIntFn; R: Integer;
+          begin
+            F := @Square;
+            R := F('oops')
+          end.
+          '''
     );
   except
     Raised := True;
@@ -453,17 +479,19 @@ begin
     the data section, which is also a pointer slot; this test pins the
     stack-allocation path. }
   IR := GenIR(
-    'program Test;'                       + LineEnding +
-    'type'                                + LineEnding +
-    '  TIntFn = function: Integer;'       + LineEnding +
-    'procedure UseFn;'                    + LineEnding +
-    'var'                                 + LineEnding +
-    '  F: TIntFn;'                        + LineEnding +
-    'begin'                               + LineEnding +
-    'end;'                                + LineEnding +
-    'begin'                               + LineEnding +
-    '  UseFn;'                            + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TIntFn = function: Integer;
+        procedure UseFn;
+        var
+          F: TIntFn;
+        begin
+        end;
+        begin
+          UseFn;
+        end.
+        '''
   );
   AssertTrue('IR should contain alloc8 for procedural var',
     IRContains(IR, 'alloc8'));
@@ -474,17 +502,19 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                       + LineEnding +
-    'type'                                + LineEnding +
-    '  TIntFn = function: Integer;'       + LineEnding +
-    'function MyFn: Integer;'             + LineEnding +
-    'begin'                               + LineEnding +
-    '  Result := 42;'                     + LineEnding +
-    'end;'                                + LineEnding +
-    'var F: TIntFn;'                      + LineEnding +
-    'begin'                               + LineEnding +
-    '  F := @MyFn;'                       + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TIntFn = function: Integer;
+        function MyFn: Integer;
+        begin
+          Result := 42;
+        end;
+        var F: TIntFn;
+        begin
+          F := @MyFn;
+        end.
+        '''
   );
   { Storing @MyFn into F should put the address $MyFn into the variable. }
   AssertTrue('IR should reference $MyFn as an address',
@@ -496,20 +526,22 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                       + LineEnding +
-    'type'                                + LineEnding +
-    '  TIntFn = function: Integer;'       + LineEnding +
-    'function MyFn: Integer;'             + LineEnding +
-    'begin'                               + LineEnding +
-    '  Result := 42;'                     + LineEnding +
-    'end;'                                + LineEnding +
-    'var'                                 + LineEnding +
-    '  F: TIntFn;'                        + LineEnding +
-    '  X: Integer;'                       + LineEnding +
-    'begin'                               + LineEnding +
-    '  F := @MyFn;'                       + LineEnding +
-    '  X := F();'                         + LineEnding +
-    'end.'
+    '''
+        program Test;
+        type
+          TIntFn = function: Integer;
+        function MyFn: Integer;
+        begin
+          Result := 42;
+        end;
+        var
+          F: TIntFn;
+          X: Integer;
+        begin
+          F := @MyFn;
+          X := F();
+        end.
+        '''
   );
   { An indirect call through F() must NOT emit 'call $MyFn(' — that would be a
     direct call.  It should call through a temp, e.g. 'call %tmp(' where the

@@ -693,6 +693,7 @@ type
   TUnit = class(TASTNode)
   public
     Name:        string;
+    SourceFile:  string;       { absolute path of the .pas file this unit was loaded from }
     UsedUnits:   TStringList; { owned — unit names from the interface uses clause }
     IntfBlock:   TBlock;      { owned — forward decls + type decls }
     ImplBlock:   TBlock;      { owned — full implementations }

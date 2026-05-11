@@ -15,7 +15,7 @@ unit cp.test.flowjumps;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -81,56 +81,66 @@ end;
 
 const
   SrcExit =
-    'program P;'                    + LineEnding +
-    'var I: Integer;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  I := 1;'                     + LineEnding +
-    '  if I = 1 then exit;'         + LineEnding +
-    '  I := 2'                      + LineEnding +
-    'end.';
+    '''
+        program P;
+        var I: Integer;
+        begin
+          I := 1;
+          if I = 1 then exit;
+          I := 2
+        end.
+        ''';
 
   SrcBreakInFor =
-    'program P;'                    + LineEnding +
-    'var I: Integer;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  for I := 1 to 10 do'         + LineEnding +
-    '  begin'                       + LineEnding +
-    '    if I > 5 then break'       + LineEnding +
-    '  end'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        var I: Integer;
+        begin
+          for I := 1 to 10 do
+          begin
+            if I > 5 then break
+          end
+        end.
+        ''';
 
   SrcBreakInWhile =
-    'program P;'                    + LineEnding +
-    'var I: Integer;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  I := 0;'                     + LineEnding +
-    '  while I < 100 do'            + LineEnding +
-    '  begin'                       + LineEnding +
-    '    if I = 5 then break;'      + LineEnding +
-    '    I := I + 1'                + LineEnding +
-    '  end'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        var I: Integer;
+        begin
+          I := 0;
+          while I < 100 do
+          begin
+            if I = 5 then break;
+            I := I + 1
+          end
+        end.
+        ''';
 
   SrcBreakOutsideLoop =
-    'program P;'                    + LineEnding +
-    'var I: Integer;'               + LineEnding +
-    'begin'                         + LineEnding +
-    '  I := 0;'                     + LineEnding +
-    '  break'                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var I: Integer;
+        begin
+          I := 0;
+          break
+        end.
+        ''';
 
   SrcExitFromFunc =
-    'program P;'                              + LineEnding +
-    'function Abs1(X: Integer): Integer;'     + LineEnding +
-    'begin'                                   + LineEnding +
-    '  if X < 0 then'                         + LineEnding +
-    '  begin Result := 0 - X; exit end;'      + LineEnding +
-    '  Result := X'                           + LineEnding +
-    'end;'                                    + LineEnding +
-    'var N: Integer;'                         + LineEnding +
-    'begin'                                   + LineEnding +
-    '  N := Abs1(-7)'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        function Abs1(X: Integer): Integer;
+        begin
+          if X < 0 then
+          begin Result := 0 - X; exit end;
+          Result := X
+        end;
+        var N: Integer;
+        begin
+          N := Abs1(-7)
+        end.
+        ''';
 
 procedure TFlowJumpsTests.TestLexer_Exit_Keyword;
 var L: TLexer; T: TToken;

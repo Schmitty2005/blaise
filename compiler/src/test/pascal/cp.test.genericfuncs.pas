@@ -16,7 +16,7 @@ unit cp.test.genericfuncs;
 interface
 
 uses
-  Classes, SysUtils, StrUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -66,47 +66,55 @@ implementation
 const
   { Generic function declaration only — no usage }
   SrcGenericFuncDecl =
-    'program P;'                                       + LineEnding +
-    'function Identity<T>(Val: T): T;'                 + LineEnding +
-    'begin'                                            + LineEnding +
-    '  Result := Val'                                  + LineEnding +
-    'end;'                                             + LineEnding +
-    'begin'                                            + LineEnding +
-    'end.';
+    '''
+        program P;
+        function Identity<T>(Val: T): T;
+        begin
+          Result := Val
+        end;
+        begin
+        end.
+        ''';
 
   { Two type params }
   SrcGenericFuncTwoParams =
-    'program P;'                                       + LineEnding +
-    'function Swap<A, B>(X: A; Y: B): A;'              + LineEnding +
-    'begin'                                            + LineEnding +
-    '  Result := X'                                    + LineEnding +
-    'end;'                                             + LineEnding +
-    'begin'                                            + LineEnding +
-    'end.';
+    '''
+        program P;
+        function Swap<A, B>(X: A; Y: B): A;
+        begin
+          Result := X
+        end;
+        begin
+        end.
+        ''';
 
   { Usage — instantiates Identity<Integer> }
   SrcGenericFuncUsage =
-    'program P;'                                       + LineEnding +
-    'function Identity<T>(Val: T): T;'                 + LineEnding +
-    'begin'                                            + LineEnding +
-    '  Result := Val'                                  + LineEnding +
-    'end;'                                             + LineEnding +
-    'var X: Integer;'                                  + LineEnding +
-    'begin'                                            + LineEnding +
-    '  X := Identity<Integer>(42)'                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        function Identity<T>(Val: T): T;
+        begin
+          Result := Val
+        end;
+        var X: Integer;
+        begin
+          X := Identity<Integer>(42)
+        end.
+        ''';
 
   { Call-site source for parser test only (semantics not needed) }
   SrcGenericFuncCallSite =
-    'program P;'                                       + LineEnding +
-    'function Identity<T>(Val: T): T;'                 + LineEnding +
-    'begin'                                            + LineEnding +
-    '  Result := Val'                                  + LineEnding +
-    'end;'                                             + LineEnding +
-    'var X: Integer;'                                  + LineEnding +
-    'begin'                                            + LineEnding +
-    '  X := Identity<Integer>(42)'                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        function Identity<T>(Val: T): T;
+        begin
+          Result := Val
+        end;
+        var X: Integer;
+        begin
+          X := Identity<Integer>(42)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                             }

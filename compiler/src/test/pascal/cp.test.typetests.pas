@@ -15,7 +15,7 @@ unit cp.test.typetests;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -88,51 +88,57 @@ implementation
 const
   { Base class with one virtual method — has a vtable/vptr }
   SrcBase =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TAnimal = class'                           + LineEnding +
-    '    procedure Speak; virtual; begin end;'    + LineEnding +
-    '  end;'                                      + LineEnding +
-    'var A: TAnimal;'                             + LineEnding +
-    '    R: Boolean;'                             + LineEnding +
-    'begin'                                       + LineEnding +
-    '  A := TAnimal.Create;'                      + LineEnding +
-    '  R := A is TAnimal'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TAnimal = class
+            procedure Speak; virtual; begin end;
+          end;
+        var A: TAnimal;
+            R: Boolean;
+        begin
+          A := TAnimal.Create;
+          R := A is TAnimal
+        end.
+        ''';
 
   SrcInherit =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TAnimal = class'                           + LineEnding +
-    '    procedure Speak; virtual; begin end;'    + LineEnding +
-    '  end;'                                      + LineEnding +
-    '  TDog = class(TAnimal)'                     + LineEnding +
-    '    procedure Speak; override; begin end;'   + LineEnding +
-    '  end;'                                      + LineEnding +
-    'var A: TAnimal;'                             + LineEnding +
-    '    D: TDog;'                                + LineEnding +
-    '    R: Boolean;'                             + LineEnding +
-    'begin'                                       + LineEnding +
-    '  D := TDog.Create;'                         + LineEnding +
-    '  A := D;'                                   + LineEnding +
-    '  R := A is TDog'                            + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TAnimal = class
+            procedure Speak; virtual; begin end;
+          end;
+          TDog = class(TAnimal)
+            procedure Speak; override; begin end;
+          end;
+        var A: TAnimal;
+            D: TDog;
+            R: Boolean;
+        begin
+          D := TDog.Create;
+          A := D;
+          R := A is TDog
+        end.
+        ''';
 
   SrcAsExpr =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TAnimal = class'                           + LineEnding +
-    '    procedure Speak; virtual; begin end;'    + LineEnding +
-    '  end;'                                      + LineEnding +
-    '  TDog = class(TAnimal)'                     + LineEnding +
-    '    procedure Speak; override; begin end;'   + LineEnding +
-    '  end;'                                      + LineEnding +
-    'var A: TAnimal;'                             + LineEnding +
-    '    D: TDog;'                                + LineEnding +
-    'begin'                                       + LineEnding +
-    '  A := TDog.Create;'                         + LineEnding +
-    '  D := A as TDog'                            + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TAnimal = class
+            procedure Speak; virtual; begin end;
+          end;
+          TDog = class(TAnimal)
+            procedure Speak; override; begin end;
+          end;
+        var A: TAnimal;
+            D: TDog;
+        begin
+          A := TDog.Create;
+          D := A as TDog
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                             }
@@ -286,12 +292,14 @@ end;
 procedure TTypeTestTests.TestSemantic_IsExpr_NonClass_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'       + LineEnding +
-    'var X: Integer;'  + LineEnding +
-    '    R: Boolean;'  + LineEnding +
-    'begin'            + LineEnding +
-    '  R := X is Integer' + LineEnding +
-    'end.');
+    '''
+        program P;
+        var X: Integer;
+            R: Boolean;
+        begin
+          R := X is Integer
+        end.
+        ''');
 end;
 
 procedure TTypeTestTests.TestSemantic_AsExpr_ClassInstance_OK;
@@ -313,12 +321,14 @@ end;
 procedure TTypeTestTests.TestSemantic_AsExpr_NonClass_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'        + LineEnding +
-    'var X: Integer;'   + LineEnding +
-    '    Y: Integer;'   + LineEnding +
-    'begin'             + LineEnding +
-    '  Y := X as Integer' + LineEnding +
-    'end.');
+    '''
+        program P;
+        var X: Integer;
+            Y: Integer;
+        begin
+          Y := X as Integer
+        end.
+        ''');
 end;
 
 { ------------------------------------------------------------------ }
@@ -403,14 +413,16 @@ end;
 
 const
   SrcClassType =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TFoo = class end;'                         + LineEnding +
-    'var F: TFoo; CT: Pointer;'                   + LineEnding +
-    'begin'                                       + LineEnding +
-    '  F := TFoo.Create;'                         + LineEnding +
-    '  CT := F.ClassType'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class end;
+        var F: TFoo; CT: Pointer;
+        begin
+          F := TFoo.Create;
+          CT := F.ClassType
+        end.
+        ''';
 
 procedure TTypeTestTests.TestSemantic_ClassType_OK;
 var P: TProgram;
@@ -444,8 +456,10 @@ begin
   { TClass declared as a built-in alias of Pointer — using it for a
     var declaration must succeed. }
   P := AnalyseSrc(
-    'program P; var C: TClass;'                   + LineEnding +
-    'begin C := nil end.');
+    '''
+        program P; var C: TClass;
+        begin C := nil end.
+        ''');
   P.Free;
 end;
 

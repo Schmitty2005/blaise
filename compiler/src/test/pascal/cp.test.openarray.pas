@@ -16,7 +16,7 @@ unit cp.test.openarray;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -120,56 +120,68 @@ end;
 
 const
   SrcPrintFirst =
-    'program OA;'                                      + LineEnding +
-    'procedure PrintFirst(const A: array of string);'  + LineEnding +
-    'begin'                                             + LineEnding +
-    'end;'                                             + LineEnding +
-    'begin end.';
+    '''
+        program OA;
+        procedure PrintFirst(const A: array of string);
+        begin
+        end;
+        begin end.
+        ''';
 
   SrcHighLow =
-    'program OA;'                                      + LineEnding +
-    'function Len(const A: array of string): Integer;' + LineEnding +
-    'var H, L: Integer;'                               + LineEnding +
-    'begin'                                            + LineEnding +
-    '  H := High(A);'                                  + LineEnding +
-    '  L := Low(A);'                                   + LineEnding +
-    '  Result := H - L + 1'                            + LineEnding +
-    'end;'                                             + LineEnding +
-    'begin end.';
+    '''
+        program OA;
+        function Len(const A: array of string): Integer;
+        var H, L: Integer;
+        begin
+          H := High(A);
+          L := Low(A);
+          Result := H - L + 1
+        end;
+        begin end.
+        ''';
 
   SrcSubscript =
-    'program OA;'                                      + LineEnding +
-    'function First(const A: array of string): string;'+ LineEnding +
-    'begin'                                            + LineEnding +
-    '  Result := A[0]'                                 + LineEnding +
-    'end;'                                             + LineEnding +
-    'begin end.';
+    '''
+        program OA;
+        function First(const A: array of string): string;
+        begin
+          Result := A[0]
+        end;
+        begin end.
+        ''';
 
   SrcForward =
-    'program OA;'                                      + LineEnding +
-    'procedure Inner(const B: array of string);'       + LineEnding +
-    'begin end;'                                       + LineEnding +
-    'procedure Outer(const A: array of string);'       + LineEnding +
-    'begin'                                            + LineEnding +
-    '  Inner(A)'                                       + LineEnding +
-    'end;'                                             + LineEnding +
-    'begin end.';
+    '''
+        program OA;
+        procedure Inner(const B: array of string);
+        begin end;
+        procedure Outer(const A: array of string);
+        begin
+          Inner(A)
+        end;
+        begin end.
+        ''';
 
   SrcLiteralCall =
-    'program OA;'                                      + LineEnding +
-    'procedure Print(const A: array of string);'       + LineEnding +
-    'begin end;'                                       + LineEnding +
-    'begin'                                            + LineEnding +
-    '  Print([''hello'', ''world''])'                  + LineEnding +
-    'end.';
+    '''
+        program OA;
+        procedure Print(const A: array of string);
+        begin end;
+        begin
+          Print(['hello', 'world'])
+        end.
+        ''';
 
   SrcLiteralSingle =
-    'program OA;'                                      + LineEnding +
-    'procedure Print(const A: array of string);'       + LineEnding +
-    'begin end;'                                       + LineEnding +
-    'begin'                                            + LineEnding +
-    '  Print([''only''])'                              + LineEnding +
-    'end.';
+    '''
+        program OA;
+        procedure Print(const A: array of string);
+        begin end;
+        begin
+          Print(['only'])
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Parser tests                                                        }
@@ -212,10 +224,12 @@ procedure TOpenArrayTests.TestParse_OpenArray_IntegerElement;
 var P: TProgram; MD: TMethodDecl; Par: TMethodParam;
 begin
   P := ParseSrc(
-    'program T;'                                       + LineEnding +
-    'procedure Sum(const A: array of Integer);'        + LineEnding +
-    'begin end;'                                       + LineEnding +
-    'begin end.');
+    '''
+        program T;
+        procedure Sum(const A: array of Integer);
+        begin end;
+        begin end.
+        ''');
   try
     MD  := TMethodDecl(P.Block.ProcDecls[0]);
     Par := TMethodParam(MD.Params[0]);
@@ -228,10 +242,12 @@ procedure TOpenArrayTests.TestParse_OpenArray_ValueParam_IsNotOpenArray;
 var P: TProgram; MD: TMethodDecl; Par: TMethodParam;
 begin
   P := ParseSrc(
-    'program T;'                                       + LineEnding +
-    'procedure Foo(X: Integer);'                       + LineEnding +
-    'begin end;'                                       + LineEnding +
-    'begin end.');
+    '''
+        program T;
+        procedure Foo(X: Integer);
+        begin end;
+        begin end.
+        ''');
   try
     MD  := TMethodDecl(P.Block.ProcDecls[0]);
     Par := TMethodParam(MD.Params[0]);
@@ -430,7 +446,7 @@ begin
   AssertTrue('first storel emitted',  Pos('storel', IR) > 0);
   { Count occurrences: need at least 2 storel instructions }
   AssertTrue('second storel emitted',
-    Pos('storel', IR) <> LastDelimiter('storel', IR) + 1);
+    PosEx('storel', IR, Pos('storel', IR) + 1) > 0);
 end;
 
 procedure TOpenArrayTests.TestCodegen_ArrayLiteral_HighIndexIsOne;

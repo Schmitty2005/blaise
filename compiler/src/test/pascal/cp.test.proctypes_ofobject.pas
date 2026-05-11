@@ -21,8 +21,11 @@ unit cp.test.proctypes_ofobject;
 interface
 
 uses
-  Classes, SysUtils, Process, fpcunit, testregistry,
+  Classes, SysUtils, Process, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
+
+function ProjectRootOFO: string;
+function RunCmdOFO(const AExe: string; const AArgs: array of string): Integer;
 
 type
   TProcTypesOfObjectTests = class(TTestCase)
@@ -97,35 +100,54 @@ begin
   end;
 end;
 
-function TProcTypesOfObjectTests.CompileAndRun(const ASrc: string): string;
-
-  function ProjectRoot: string;
-  var
-    Dir, Parent: string;
-    Steps:       Integer;
+function ProjectRootOFO: string;
+var
+  Dir, Parent: string;
+  Steps:       Integer;
+begin
+  Result := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
+  if Result <> '' then
   begin
-    Result := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
-    if Result <> '' then
+    Result := IncludeTrailingPathDelimiter(Result);
+    Exit;
+  end;
+  Dir := GetCurrentDir;
+  for Steps := 0 to 5 do
+  begin
+    if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
+       DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'rtl') then
     begin
-      Result := IncludeTrailingPathDelimiter(Result);
+      Result := IncludeTrailingPathDelimiter(Dir);
       Exit;
     end;
-    Dir := GetCurrentDir;
-    for Steps := 0 to 5 do
-    begin
-      if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
-         DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'rtl') then
-      begin
-        Result := IncludeTrailingPathDelimiter(Dir);
-        Exit;
-      end;
-      Parent := ExtractFileDir(Dir);
-      if (Parent = '') or (Parent = Dir) then Break;
-      Dir := Parent;
-    end;
-    Result := IncludeTrailingPathDelimiter(GetCurrentDir);
+    Parent := ExtractFileDir(Dir);
+    if (Parent = '') or (Parent = Dir) then Break;
+    Dir := Parent;
   end;
+  Result := IncludeTrailingPathDelimiter(GetCurrentDir);
+end;
 
+function RunCmdOFO(const AExe: string; const AArgs: array of string): Integer;
+var
+  Proc:  TProcess;
+  I:     Integer;
+  Chunk: string;
+begin
+  Proc := TProcess.Create(nil);
+  try
+    Proc.Executable := AExe;
+    for I := Low(AArgs) to High(AArgs) do
+      Proc.Parameters.Add(AArgs[I]);
+    Proc.Execute;
+    repeat Chunk := Proc.ReadOutput; until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit;
+    Result := Proc.ExitCode;
+  finally
+    Proc.Free;
+  end;
+end;
+
+function TProcTypesOfObjectTests.CompileAndRun(const ASrc: string): string;
 var
   IR:                       string;
   Root:                     string;
@@ -133,10 +155,10 @@ var
   IRFile, AsmFile, BinFile: string;
   Lst:                      TStringList;
   Proc:                     TProcess;
-  OutLst:                   TStringList;
+  Chunk:                    string;
 begin
   Result := '';
-  Root   := ProjectRoot;
+  Root   := ProjectRootOFO;
   QBE    := Root + 'vendor/qbe/qbe';
   RTL    := Root + 'compiler/target/blaise_rtl.a';
   if not (FileExists(QBE) and FileExists(RTL)) then
@@ -159,51 +181,30 @@ begin
     Lst.Free;
   end;
 
-  Proc := TProcess.Create(nil);
-  try
-    Proc.Executable := QBE;
-    Proc.Parameters.Add('-o');
-    Proc.Parameters.Add(AsmFile);
-    Proc.Parameters.Add(IRFile);
-    Proc.Options := [poWaitOnExit];
-    Proc.Execute;
-    if Proc.ExitStatus <> 0 then
-    begin
-      Result := '<qbe-failed>';
-      Exit;
-    end;
-  finally
-    Proc.Free;
+  if RunCmdOFO(QBE, ['-o', AsmFile, IRFile]) <> 0 then
+  begin
+    Result := '<qbe-failed>';
+    Exit;
+  end;
+
+  if RunCmdOFO('cc', ['-o', BinFile, AsmFile, RTL]) <> 0 then
+  begin
+    Result := '<link-failed>';
+    Exit;
   end;
 
   Proc := TProcess.Create(nil);
-  try
-    Proc.Executable := 'cc';
-    Proc.Parameters.Add('-o');
-    Proc.Parameters.Add(BinFile);
-    Proc.Parameters.Add(AsmFile);
-    Proc.Parameters.Add(RTL);
-    Proc.Options := [poWaitOnExit];
-    Proc.Execute;
-    if Proc.ExitStatus <> 0 then
-    begin
-      Result := '<link-failed>';
-      Exit;
-    end;
-  finally
-    Proc.Free;
-  end;
-
-  Proc := TProcess.Create(nil);
-  OutLst := TStringList.Create;
   try
     Proc.Executable := BinFile;
-    Proc.Options := [poWaitOnExit, poUsePipes];
     Proc.Execute;
-    OutLst.LoadFromStream(Proc.Output);
-    Result := TrimRight(OutLst.Text);
+    Result := '';
+    repeat
+      Chunk := Proc.ReadOutput;
+      Result := Result + Chunk;
+    until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit;
+    Result := Trim(Result);
   finally
-    OutLst.Free;
     Proc.Free;
   end;
 end;
@@ -215,9 +216,11 @@ end;
 procedure TProcTypesOfObjectTests.TestParse_OfObject_SetsIsMethodPtr;
 const
   Src =
-    'program P;'                                + LineEnding +
-    'type TM = procedure of object;'            + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type TM = procedure of object;
+        begin end.
+        ''';
 var
   Prog: TProgram;
   TD:   TTypeDecl;
@@ -236,9 +239,11 @@ end;
 procedure TProcTypesOfObjectTests.TestParse_BareProcType_LeavesIsMethodPtrFalse;
 const
   Src =
-    'program P;'                                + LineEnding +
-    'type TP = procedure;'                      + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type TP = procedure;
+        begin end.
+        ''';
 var
   Def: TProceduralTypeDef;
 begin
@@ -249,9 +254,11 @@ end;
 procedure TProcTypesOfObjectTests.TestParse_FunctionOfObject_AcceptsReturnType;
 const
   Src =
-    'program P;'                                                   + LineEnding +
-    'type TF = function (X: Integer): Integer of object;'          + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type TF = function (X: Integer): Integer of object;
+        begin end.
+        ''';
 var
   Def: TProceduralTypeDef;
 begin
@@ -268,9 +275,11 @@ end;
 procedure TProcTypesOfObjectTests.TestSemantic_TMethod_IsRegistered;
 const
   Src =
-    'program P;'                                + LineEnding +
-    'var M: TMethod;'                           + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        var M: TMethod;
+        begin end.
+        ''';
 var
   Prog: TProgram;
   VD:   TVarDecl;
@@ -289,9 +298,11 @@ end;
 procedure TProcTypesOfObjectTests.TestSemantic_TMethod_HasCodeAndDataFields;
 const
   Src =
-    'program P;'                                + LineEnding +
-    'var M: TMethod;'                           + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        var M: TMethod;
+        begin end.
+        ''';
 var
   Prog: TProgram;
   RT:   TRecordTypeDesc;
@@ -311,10 +322,12 @@ end;
 procedure TProcTypesOfObjectTests.TestSemantic_MethodPtr_PropagatesIsMethodPtr;
 const
   Src =
-    'program P;'                                + LineEnding +
-    'type TM = procedure of object;'            + LineEnding +
-    'var G: TM;'                                + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type TM = procedure of object;
+        var G: TM;
+        begin end.
+        ''';
 var
   Prog:     TProgram;
   ProcDesc: TProceduralTypeDesc;
@@ -336,12 +349,14 @@ end;
 procedure TProcTypesOfObjectTests.TestCodegen_MethodPtrLocal_Allocates16Bytes;
 const
   Src =
-    'program P;'                                + LineEnding +
-    'type TM = procedure of object;'            + LineEnding +
-    'procedure Q;'                              + LineEnding +
-    'var G: TM;'                                + LineEnding +
-    'begin end;'                                + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type TM = procedure of object;
+        procedure Q;
+        var G: TM;
+        begin end;
+        begin end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -352,10 +367,12 @@ end;
 procedure TProcTypesOfObjectTests.TestCodegen_MethodPtrGlobal_DataIs16Bytes;
 const
   Src =
-    'program P;'                                + LineEnding +
-    'type TM = procedure of object;'            + LineEnding +
-    'var G: TM;'                                + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type TM = procedure of object;
+        var G: TM;
+        begin end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -366,12 +383,14 @@ end;
 procedure TProcTypesOfObjectTests.TestCodegen_MethodPtrAssign_CallsMemcpy16;
 const
   Src =
-    'program P;'                                + LineEnding +
-    'type TM = procedure of object;'            + LineEnding +
-    'var G: TM; M: TMethod;'                    + LineEnding +
-    'begin'                                     + LineEnding +
-    '  G := TM(M)'                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        type TM = procedure of object;
+        var G: TM; M: TMethod;
+        begin
+          G := TM(M)
+        end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -384,10 +403,12 @@ end;
 procedure TProcTypesOfObjectTests.TestCodegen_MethodPtrCall_LoadsCodeAndData;
 const
   Src =
-    'program P;'                                + LineEnding +
-    'type TM = procedure of object;'            + LineEnding +
-    'var G: TM;'                                + LineEnding +
-    'begin G end.';
+    '''
+        program P;
+        type TM = procedure of object;
+        var G: TM;
+        begin G end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);
@@ -405,24 +426,26 @@ end;
 procedure TProcTypesOfObjectTests.TestE2E_MethodPtr_NoArgs;
 const
   Src =
-    'program P;'                                + LineEnding +
-    'type'                                      + LineEnding +
-    '  TFoo = class(TObject)'                   + LineEnding +
-    '  published'                               + LineEnding +
-    '    procedure SayHi;'                      + LineEnding +
-    '  end;'                                    + LineEnding +
-    '  TGreet = procedure of object;'           + LineEnding +
-    'procedure TFoo.SayHi;'                     + LineEnding +
-    'begin WriteLn(''hi'') end;'                + LineEnding +
-    'var F: TFoo; M: TMethod; G: TGreet;'       + LineEnding +
-    'begin'                                     + LineEnding +
-    '  F := TFoo.Create;'                       + LineEnding +
-    '  M.Code := MethodAddress(F, ''SayHi'');'  + LineEnding +
-    '  M.Data := F;'                            + LineEnding +
-    '  G := TGreet(M);'                         + LineEnding +
-    '  G;'                                      + LineEnding +
-    '  F.Free'                                  + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          published
+            procedure SayHi;
+          end;
+          TGreet = procedure of object;
+        procedure TFoo.SayHi;
+        begin WriteLn('hi') end;
+        var F: TFoo; M: TMethod; G: TGreet;
+        begin
+          F := TFoo.Create;
+          M.Code := MethodAddress(F, 'SayHi');
+          M.Data := F;
+          G := TGreet(M);
+          G;
+          F.Free
+        end.
+        ''';
 begin
   AssertEquals('zero-arg method-ptr call invokes the method',
     'hi', CompileAndRun(Src));
@@ -431,55 +454,59 @@ end;
 procedure TProcTypesOfObjectTests.TestE2E_MethodPtr_WithArgs;
 const
   Src =
-    'program P;'                                              + LineEnding +
-    'type'                                                    + LineEnding +
-    '  TFoo = class(TObject)'                                 + LineEnding +
-    '  published'                                             + LineEnding +
-    '    procedure Show(const S: string; N: Integer);'        + LineEnding +
-    '  end;'                                                  + LineEnding +
-    '  TShow = procedure (const S: string; N: Integer) of object;' + LineEnding +
-    'procedure TFoo.Show(const S: string; N: Integer);'       + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  WriteLn(S);'                                           + LineEnding +
-    '  WriteLn(IntToStr(N))'                                  + LineEnding +
-    'end;'                                                    + LineEnding +
-    'var F: TFoo; M: TMethod; G: TShow;'                      + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  F := TFoo.Create;'                                     + LineEnding +
-    '  M.Code := MethodAddress(F, ''Show'');'                 + LineEnding +
-    '  M.Data := F;'                                          + LineEnding +
-    '  G := TShow(M);'                                        + LineEnding +
-    '  G(''hello'', 42);'                                     + LineEnding +
-    '  F.Free'                                                + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class(TObject)
+          published
+            procedure Show(const S: string; N: Integer);
+          end;
+          TShow = procedure (const S: string; N: Integer) of object;
+        procedure TFoo.Show(const S: string; N: Integer);
+        begin
+          WriteLn(S);
+          WriteLn(IntToStr(N))
+        end;
+        var F: TFoo; M: TMethod; G: TShow;
+        begin
+          F := TFoo.Create;
+          M.Code := MethodAddress(F, 'Show');
+          M.Data := F;
+          G := TShow(M);
+          G('hello', 42);
+          F.Free
+        end.
+        ''';
 begin
   AssertEquals('args are forwarded after Self',
-    'hello' + LineEnding + '42', CompileAndRun(Src));
+    'hello' + #10 + '42', CompileAndRun(Src));
 end;
 
 procedure TProcTypesOfObjectTests.TestE2E_MethodPtr_PreservesSelf;
 const
   Src =
-    'program P;'                                       + LineEnding +
-    'type'                                             + LineEnding +
-    '  TCounter = class(TObject)'                      + LineEnding +
-    '    Value: Integer;'                              + LineEnding +
-    '  published'                                      + LineEnding +
-    '    procedure Print;'                             + LineEnding +
-    '  end;'                                           + LineEnding +
-    '  TPrintMethod = procedure of object;'            + LineEnding +
-    'procedure TCounter.Print;'                        + LineEnding +
-    'begin WriteLn(IntToStr(Value)) end;'              + LineEnding +
-    'var C: TCounter; M: TMethod; G: TPrintMethod;'    + LineEnding +
-    'begin'                                            + LineEnding +
-    '  C := TCounter.Create;'                          + LineEnding +
-    '  C.Value := 99;'                                 + LineEnding +
-    '  M.Code := MethodAddress(C, ''Print'');'         + LineEnding +
-    '  M.Data := C;'                                   + LineEnding +
-    '  G := TPrintMethod(M);'                          + LineEnding +
-    '  G;'                                             + LineEnding +
-    '  C.Free'                                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TCounter = class(TObject)
+            Value: Integer;
+          published
+            procedure Print;
+          end;
+          TPrintMethod = procedure of object;
+        procedure TCounter.Print;
+        begin WriteLn(IntToStr(Value)) end;
+        var C: TCounter; M: TMethod; G: TPrintMethod;
+        begin
+          C := TCounter.Create;
+          C.Value := 99;
+          M.Code := MethodAddress(C, 'Print');
+          M.Data := C;
+          G := TPrintMethod(M);
+          G;
+          C.Free
+        end.
+        ''';
 begin
   AssertEquals('Self is bound through the call: instance state visible',
     '99', CompileAndRun(Src));

@@ -29,7 +29,7 @@ unit cp.test.e2e;
 interface
 
 uses
-  Classes, SysUtils, Process, fpcunit, testregistry,
+  Classes, SysUtils, Process, bcl.testing,
   uLexer, uParser, uAST, uSemantic, uCodeGenQBE;
 
 type
@@ -44,7 +44,10 @@ type
     function  CompileAndRun(const ASrc:       string;
                             out   AStdout:    string;
                             out   AExitCode:  Integer;
-                            const AExtraArgs: array of string): Boolean;
+                            const AExtraArgs: array of string): Boolean; overload;
+    function  CompileAndRun(const ASrc:    string;
+                            out AStdout:   string;
+                            out AExitCode: Integer): Boolean; overload;
     function  RunUnderValgrind(const ASrc: string; out ALog: string): Boolean;
     function  ToolchainAvailable: Boolean;
   protected
@@ -396,48 +399,50 @@ begin
   end;
 end;
 
-{ Runs a process, captures stdout+stderr into AStdout, returns exit code.
-  Returns -1 if the process could not be started. }
-function RunProc(const AExe:      string;
-                 const AArgs:     array of string;
-                 out   AStdout:   string;
-                 AInheritStdErr:  Boolean): Integer;
+{ Runs a process with no arguments, captures stdout, returns exit code. }
+function RunProcNoArgs(const AExe: string; out AStdout: string): Integer;
 var
-  Proc: TProcess;
-  Buf:  array[0..4095] of Byte;
-  N:    LongInt;
-  S:    string;
-  I:    Integer;
+  Proc:  TProcess;
+  Chunk: string;
+begin
+  Proc := TProcess.Create(nil);
+  try
+    Proc.Executable := AExe;
+    Proc.Execute;
+    AStdout := '';
+    repeat
+      Chunk := Proc.ReadOutput;
+      AStdout := AStdout + Chunk;
+    until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit;
+    Result := Proc.ExitCode;
+  finally
+    Proc.Free;
+  end;
+end;
+
+{ Runs a process, captures stdout into AStdout, returns exit code. }
+function RunProc(const AExe:     string;
+                 const AArgs:    array of string;
+                 out   AStdout:  string;
+                 AInheritStdErr: Boolean): Integer;
+var
+  Proc:  TProcess;
+  Chunk: string;
+  I:     Integer;
 begin
   Proc := TProcess.Create(nil);
   try
     Proc.Executable := AExe;
     for I := Low(AArgs) to High(AArgs) do
       Proc.Parameters.Add(AArgs[I]);
-    Proc.Options := [poUsePipes];
-    if AInheritStdErr then
-      Proc.Options := Proc.Options + [poStderrToOutPut];
-    try
-      Proc.Execute;
-    except
-      Result := -1;
-      Exit;
-    end;
+    Proc.Execute;
     AStdout := '';
-    while Proc.Running or (Proc.Output.NumBytesAvailable > 0) do
-    begin
-      if Proc.Output.NumBytesAvailable > 0 then
-      begin
-        N := Proc.Output.Read(Buf, SizeOf(Buf));
-        if N > 0 then
-        begin
-          SetString(S, PChar(@Buf[0]), N);
-          AStdout := AStdout + S;
-        end;
-      end
-      else
-        Sleep(1);
-    end;
+    repeat
+      Chunk := Proc.ReadOutput;
+      AStdout := AStdout + Chunk;
+    until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit;
     Result := Proc.ExitCode;
   finally
     Proc.Free;
@@ -505,6 +510,65 @@ begin
   DeleteFile(BinFile);
 end;
 
+function TE2ETests.CompileAndRun(const ASrc: string;
+                                 out AStdout: string;
+                                 out AExitCode: Integer): Boolean;
+var
+  IR:       string;
+  Base:     string;
+  IRFile:   string;
+  AsmFile:  string;
+  BinFile:  string;
+  ToolOut:  string;
+  Rc:       Integer;
+  Lst:      TStringList;
+begin
+  Result    := False;
+  AStdout   := '';
+  AExitCode := -1;
+
+  Inc(FCounter);
+  Base    := IncludeTrailingPathDelimiter(FScratch) +
+             'case_' + IntToStr(GetProcessID) + '_' + IntToStr(FCounter);
+  IRFile  := Base + '.ssa';
+  AsmFile := Base + '.s';
+  BinFile := Base;
+
+  IR := CompileToIR(ASrc);
+
+  Lst := TStringList.Create;
+  try
+    Lst.Text := IR;
+    Lst.SaveToFile(IRFile);
+  finally
+    Lst.Free;
+  end;
+
+  Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut, True);
+  if Rc <> 0 then
+  begin
+    Fail('qbe failed (exit ' + IntToStr(Rc) + '): ' + ToolOut + #10 +
+         'IR file preserved at: ' + IRFile);
+    Exit;
+  end;
+
+  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL], ToolOut, True);
+  if Rc <> 0 then
+  begin
+    Fail('cc failed (exit ' + IntToStr(Rc) + '): ' + ToolOut + #10 +
+         'IR: ' + IRFile + #10 + 'asm: ' + AsmFile);
+    Exit;
+  end;
+
+  Rc := RunProcNoArgs(BinFile, AStdout);
+  AExitCode := Rc;
+  Result    := True;
+
+  DeleteFile(AsmFile);
+  DeleteFile(IRFile);
+  DeleteFile(BinFile);
+end;
+
 function TE2ETests.RunUnderValgrind(const ASrc: string;
                                     out   ALog: string): Boolean;
 var
@@ -561,7 +625,7 @@ end;
 { ------------------------------------------------------------------ }
 
 const
-  LE = LineEnding;
+  LE = #10;
 
   SrcBareTryFinally =
     'program P;'                  + LE +
@@ -639,7 +703,7 @@ begin
     Exit;
   end;
   AssertTrue('compile+run',
-    CompileAndRun(SrcBareTryFinally, Output, RCode, []));
+    CompileAndRun(SrcBareTryFinally, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('stdout',
     'in_try' + LE + 'in_finally' + LE, Output);
@@ -654,7 +718,7 @@ begin
     Exit;
   end;
   AssertTrue('compile+run',
-    CompileAndRun(SrcPreservesLocals, Output, RCode, []));
+    CompileAndRun(SrcPreservesLocals, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('locals preserved',
     '11' + LE + '22' + LE + '33' + LE + '66' + LE, Output);
@@ -669,7 +733,7 @@ begin
     Exit;
   end;
   AssertTrue('compile+run',
-    CompileAndRun(SrcNestedTryFinally, Output, RCode, []));
+    CompileAndRun(SrcNestedTryFinally, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('stdout',
     'inner_try' + LE + 'inner_fin' + LE + 'outer_fin' + LE, Output);
@@ -684,7 +748,7 @@ begin
     Exit;
   end;
   AssertTrue('compile+run',
-    CompileAndRun(SrcVirtualDispatchInTry, Output, RCode, []));
+    CompileAndRun(SrcVirtualDispatchInTry, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('stdout (virtual -> marked -> 1)', '1' + LE, Output);
 end;
@@ -717,7 +781,7 @@ begin
   end;
 
   AssertTrue('compile+run milestone',
-    CompileAndRun(Src, Output, RCode, []));
+    CompileAndRun(Src, Output, RCode));
   AssertEquals('milestone exit code', 0, RCode);
 
   Expected :=
@@ -1025,7 +1089,7 @@ begin
     Ignore('qbe or RTL not built');
     Exit;
   end;
-  AssertTrue(CompileAndRun(SrcBoolOps, Output, RCode, []));
+  AssertTrue(CompileAndRun(SrcBoolOps, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('all three branches fire',
     't1' + LE + 't2' + LE + 't3' + LE, Output);
@@ -1039,7 +1103,7 @@ begin
     Ignore('qbe or RTL not built');
     Exit;
   end;
-  AssertTrue(CompileAndRun(SrcMultiArg, Output, RCode, []));
+  AssertTrue(CompileAndRun(SrcMultiArg, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('three values concatenated with trailing newline',
     '123' + LE, Output);
@@ -1053,7 +1117,7 @@ begin
     Ignore('qbe or RTL not built');
     Exit;
   end;
-  AssertTrue(CompileAndRun(SrcForBreak, Output, RCode, []));
+  AssertTrue(CompileAndRun(SrcForBreak, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('loop broke at I=5', '5' + LE, Output);
 end;
@@ -1066,7 +1130,7 @@ begin
     Ignore('qbe or RTL not built');
     Exit;
   end;
-  AssertTrue(CompileAndRun(SrcExitFunc, Output, RCode, []));
+  AssertTrue(CompileAndRun(SrcExitFunc, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('exit early for positive, compute for negative',
     '7' + LE + '9' + LE, Output);
@@ -1080,7 +1144,7 @@ begin
     Ignore('qbe or RTL not built');
     Exit;
   end;
-  AssertTrue(CompileAndRun(SrcChainedRecord, Output, RCode, []));
+  AssertTrue(CompileAndRun(SrcChainedRecord, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
   AssertEquals('chained read of zero-initialised field', '0' + LE, Output);
 end;
@@ -1094,7 +1158,7 @@ begin
     Exit;
   end;
   { Sanity: program runs and prints 42 }
-  AssertTrue(CompileAndRun(SrcClassArcNoFree, Output, RCode, []));
+  AssertTrue(CompileAndRun(SrcClassArcNoFree, Output, RCode));
   AssertEquals('exit 0',       0,         RCode);
   AssertEquals('field reread', '42' + LE, Output);
   { Leak-freedom: under valgrind, every class instance must be reclaimed
@@ -1120,7 +1184,7 @@ begin
     Ignore('qbe or RTL not built');
     Exit;
   end;
-  AssertTrue(CompileAndRun(SrcInterfaceArcLifetime, Output, RCode, []));
+  AssertTrue(CompileAndRun(SrcInterfaceArcLifetime, Output, RCode));
   AssertEquals('exit 0',                  0,         RCode);
   AssertEquals('interface method result', '17' + LE, Output);
   if RunProc('valgrind', ['--version'], Log, True) <> 0 then
@@ -1144,7 +1208,7 @@ begin
     Ignore('qbe or RTL not built');
     Exit;
   end;
-  AssertTrue(CompileAndRun(SrcWeakCycle, Output, RCode, []));
+  AssertTrue(CompileAndRun(SrcWeakCycle, Output, RCode));
   AssertEquals('exit 0',                0,              RCode);
   AssertEquals('values printed via A/B', '1' + LE + '2' + LE, Output);
   if RunProc('valgrind', ['--version'], Log, True) <> 0 then
@@ -1172,7 +1236,7 @@ begin
     Ignore('qbe or RTL not built');
     Exit;
   end;
-  AssertTrue('compile+run', CompileAndRun(SrcDestroyFreesBuffer, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcDestroyFreesBuffer, Output, RCode));
   AssertEquals('exit 0',  0,          RCode);
   AssertEquals('stdout',  'ok' + LE,  Output);
   if RunProc('valgrind', ['--version'], Log, True) <> 0 then
@@ -1200,7 +1264,7 @@ begin
     Ignore('qbe or RTL not built');
     Exit;
   end;
-  AssertTrue('compile+run', CompileAndRun(SrcTListARCValgrind, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcTListARCValgrind, Output, RCode));
   AssertEquals('exit 0',  0,   RCode);
   AssertEquals('stdout',
     '10' + LE + '20' + LE + '30' + LE + '3' + LE, Output);
@@ -1242,7 +1306,7 @@ begin
   finally
     Lst.Free;
   end;
-  AssertTrue('compile+run milestone', CompileAndRun(Src, Output, RCode, []));
+  AssertTrue('compile+run milestone', CompileAndRun(Src, Output, RCode));
   AssertEquals('milestone exit code', 0, RCode);
   Expected :=
     'list.count=5'             + LE +
@@ -1303,74 +1367,88 @@ end;
 
 const
   SrcStringLength =
-    'program P;'                + LineEnding +
-    'var s: string;'            + LineEnding +
-    'var n: Integer;'           + LineEnding +
-    'begin'                     + LineEnding +
-    '  s := ''hello'';'         + LineEnding +
-    '  n := Length(s);'         + LineEnding +
-    '  WriteLn(n)'              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s: string;
+        var n: Integer;
+        begin
+          s := 'hello';
+          n := Length(s);
+          WriteLn(n)
+        end.
+        ''';
 
   SrcStringPos =
-    'program P;'                       + LineEnding +
-    'var s, sub: string;'              + LineEnding +
-    'var n: Integer;'                  + LineEnding +
-    'begin'                            + LineEnding +
-    '  s   := ''hello world'';'        + LineEnding +
-    '  sub := ''world'';'              + LineEnding +
-    '  n   := Pos(sub, s);'            + LineEnding +
-    '  WriteLn(n)'                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s, sub: string;
+        var n: Integer;
+        begin
+          s   := 'hello world';
+          sub := 'world';
+          n   := Pos(sub, s);
+          WriteLn(n)
+        end.
+        ''';
 
   SrcStringCopy =
-    'program P;'                       + LineEnding +
-    'var s, t: string;'                + LineEnding +
-    'begin'                            + LineEnding +
-    '  s := ''hello'';'                + LineEnding +
-    '  t := Copy(s, 1, 3);'            + LineEnding +
-    '  WriteLn(t)'                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s, t: string;
+        begin
+          s := 'hello';
+          t := Copy(s, 1, 3);
+          WriteLn(t)
+        end.
+        ''';
 
   SrcStringUpperCase =
-    'program P;'               + LineEnding +
-    'var s, t: string;'        + LineEnding +
-    'begin'                    + LineEnding +
-    '  s := ''hello'';'        + LineEnding +
-    '  t := UpperCase(s);'     + LineEnding +
-    '  WriteLn(t)'             + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s, t: string;
+        begin
+          s := 'hello';
+          t := UpperCase(s);
+          WriteLn(t)
+        end.
+        ''';
 
   SrcStringSameText =
-    'program P;'                       + LineEnding +
-    'var s, t: string;'                + LineEnding +
-    'var b: Boolean;'                  + LineEnding +
-    'begin'                            + LineEnding +
-    '  s := ''Hello'';'                + LineEnding +
-    '  t := ''hello'';'                + LineEnding +
-    '  b := SameText(s, t);'           + LineEnding +
-    '  WriteLn(b)'                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s, t: string;
+        var b: Boolean;
+        begin
+          s := 'Hello';
+          t := 'hello';
+          b := SameText(s, t);
+          WriteLn(b)
+        end.
+        ''';
 
   SrcStringIntToStr =
-    'program P;'                + LineEnding +
-    'var n: Integer;'           + LineEnding +
-    'var s: string;'            + LineEnding +
-    'begin'                     + LineEnding +
-    '  n := 42;'                + LineEnding +
-    '  s := IntToStr(n);'       + LineEnding +
-    '  WriteLn(s)'              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var n: Integer;
+        var s: string;
+        begin
+          n := 42;
+          s := IntToStr(n);
+          WriteLn(s)
+        end.
+        ''';
 
   SrcStringStrToInt =
-    'program P;'                + LineEnding +
-    'var s: string;'            + LineEnding +
-    'var n: Integer;'           + LineEnding +
-    'begin'                     + LineEnding +
-    '  s := ''123'';'           + LineEnding +
-    '  n := StrToInt(s);'       + LineEnding +
-    '  WriteLn(n)'              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s: string;
+        var n: Integer;
+        begin
+          s := '123';
+          n := StrToInt(s);
+          WriteLn(n)
+        end.
+        ''';
 
 procedure TE2ETests.TestRun_StringOps_Length;
 var
@@ -1378,7 +1456,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcStringLength, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcStringLength, Output, RCode));
   AssertEquals('Length(''hello'') = 5', '5', Trim(Output));
 end;
 
@@ -1408,7 +1486,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcStringUpperCase, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcStringUpperCase, Output, RCode));
   AssertEquals('UpperCase(''hello'') = ''HELLO''', 'HELLO', Trim(Output));
 end;
 
@@ -1418,7 +1496,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcStringSameText, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcStringSameText, Output, RCode));
   AssertEquals('SameText(''Hello'', ''hello'') = True (1)', '1', Trim(Output));
 end;
 
@@ -1428,7 +1506,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcStringIntToStr, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcStringIntToStr, Output, RCode));
   AssertEquals('IntToStr(42) = ''42''', '42', Trim(Output));
 end;
 
@@ -1438,26 +1516,30 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcStringStrToInt, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcStringStrToInt, Output, RCode));
   AssertEquals('StrToInt(''123'') = 123', '123', Trim(Output));
 end;
 
 const
   SrcStringStrToIntHex =
-    'program P;'                                  + LineEnding +
-    'var n: Integer;'                             + LineEnding +
-    'begin'                                       + LineEnding +
-    '  n := StrToInt(''$FF'');'                   + LineEnding +
-    '  WriteLn(n)'                                + LineEnding +
-    'end.';
+    '''
+        program P;
+        var n: Integer;
+        begin
+          n := StrToInt('$FF');
+          WriteLn(n)
+        end.
+        ''';
 
   SrcStringCopyMaxIntCount =
-    'program P;'                                  + LineEnding +
-    'var s: string;'                              + LineEnding +
-    'begin'                                       + LineEnding +
-    '  s := Copy(''^Integer'', 1, MaxInt);'       + LineEnding +
-    '  WriteLn(s)'                                + LineEnding +
-    'end.';
+    '''
+        program P;
+        var s: string;
+        begin
+          s := Copy('^Integer', 1, MaxInt);
+          WriteLn(s)
+        end.
+        ''';
 
 procedure TE2ETests.TestRun_StringOps_StrToInt_Hex;
 var
@@ -1465,7 +1547,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcStringStrToIntHex, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcStringStrToIntHex, Output, RCode));
   AssertEquals('StrToInt(''$FF'') = 255', '255', Trim(Output));
 end;
 
@@ -1481,15 +1563,17 @@ end;
 
 const
   SrcInt64PositiveAboveInt32 =
-    'program P;'                                  + LineEnding +
-    'var v: Int64;'                               + LineEnding +
-    'begin'                                       + LineEnding +
-    '  v := 1000000000;'                          + LineEnding +
-    '  v := v + v + 166136261;'                   + LineEnding +
-    '  if v < 0 then WriteLn(''neg'')'            + LineEnding +
-    '          else WriteLn(''pos'');'            + LineEnding +
-    '  WriteLn(IntToStr(v))'                      + LineEnding +
-    'end.';
+    '''
+        program P;
+        var v: Int64;
+        begin
+          v := 1000000000;
+          v := v + v + 166136261;
+          if v < 0 then WriteLn('neg')
+                  else WriteLn('pos');
+          WriteLn(IntToStr(v))
+        end.
+        ''';
 
 procedure TE2ETests.TestRun_Int64_PositiveAboveInt32_FormatsCorrectly;
 var
@@ -1497,43 +1581,49 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcInt64PositiveAboveInt32, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcInt64PositiveAboveInt32, Output, RCode));
   AssertEquals('Int64=2166136261 compares as positive and formats correctly',
-    'pos' + LineEnding + '2166136261', Trim(Output));
+    'pos' + #10 + '2166136261', Trim(Output));
 end;
 
 const
   SrcFormatIntArg =
-    'program P;'                           + LineEnding +
-    'var n: Integer;'                      + LineEnding +
-    'var s: string;'                       + LineEnding +
-    'begin'                                + LineEnding +
-    '  n := 42;'                           + LineEnding +
-    '  s := Format(''val=%d'', n);'        + LineEnding +
-    '  WriteLn(s)'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        var n: Integer;
+        var s: string;
+        begin
+          n := 42;
+          s := Format('val=%d', n);
+          WriteLn(s)
+        end.
+        ''';
 
   SrcFormatStrArg =
-    'program P;'                           + LineEnding +
-    'var t: string;'                       + LineEnding +
-    'var s: string;'                       + LineEnding +
-    'begin'                                + LineEnding +
-    '  t := ''world'';'                    + LineEnding +
-    '  s := Format(''hello %s'', t);'      + LineEnding +
-    '  WriteLn(s)'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        var t: string;
+        var s: string;
+        begin
+          t := 'world';
+          s := Format('hello %s', t);
+          WriteLn(s)
+        end.
+        ''';
 
   SrcFormatMixedArgs =
-    'program P;'                                 + LineEnding +
-    'var name: string;'                          + LineEnding +
-    'var age: Integer;'                          + LineEnding +
-    'var s: string;'                             + LineEnding +
-    'begin'                                      + LineEnding +
-    '  name := ''Alice'';'                       + LineEnding +
-    '  age  := 30;'                              + LineEnding +
-    '  s := Format(''%s=%d'', name, age);'       + LineEnding +
-    '  WriteLn(s)'                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        var name: string;
+        var age: Integer;
+        var s: string;
+        begin
+          name := 'Alice';
+          age  := 30;
+          s := Format('%s=%d', name, age);
+          WriteLn(s)
+        end.
+        ''';
 
 procedure TE2ETests.TestRun_StringOps_Format_IntArg;
 var
@@ -1541,7 +1631,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcFormatIntArg, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcFormatIntArg, Output, RCode));
   AssertEquals('Format int arg', 'val=42', Trim(Output));
 end;
 
@@ -1551,7 +1641,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcFormatStrArg, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcFormatStrArg, Output, RCode));
   AssertEquals('Format str arg', 'hello world', Trim(Output));
 end;
 
@@ -1561,7 +1651,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcFormatMixedArgs, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcFormatMixedArgs, Output, RCode));
   AssertEquals('Format mixed args', 'Alice=30', Trim(Output));
 end;
 
@@ -1571,271 +1661,285 @@ end;
 
 const
   SrcTObjectListBase2 =
-    'type'                                                             + LineEnding +
-    '  TObjectList = class'                                            + LineEnding +
-    '    FData:     ^Pointer;'                                         + LineEnding +
-    '    FCount:    Integer;'                                          + LineEnding +
-    '    FCapacity: Integer;'                                          + LineEnding +
-    '    procedure Grow;'                                              + LineEnding +
-    '    var OldCap, NewCap: Integer;'                                 + LineEnding +
-    '    begin'                                                        + LineEnding +
-    '      OldCap := Self.FCapacity;'                                  + LineEnding +
-    '      if OldCap = 0 then NewCap := 4'                             + LineEnding +
-    '      else NewCap := OldCap * 2;'                                 + LineEnding +
-    '      Self.FData     := ReallocMem(Self.FData, NewCap * SizeOf(Pointer));' + LineEnding +
-    '      Self.FCapacity := NewCap'                                   + LineEnding +
-    '    end;'                                                         + LineEnding +
-    '    function Add(AObject: Pointer): Integer;'                     + LineEnding +
-    '    var Dest: ^Pointer;'                                          + LineEnding +
-    '    begin'                                                         + LineEnding +
-    '      if Self.FCount = Self.FCapacity then Self.Grow;'            + LineEnding +
-    '      Dest        := Self.FData + Self.FCount * SizeOf(Pointer);' + LineEnding +
-    '      Dest^       := AObject;'                                    + LineEnding +
-    '      Self.FCount := Self.FCount + 1;'                            + LineEnding +
-    '      Result      := Self.FCount - 1'                             + LineEnding +
-    '    end;'                                                         + LineEnding +
-    '    function Get(AIndex: Integer): Pointer;'                      + LineEnding +
-    '    var Src: ^Pointer;'                                           + LineEnding +
-    '    begin'                                                         + LineEnding +
-    '      Src    := Self.FData + AIndex * SizeOf(Pointer);'           + LineEnding +
-    '      Result := Src^'                                             + LineEnding +
-    '    end;'                                                         + LineEnding +
-    '    procedure Delete(AIndex: Integer);'                           + LineEnding +
-    '    var I: Integer; Dst, Src: ^Pointer;'                          + LineEnding +
-    '    begin'                                                         + LineEnding +
-    '      I := AIndex;'                                               + LineEnding +
-    '      while I < Self.FCount - 1 do'                               + LineEnding +
-    '      begin'                                                       + LineEnding +
-    '        Dst  := Self.FData + I * SizeOf(Pointer);'                + LineEnding +
-    '        Src  := Self.FData + (I + 1) * SizeOf(Pointer);'          + LineEnding +
-    '        Dst^ := Src^;'                                            + LineEnding +
-    '        I    := I + 1'                                            + LineEnding +
-    '      end;'                                                        + LineEnding +
-    '      Self.FCount := Self.FCount - 1'                             + LineEnding +
-    '    end;'                                                         + LineEnding +
-    '    property Count: Integer read FCount;'                         + LineEnding +
-    '  end;'                                                           + LineEnding;
+    '''
+        type
+          TObjectList = class
+            FData:     ^Pointer;
+            FCount:    Integer;
+            FCapacity: Integer;
+            procedure Grow;
+            var OldCap, NewCap: Integer;
+            begin
+              OldCap := Self.FCapacity;
+              if OldCap = 0 then NewCap := 4
+              else NewCap := OldCap * 2;
+              Self.FData     := ReallocMem(Self.FData, NewCap * SizeOf(Pointer));
+              Self.FCapacity := NewCap
+            end;
+            function Add(AObject: Pointer): Integer;
+            var Dest: ^Pointer;
+            begin
+              if Self.FCount = Self.FCapacity then Self.Grow;
+              Dest        := Self.FData + Self.FCount * SizeOf(Pointer);
+              Dest^       := AObject;
+              Self.FCount := Self.FCount + 1;
+              Result      := Self.FCount - 1
+            end;
+            function Get(AIndex: Integer): Pointer;
+            var Src: ^Pointer;
+            begin
+              Src    := Self.FData + AIndex * SizeOf(Pointer);
+              Result := Src^
+            end;
+            procedure Delete(AIndex: Integer);
+            var I: Integer; Dst, Src: ^Pointer;
+            begin
+              I := AIndex;
+              while I < Self.FCount - 1 do
+              begin
+                Dst  := Self.FData + I * SizeOf(Pointer);
+                Src  := Self.FData + (I + 1) * SizeOf(Pointer);
+                Dst^ := Src^;
+                I    := I + 1
+              end;
+              Self.FCount := Self.FCount - 1
+            end;
+            property Count: Integer read FCount;
+          end;
+        ''';
 
   SrcTObjectListAddGetCount =
-    'program P;'                                                       + LineEnding +
+    'program P;' + #10 + 
     SrcTObjectListBase2 +
-    'var'                                                              + LineEnding +
-    '  L:  TObjectList;'                                               + LineEnding +
-    '  P1, P2: Pointer;'                                               + LineEnding +
-    'begin'                                                            + LineEnding +
-    '  L  := TObjectList.Create;'                                      + LineEnding +
-    '  P1 := GetMem(1);'                                               + LineEnding +
-    '  P2 := GetMem(1);'                                               + LineEnding +
-    '  L.Add(P1);'                                                     + LineEnding +
-    '  L.Add(P2);'                                                     + LineEnding +
-    '  L.Add(nil);'                                                    + LineEnding +
-    '  WriteLn(L.Count);'                                              + LineEnding +
-    '  WriteLn(L.Get(0) = P1);'                                        + LineEnding +
-    '  WriteLn(L.Get(1) = P2)'                                         + LineEnding +
-    'end.';
+    '''
+        var
+          L:  TObjectList;
+          P1, P2: Pointer;
+        begin
+          L  := TObjectList.Create;
+          P1 := GetMem(1);
+          P2 := GetMem(1);
+          L.Add(P1);
+          L.Add(P2);
+          L.Add(nil);
+          WriteLn(L.Count);
+          WriteLn(L.Get(0) = P1);
+          WriteLn(L.Get(1) = P2)
+        end.
+        ''';
 
   SrcTObjectListDelete =
-    'program P;'                                                       + LineEnding +
+    'program P;' + #10 + 
     SrcTObjectListBase2 +
-    'var L: TObjectList;'                                              + LineEnding +
-    'begin'                                                            + LineEnding +
-    '  L := TObjectList.Create;'                                       + LineEnding +
-    '  L.Add(GetMem(1));'                                              + LineEnding +
-    '  L.Add(GetMem(1));'                                              + LineEnding +
-    '  L.Add(GetMem(1));'                                              + LineEnding +
-    '  L.Delete(1);'                                                   + LineEnding +
-    '  WriteLn(L.Count)'                                               + LineEnding +
-    'end.';
+    '''
+        var L: TObjectList;
+        begin
+          L := TObjectList.Create;
+          L.Add(GetMem(1));
+          L.Add(GetMem(1));
+          L.Add(GetMem(1));
+          L.Delete(1);
+          WriteLn(L.Count)
+        end.
+        ''';
 
   SrcTStringListBase2 =
-    'type'                                                             + LineEnding +
-    '  TStringList = class'                                            + LineEnding +
-    '    FStrings:  ^string;'                                          + LineEnding +
-    '    FObjects:  ^Pointer;'                                         + LineEnding +
-    '    FCount:    Integer;'                                          + LineEnding +
-    '    FCapacity: Integer;'                                          + LineEnding +
-    '    procedure Grow;'                                              + LineEnding +
-    '    var OldCap, NewCap: Integer;'                                 + LineEnding +
-    '    begin'                                                        + LineEnding +
-    '      OldCap := Self.FCapacity;'                                  + LineEnding +
-    '      if OldCap = 0 then NewCap := 4'                             + LineEnding +
-    '      else NewCap := OldCap * 2;'                                 + LineEnding +
-    '      Self.FStrings := ReallocMem(Self.FStrings, NewCap * SizeOf(string));'  + LineEnding +
-    '      Self.FObjects := ReallocMem(Self.FObjects, NewCap * SizeOf(Pointer));' + LineEnding +
-    '      ZeroMem(Self.FStrings + OldCap * SizeOf(string),'           + LineEnding +
-    '              (NewCap - OldCap) * SizeOf(string));'               + LineEnding +
-    '      Self.FCapacity := NewCap'                                   + LineEnding +
-    '    end;'                                                         + LineEnding +
-    '    procedure Destroy;'                                           + LineEnding +
-    '    var I: Integer; Ptr: ^string;'                                + LineEnding +
-    '    begin'                                                         + LineEnding +
-    '      I := 0;'                                                    + LineEnding +
-    '      while I < Self.FCount do'                                   + LineEnding +
-    '      begin'                                                       + LineEnding +
-    '        Ptr  := Self.FStrings + I * SizeOf(string);'              + LineEnding +
-    '        Ptr^ := nil;'                                             + LineEnding +
-    '        I    := I + 1'                                            + LineEnding +
-    '      end;'                                                        + LineEnding +
-    '      FreeMem(Self.FStrings);'                                    + LineEnding +
-    '      FreeMem(Self.FObjects);'                                    + LineEnding +
-    '      Self.FStrings  := nil;'                                     + LineEnding +
-    '      Self.FObjects  := nil;'                                     + LineEnding +
-    '      Self.FCount    := 0;'                                       + LineEnding +
-    '      Self.FCapacity := 0'                                        + LineEnding +
-    '    end;'                                                         + LineEnding +
-    '    function Add(S: string): Integer;'                            + LineEnding +
-    '    var StrP: ^string; ObjP: ^Pointer;'                           + LineEnding +
-    '    begin'                                                         + LineEnding +
-    '      if Self.FCount = Self.FCapacity then Self.Grow;'            + LineEnding +
-    '      StrP        := Self.FStrings + Self.FCount * SizeOf(string);' + LineEnding +
-    '      ObjP        := Self.FObjects + Self.FCount * SizeOf(Pointer);' + LineEnding +
-    '      StrP^       := S;'                                          + LineEnding +
-    '      ObjP^       := nil;'                                        + LineEnding +
-    '      Result      := Self.FCount;'                                + LineEnding +
-    '      Self.FCount := Self.FCount + 1'                             + LineEnding +
-    '    end;'                                                         + LineEnding +
-    '    function Get(AIndex: Integer): string;'                       + LineEnding +
-    '    var Ptr: ^string;'                                            + LineEnding +
-    '    begin'                                                         + LineEnding +
-    '      Ptr    := Self.FStrings + AIndex * SizeOf(string);'         + LineEnding +
-    '      Result := Ptr^'                                             + LineEnding +
-    '    end;'                                                         + LineEnding +
-    '    function Find(S: string; var Index: Integer): Boolean;'      + LineEnding +
-    '    var Lo, Hi, Mid, Cmp: Integer; Ptr: ^string; MStr: string;'  + LineEnding +
-    '    begin'                                                         + LineEnding +
-    '      Lo := 0; Hi := Self.FCount - 1;'                            + LineEnding +
-    '      while Lo <= Hi do'                                          + LineEnding +
-    '      begin'                                                       + LineEnding +
-    '        Mid  := (Lo + Hi) div 2;'                                 + LineEnding +
-    '        Ptr  := Self.FStrings + Mid * SizeOf(string);'            + LineEnding +
-    '        MStr := Ptr^;'                                            + LineEnding +
-    '        Cmp  := CompareText(S, MStr);'                            + LineEnding +
-    '        if Cmp = 0 then'                                          + LineEnding +
-    '        begin'                                                     + LineEnding +
-    '          Index := Mid; Result := True; Exit'                     + LineEnding +
-    '        end'                                                       + LineEnding +
-    '        else if Cmp < 0 then Hi := Mid - 1'                       + LineEnding +
-    '        else Lo := Mid + 1'                                        + LineEnding +
-    '      end;'                                                        + LineEnding +
-    '      Index := Lo; Result := False'                               + LineEnding +
-    '    end;'                                                         + LineEnding +
-    '    property Count: Integer read FCount;'                         + LineEnding +
-    '  end;'                                                           + LineEnding;
+    '''
+        type
+          TStringList = class
+            FStrings:  ^string;
+            FObjects:  ^Pointer;
+            FCount:    Integer;
+            FCapacity: Integer;
+            procedure Grow;
+            var OldCap, NewCap: Integer;
+            begin
+              OldCap := Self.FCapacity;
+              if OldCap = 0 then NewCap := 4
+              else NewCap := OldCap * 2;
+              Self.FStrings := ReallocMem(Self.FStrings, NewCap * SizeOf(string));
+              Self.FObjects := ReallocMem(Self.FObjects, NewCap * SizeOf(Pointer));
+              ZeroMem(Self.FStrings + OldCap * SizeOf(string),
+                      (NewCap - OldCap) * SizeOf(string));
+              Self.FCapacity := NewCap
+            end;
+            procedure Destroy;
+            var I: Integer; Ptr: ^string;
+            begin
+              I := 0;
+              while I < Self.FCount do
+              begin
+                Ptr  := Self.FStrings + I * SizeOf(string);
+                Ptr^ := nil;
+                I    := I + 1
+              end;
+              FreeMem(Self.FStrings);
+              FreeMem(Self.FObjects);
+              Self.FStrings  := nil;
+              Self.FObjects  := nil;
+              Self.FCount    := 0;
+              Self.FCapacity := 0
+            end;
+            function Add(S: string): Integer;
+            var StrP: ^string; ObjP: ^Pointer;
+            begin
+              if Self.FCount = Self.FCapacity then Self.Grow;
+              StrP        := Self.FStrings + Self.FCount * SizeOf(string);
+              ObjP        := Self.FObjects + Self.FCount * SizeOf(Pointer);
+              StrP^       := S;
+              ObjP^       := nil;
+              Result      := Self.FCount;
+              Self.FCount := Self.FCount + 1
+            end;
+            function Get(AIndex: Integer): string;
+            var Ptr: ^string;
+            begin
+              Ptr    := Self.FStrings + AIndex * SizeOf(string);
+              Result := Ptr^
+            end;
+            function Find(S: string; var Index: Integer): Boolean;
+            var Lo, Hi, Mid, Cmp: Integer; Ptr: ^string; MStr: string;
+            begin
+              Lo := 0; Hi := Self.FCount - 1;
+              while Lo <= Hi do
+              begin
+                Mid  := (Lo + Hi) div 2;
+                Ptr  := Self.FStrings + Mid * SizeOf(string);
+                MStr := Ptr^;
+                Cmp  := CompareText(S, MStr);
+                if Cmp = 0 then
+                begin
+                  Index := Mid; Result := True; Exit
+                end
+                else if Cmp < 0 then Hi := Mid - 1
+                else Lo := Mid + 1
+              end;
+              Index := Lo; Result := False
+            end;
+            property Count: Integer read FCount;
+          end;
+        ''';
 
   SrcTStringListAddGet =
-    'program P;'                                                       + LineEnding +
+    'program P;' + #10 + 
     SrcTStringListBase2 +
-    'var'                                                              + LineEnding +
-    '  L: TStringList;'                                                + LineEnding +
-    'begin'                                                            + LineEnding +
-    '  L := TStringList.Create;'                                       + LineEnding +
-    '  L.Add(''hello'');'                                               + LineEnding +
-    '  L.Add(''world'');'                                               + LineEnding +
-    '  WriteLn(L.Count);'                                              + LineEnding +
-    '  WriteLn(L.Get(0));'                                             + LineEnding +
-    '  WriteLn(L.Get(1))'                                              + LineEnding +
-    'end.';
+    '''
+        var
+          L: TStringList;
+        begin
+          L := TStringList.Create;
+          L.Add('hello');
+          L.Add('world');
+          WriteLn(L.Count);
+          WriteLn(L.Get(0));
+          WriteLn(L.Get(1))
+        end.
+        ''';
 
   SrcTStringListFindSorted =
-    'program P;'                                                       + LineEnding +
+    'program P;' + #10 + 
     SrcTStringListBase2 +
-    'var'                                                              + LineEnding +
-    '  L: TStringList;'                                                + LineEnding +
-    '  Idx: Integer;'                                                  + LineEnding +
-    '  Found: Boolean;'                                                + LineEnding +
-    'begin'                                                            + LineEnding +
-    '  L := TStringList.Create;'                                       + LineEnding +
-    '  L.Add(''alpha'');'                                               + LineEnding +
-    '  L.Add(''beta'');'                                                + LineEnding +
-    '  L.Add(''gamma'');'                                               + LineEnding +
-    '  Found := L.Find(''beta'', Idx);'                                 + LineEnding +
-    '  WriteLn(Found);'                                                + LineEnding +
-    '  WriteLn(Idx);'                                                  + LineEnding +
-    '  Found := L.Find(''delta'', Idx);'                                + LineEnding +
-    '  WriteLn(Found)'                                                 + LineEnding +
-    'end.';
+    '''
+        var
+          L: TStringList;
+          Idx: Integer;
+          Found: Boolean;
+        begin
+          L := TStringList.Create;
+          L.Add('alpha');
+          L.Add('beta');
+          L.Add('gamma');
+          Found := L.Find('beta', Idx);
+          WriteLn(Found);
+          WriteLn(Idx);
+          Found := L.Find('delta', Idx);
+          WriteLn(Found)
+        end.
+        ''';
 
   { Combined program: both classes in a single type section }
   SrcCollectionsValgrind =
-    'program P;'                                                                   + LineEnding +
-    'type'                                                                         + LineEnding +
-    '  TObjectList = class'                                                        + LineEnding +
-    '    FData: ^Pointer; FCount: Integer; FCapacity: Integer;'                    + LineEnding +
-    '    procedure Grow;'                                                          + LineEnding +
-    '    var OldCap, NewCap: Integer;'                                             + LineEnding +
-    '    begin'                                                                    + LineEnding +
-    '      OldCap := Self.FCapacity;'                                              + LineEnding +
-    '      if OldCap = 0 then NewCap := 4 else NewCap := OldCap * 2;'             + LineEnding +
-    '      Self.FData := ReallocMem(Self.FData, NewCap * SizeOf(Pointer));'        + LineEnding +
-    '      Self.FCapacity := NewCap'                                               + LineEnding +
-    '    end;'                                                                     + LineEnding +
-    '    function Add(AObject: Pointer): Integer;'                                 + LineEnding +
-    '    var Dest: ^Pointer;'                                                      + LineEnding +
-    '    begin'                                                                    + LineEnding +
-    '      if Self.FCount = Self.FCapacity then Self.Grow;'                        + LineEnding +
-    '      Dest := Self.FData + Self.FCount * SizeOf(Pointer);'                    + LineEnding +
-    '      Dest^ := AObject;'                                                      + LineEnding +
-    '      Self.FCount := Self.FCount + 1;'                                        + LineEnding +
-    '      Result := Self.FCount - 1'                                              + LineEnding +
-    '    end;'                                                                     + LineEnding +
-    '    procedure Destroy;'                                                       + LineEnding +
-    '    begin'                                                                    + LineEnding +
-    '      FreeMem(Self.FData);'                                                   + LineEnding +
-    '      Self.FData := nil; Self.FCount := 0; Self.FCapacity := 0'               + LineEnding +
-    '    end;'                                                                     + LineEnding +
-    '    property Count: Integer read FCount;'                                     + LineEnding +
-    '  end;'                                                                       + LineEnding +
-    '  TStringList = class'                                                        + LineEnding +
-    '    FStrings: ^string; FObjects: ^Pointer;'                                   + LineEnding +
-    '    FCount: Integer; FCapacity: Integer;'                                     + LineEnding +
-    '    procedure Grow;'                                                          + LineEnding +
-    '    var OldCap, NewCap: Integer;'                                             + LineEnding +
-    '    begin'                                                                    + LineEnding +
-    '      OldCap := Self.FCapacity;'                                              + LineEnding +
-    '      if OldCap = 0 then NewCap := 4 else NewCap := OldCap * 2;'             + LineEnding +
-    '      Self.FStrings := ReallocMem(Self.FStrings, NewCap * SizeOf(string));'   + LineEnding +
-    '      Self.FObjects := ReallocMem(Self.FObjects, NewCap * SizeOf(Pointer));'  + LineEnding +
-    '      ZeroMem(Self.FStrings + OldCap * SizeOf(string),'                       + LineEnding +
-    '              (NewCap - OldCap) * SizeOf(string));'                           + LineEnding +
-    '      Self.FCapacity := NewCap'                                               + LineEnding +
-    '    end;'                                                                     + LineEnding +
-    '    procedure Destroy;'                                                       + LineEnding +
-    '    var I: Integer; Ptr: ^string;'                                            + LineEnding +
-    '    begin'                                                                    + LineEnding +
-    '      I := 0;'                                                                + LineEnding +
-    '      while I < Self.FCount do'                                               + LineEnding +
-    '      begin'                                                                  + LineEnding +
-    '        Ptr := Self.FStrings + I * SizeOf(string); Ptr^ := nil; I := I + 1'  + LineEnding +
-    '      end;'                                                                   + LineEnding +
-    '      FreeMem(Self.FStrings); FreeMem(Self.FObjects);'                        + LineEnding +
-    '      Self.FStrings := nil; Self.FObjects := nil;'                            + LineEnding +
-    '      Self.FCount := 0; Self.FCapacity := 0'                                 + LineEnding +
-    '    end;'                                                                     + LineEnding +
-    '    function Add(S: string): Integer;'                                        + LineEnding +
-    '    var StrP: ^string; ObjP: ^Pointer;'                                       + LineEnding +
-    '    begin'                                                                    + LineEnding +
-    '      if Self.FCount = Self.FCapacity then Self.Grow;'                        + LineEnding +
-    '      StrP := Self.FStrings + Self.FCount * SizeOf(string);'                  + LineEnding +
-    '      ObjP := Self.FObjects + Self.FCount * SizeOf(Pointer);'                 + LineEnding +
-    '      StrP^ := S; ObjP^ := nil;'                                             + LineEnding +
-    '      Result := Self.FCount; Self.FCount := Self.FCount + 1'                  + LineEnding +
-    '    end;'                                                                     + LineEnding +
-    '    function Get(AIndex: Integer): string;'                                   + LineEnding +
-    '    var Ptr: ^string;'                                                        + LineEnding +
-    '    begin'                                                                    + LineEnding +
-    '      Ptr := Self.FStrings + AIndex * SizeOf(string); Result := Ptr^'         + LineEnding +
-    '    end;'                                                                     + LineEnding +
-    '    property Count: Integer read FCount;'                                     + LineEnding +
-    '  end;'                                                                       + LineEnding +
-    'var OL: TObjectList; SL: TStringList;'                                        + LineEnding +
-    'begin'                                                                        + LineEnding +
-    '  OL := TObjectList.Create;'                                                  + LineEnding +
-    '  OL.Add(nil); OL.Add(nil);'                                                  + LineEnding +
-    '  SL := TStringList.Create;'                                                  + LineEnding +
-    '  SL.Add(''hello''); SL.Add(''world'');'                                       + LineEnding +
-    '  WriteLn(OL.Count);'                                                         + LineEnding +
-    '  WriteLn(SL.Get(0))'                                                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TObjectList = class
+            FData: ^Pointer; FCount: Integer; FCapacity: Integer;
+            procedure Grow;
+            var OldCap, NewCap: Integer;
+            begin
+              OldCap := Self.FCapacity;
+              if OldCap = 0 then NewCap := 4 else NewCap := OldCap * 2;
+              Self.FData := ReallocMem(Self.FData, NewCap * SizeOf(Pointer));
+              Self.FCapacity := NewCap
+            end;
+            function Add(AObject: Pointer): Integer;
+            var Dest: ^Pointer;
+            begin
+              if Self.FCount = Self.FCapacity then Self.Grow;
+              Dest := Self.FData + Self.FCount * SizeOf(Pointer);
+              Dest^ := AObject;
+              Self.FCount := Self.FCount + 1;
+              Result := Self.FCount - 1
+            end;
+            procedure Destroy;
+            begin
+              FreeMem(Self.FData);
+              Self.FData := nil; Self.FCount := 0; Self.FCapacity := 0
+            end;
+            property Count: Integer read FCount;
+          end;
+          TStringList = class
+            FStrings: ^string; FObjects: ^Pointer;
+            FCount: Integer; FCapacity: Integer;
+            procedure Grow;
+            var OldCap, NewCap: Integer;
+            begin
+              OldCap := Self.FCapacity;
+              if OldCap = 0 then NewCap := 4 else NewCap := OldCap * 2;
+              Self.FStrings := ReallocMem(Self.FStrings, NewCap * SizeOf(string));
+              Self.FObjects := ReallocMem(Self.FObjects, NewCap * SizeOf(Pointer));
+              ZeroMem(Self.FStrings + OldCap * SizeOf(string),
+                      (NewCap - OldCap) * SizeOf(string));
+              Self.FCapacity := NewCap
+            end;
+            procedure Destroy;
+            var I: Integer; Ptr: ^string;
+            begin
+              I := 0;
+              while I < Self.FCount do
+              begin
+                Ptr := Self.FStrings + I * SizeOf(string); Ptr^ := nil; I := I + 1
+              end;
+              FreeMem(Self.FStrings); FreeMem(Self.FObjects);
+              Self.FStrings := nil; Self.FObjects := nil;
+              Self.FCount := 0; Self.FCapacity := 0
+            end;
+            function Add(S: string): Integer;
+            var StrP: ^string; ObjP: ^Pointer;
+            begin
+              if Self.FCount = Self.FCapacity then Self.Grow;
+              StrP := Self.FStrings + Self.FCount * SizeOf(string);
+              ObjP := Self.FObjects + Self.FCount * SizeOf(Pointer);
+              StrP^ := S; ObjP^ := nil;
+              Result := Self.FCount; Self.FCount := Self.FCount + 1
+            end;
+            function Get(AIndex: Integer): string;
+            var Ptr: ^string;
+            begin
+              Ptr := Self.FStrings + AIndex * SizeOf(string); Result := Ptr^
+            end;
+            property Count: Integer read FCount;
+          end;
+        var OL: TObjectList; SL: TStringList;
+        begin
+          OL := TObjectList.Create;
+          OL.Add(nil); OL.Add(nil);
+          SL := TStringList.Create;
+          SL.Add('hello'); SL.Add('world');
+          WriteLn(OL.Count);
+          WriteLn(SL.Get(0))
+        end.
+        ''';
 
 procedure TE2ETests.TestRun_TObjectList_AddGetCount;
 var
@@ -1843,8 +1947,8 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcTObjectListAddGetCount, Output, RCode, []));
-  AssertEquals('count=3', '3', Trim(Copy(Output, 1, Pos(LineEnding, Output) - 1)));
+  AssertTrue('compile+run', CompileAndRun(SrcTObjectListAddGetCount, Output, RCode));
+  AssertEquals('count=3', '3', Trim(Copy(Output, 1, Pos(#10, Output) - 1)));
 end;
 
 procedure TE2ETests.TestRun_TObjectList_Delete;
@@ -1853,7 +1957,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcTObjectListDelete, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcTObjectListDelete, Output, RCode));
   AssertEquals('count after delete=2', '2', Trim(Output));
 end;
 
@@ -1864,13 +1968,13 @@ var
   Lines:  TStringList;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcTStringListAddGet, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcTStringListAddGet, Output, RCode));
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('count=2',   '2',     Lines[0]);
-    AssertEquals('get(0)',    'hello', Lines[1]);
-    AssertEquals('get(1)',    'world', Lines[2]);
+    AssertEquals('count=2',   '2',     Lines.Strings[0]);
+    AssertEquals('get(0)',    'hello', Lines.Strings[1]);
+    AssertEquals('get(1)',    'world', Lines.Strings[2]);
   finally
     Lines.Free;
   end;
@@ -1883,13 +1987,13 @@ var
   Lines:  TStringList;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcTStringListFindSorted, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcTStringListFindSorted, Output, RCode));
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('found=1 (true)',  '1', Lines[0]);
-    AssertEquals('idx=1',           '1', Lines[1]);
-    AssertEquals('not found=0',     '0', Lines[2]);
+    AssertEquals('found=1 (true)',  '1', Lines.Strings[0]);
+    AssertEquals('idx=1',           '1', Lines.Strings[1]);
+    AssertEquals('not found=0',     '0', Lines.Strings[2]);
   finally
     Lines.Free;
   end;
@@ -1910,7 +2014,7 @@ begin
   if not OK then
   begin
     if Log = '' then Log := '(valgrind produced no output)';
-    Fail('Collections Valgrind check failed:' + LineEnding + Log);
+    Fail('Collections Valgrind check failed:' + #10 + Log);
   end;
 end;
 
@@ -1920,73 +2024,87 @@ end;
 
 const
   SrcParamStrPrint =
-    'program P;'                                      + LineEnding +
-    'begin'                                           + LineEnding +
-    '  WriteLn(ParamStr(1))'                          + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteLn(ParamStr(1))
+        end.
+        ''';
 
   SrcParamCountPrint =
-    'program P;'                                      + LineEnding +
-    'begin'                                           + LineEnding +
-    '  WriteLn(ParamCount)'                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteLn(ParamCount)
+        end.
+        ''';
 
   SrcReadWriteFile =
-    'program P;'                                      + LineEnding +
-    'var S: string;'                                  + LineEnding +
-    'begin'                                           + LineEnding +
-    '  WriteFile(ParamStr(1), ''hello file'');'        + LineEnding +
-    '  S := ReadFile(ParamStr(1));'                   + LineEnding +
-    '  WriteLn(S)'                                    + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          WriteFile(ParamStr(1), 'hello file');
+          S := ReadFile(ParamStr(1));
+          WriteLn(S)
+        end.
+        ''';
 
   SrcFileExistsTest =
-    'program P;'                                      + LineEnding +
-    'begin'                                           + LineEnding +
-    '  WriteLn(FileExists(ParamStr(1)));'             + LineEnding +
-    '  WriteLn(FileExists(''__no_such_file_xyz__''))' + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteLn(FileExists(ParamStr(1)));
+          WriteLn(FileExists('__no_such_file_xyz__'))
+        end.
+        ''';
 
   SrcGetEnvVarTest =
-    'program P;'                                      + LineEnding +
-    'var S: string;'                                  + LineEnding +
-    'begin'                                           + LineEnding +
-    '  S := GetEnvVar(''BLAISE_TEST_VAR'');'          + LineEnding +
-    '  WriteLn(S)'                                    + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          S := GetEnvVar('BLAISE_TEST_VAR');
+          WriteLn(S)
+        end.
+        ''';
 
   SrcHaltTest =
-    'program P;'                                      + LineEnding +
-    'begin'                                           + LineEnding +
-    '  WriteLn(42);'                                  + LineEnding +
-    '  Halt(7)'                                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteLn(42);
+          Halt(7)
+        end.
+        ''';
 
   SrcMultiTypeBlock =
-    'program P;'                                      + LineEnding +
-    'type'                                            + LineEnding +
-    '  TCounter = class'                              + LineEnding +
-    '    FN: Integer;'                                + LineEnding +
-    '    procedure Inc;'                              + LineEnding +
-    '    begin Self.FN := Self.FN + 1 end;'           + LineEnding +
-    '    property Value: Integer read FN;'            + LineEnding +
-    '  end;'                                          + LineEnding +
-    'var N: Integer;'                                 + LineEnding +
-    'type'                                            + LineEnding +
-    '  TDoubler = class'                              + LineEnding +
-    '    function Double(X: Integer): Integer;'       + LineEnding +
-    '    begin Result := X * 2 end;'                  + LineEnding +
-    '  end;'                                          + LineEnding +
-    'var'                                             + LineEnding +
-    '  C: TCounter;'                                  + LineEnding +
-    '  D: TDoubler;'                                  + LineEnding +
-    'begin'                                           + LineEnding +
-    '  C := TCounter.Create;'                         + LineEnding +
-    '  D := TDoubler.Create;'                         + LineEnding +
-    '  C.Inc; C.Inc; C.Inc;'                          + LineEnding +
-    '  N := D.Double(C.Value);'                       + LineEnding +
-    '  WriteLn(N)'                                    + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TCounter = class
+            FN: Integer;
+            procedure Inc;
+            begin Self.FN := Self.FN + 1 end;
+            property Value: Integer read FN;
+          end;
+        var N: Integer;
+        type
+          TDoubler = class
+            function Double(X: Integer): Integer;
+            begin Result := X * 2 end;
+          end;
+        var
+          C: TCounter;
+          D: TDoubler;
+        begin
+          C := TCounter.Create;
+          D := TDoubler.Create;
+          C.Inc; C.Inc; C.Inc;
+          N := D.Double(C.Value);
+          WriteLn(N)
+        end.
+        ''';
 
 procedure TE2ETests.TestRun_ParamStr_PrintsArg;
 var
@@ -2037,15 +2155,18 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   TmpFile := GetTempFileName('', 'blaise_fe_test');
   { Create the file so it exists }
-  with TStringList.Create do begin Add('x'); SaveToFile(TmpFile); Free; end;
+  Lines := TStringList.Create;
+  Lines.Add('x');
+  Lines.SaveToFile(TmpFile);
+  Lines.Free;
   try
     AssertTrue('compile+run',
       CompileAndRun(SrcFileExistsTest, Output, RCode, [TmpFile]));
     Lines := TStringList.Create;
     try
       Lines.Text := Trim(Output);
-      AssertEquals('existing file = 1',     '1', Lines[0]);
-      AssertEquals('missing file = 0',      '0', Lines[1]);
+      AssertEquals('existing file = 1',     '1', Lines.Strings[0]);
+      AssertEquals('missing file = 0',      '0', Lines.Strings[1]);
     finally
       Lines.Free;
     end;
@@ -2061,7 +2182,7 @@ var
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run',
-    CompileAndRun(SrcGetEnvVarTest, Output, RCode, []));
+    CompileAndRun(SrcGetEnvVarTest, Output, RCode));
   AssertTrue('GetEnvVar(BLAISE_TEST_VAR) returns empty when unset',
     Trim(Output) = '');
 end;
@@ -2072,7 +2193,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  CompileAndRun(SrcHaltTest, Output, RCode, []);
+  CompileAndRun(SrcHaltTest, Output, RCode);
   AssertEquals('WriteLn before Halt', '42', Trim(Output));
   AssertEquals('Halt(7) sets exit code', 7, RCode);
 end;
@@ -2084,7 +2205,7 @@ var
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run',
-    CompileAndRun(SrcMultiTypeBlock, Output, RCode, []));
+    CompileAndRun(SrcMultiTypeBlock, Output, RCode));
   AssertEquals('TCounter(3).Double = 6', '6', Trim(Output));
 end;
 
@@ -2094,55 +2215,63 @@ end;
 
 const
   SrcCaseInt =
-    'program P;'                           + LineEnding +
-    'var N: Integer;'                      + LineEnding +
-    'begin'                                + LineEnding +
-    '  N := 2;'                            + LineEnding +
-    '  case N of'                          + LineEnding +
-    '    1: WriteLn(11);'                  + LineEnding +
-    '    2: WriteLn(22);'                  + LineEnding +
-    '    3: WriteLn(33)'                   + LineEnding +
-    '  end'                                + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 2;
+          case N of
+            1: WriteLn(11);
+            2: WriteLn(22);
+            3: WriteLn(33)
+          end
+        end.
+        ''';
 
   SrcCaseElse =
-    'program P;'                           + LineEnding +
-    'var N: Integer;'                      + LineEnding +
-    'begin'                                + LineEnding +
-    '  N := 7;'                            + LineEnding +
-    '  case N of'                          + LineEnding +
-    '    1: WriteLn(1);'                   + LineEnding +
-    '    2: WriteLn(2)'                    + LineEnding +
-    '  else'                               + LineEnding +
-    '    WriteLn(99)'                      + LineEnding +
-    '  end'                                + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := 7;
+          case N of
+            1: WriteLn(1);
+            2: WriteLn(2)
+          else
+            WriteLn(99)
+          end
+        end.
+        ''';
 
   SrcEnumOrdinal =
-    'program P;'                                        + LineEnding +
-    'type'                                              + LineEnding +
-    '  TColor = (cRed, cGreen, cBlue);'                + LineEnding +
-    'var C: TColor;'                                    + LineEnding +
-    'begin'                                             + LineEnding +
-    '  C := cRed;   WriteLn(C);'                       + LineEnding +
-    '  C := cGreen; WriteLn(C);'                       + LineEnding +
-    '  C := cBlue;  WriteLn(C)'                        + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TColor = (cRed, cGreen, cBlue);
+        var C: TColor;
+        begin
+          C := cRed;   WriteLn(C);
+          C := cGreen; WriteLn(C);
+          C := cBlue;  WriteLn(C)
+        end.
+        ''';
 
   SrcEnumCase =
-    'program P;'                                        + LineEnding +
-    'type'                                              + LineEnding +
-    '  TDir = (dNorth, dSouth, dEast, dWest);'         + LineEnding +
-    'var D: TDir;'                                      + LineEnding +
-    'begin'                                             + LineEnding +
-    '  D := dEast;'                                     + LineEnding +
-    '  case D of'                                       + LineEnding +
-    '    dNorth: WriteLn(0);'                           + LineEnding +
-    '    dSouth: WriteLn(1);'                           + LineEnding +
-    '    dEast:  WriteLn(2);'                           + LineEnding +
-    '    dWest:  WriteLn(3)'                            + LineEnding +
-    '  end'                                             + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TDir = (dNorth, dSouth, dEast, dWest);
+        var D: TDir;
+        begin
+          D := dEast;
+          case D of
+            dNorth: WriteLn(0);
+            dSouth: WriteLn(1);
+            dEast:  WriteLn(2);
+            dWest:  WriteLn(3)
+          end
+        end.
+        ''';
 
 procedure TE2ETests.TestRun_Case_IntegerBranch;
 var
@@ -2150,7 +2279,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcCaseInt, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcCaseInt, Output, RCode));
   AssertEquals('case N=2 → 22', '22', Trim(Output));
 end;
 
@@ -2160,7 +2289,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcCaseElse, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcCaseElse, Output, RCode));
   AssertEquals('case N=7 → else → 99', '99', Trim(Output));
 end;
 
@@ -2171,13 +2300,13 @@ var
   Lines:  TStringList;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcEnumOrdinal, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcEnumOrdinal, Output, RCode));
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('cRed=0',   '0', Lines[0]);
-    AssertEquals('cGreen=1', '1', Lines[1]);
-    AssertEquals('cBlue=2',  '2', Lines[2]);
+    AssertEquals('cRed=0',   '0', Lines.Strings[0]);
+    AssertEquals('cGreen=1', '1', Lines.Strings[1]);
+    AssertEquals('cBlue=2',  '2', Lines.Strings[2]);
   finally
     Lines.Free;
   end;
@@ -2189,7 +2318,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcEnumCase, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcEnumCase, Output, RCode));
   AssertEquals('dEast=2', '2', Trim(Output));
 end;
 
@@ -2199,76 +2328,88 @@ end;
 
 const
   SrcChangeFileExtTest =
-    'program P;'                                           + LineEnding +
-    'begin'                                                + LineEnding +
-    '  WriteLn(ChangeFileExt(''test.pas'', ''.bak''));'   + LineEnding +
-    '  WriteLn(ChangeFileExt(''noext'', ''.o''));'        + LineEnding +
-    '  WriteLn(ChangeFileExt(''a.b.c'', ''''))'           + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteLn(ChangeFileExt('test.pas', '.bak'));
+          WriteLn(ChangeFileExt('noext', '.o'));
+          WriteLn(ChangeFileExt('a.b.c', ''))
+        end.
+        ''';
 
   SrcExtractFileNameTest =
-    'program P;'                                           + LineEnding +
-    'begin'                                                + LineEnding +
-    '  WriteLn(ExtractFileName(''/usr/bin/ls''));'         + LineEnding +
-    '  WriteLn(ExtractFileName(''ls''))'                   + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteLn(ExtractFileName('/usr/bin/ls'));
+          WriteLn(ExtractFileName('ls'))
+        end.
+        ''';
 
   SrcExtractFilePathTest =
-    'program P;'                                                      + LineEnding +
-    'begin'                                                           + LineEnding +
-    '  WriteLn(ExtractFilePath(''/usr/bin/ls''));'                    + LineEnding +
-    '  WriteLn(''['' + ExtractFilePath(''ls'') + '']'')'             + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteLn(ExtractFilePath('/usr/bin/ls'));
+          WriteLn('[' + ExtractFilePath('ls') + ']')
+        end.
+        ''';
 
   SrcIncludeTrailingPathDelimiterTest =
-    'program P;'                                                    + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  WriteLn(IncludeTrailingPathDelimiter(''/usr/bin''));'        + LineEnding +
-    '  WriteLn(IncludeTrailingPathDelimiter(''/usr/bin/''))'        + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteLn(IncludeTrailingPathDelimiter('/usr/bin'));
+          WriteLn(IncludeTrailingPathDelimiter('/usr/bin/'))
+        end.
+        ''';
 
   { Step 8: process built-ins — run 'echo' and capture output }
   SrcProcessBuiltinsCapture =
-    'program P;'                                    + LineEnding +
-    'var'                                            + LineEnding +
-    '  H:     Pointer;'                             + LineEnding +
-    '  Output: string;'                             + LineEnding +
-    '  Chunk:  string;'                             + LineEnding +
-    'begin'                                          + LineEnding +
-    '  H := ProcessCreate;'                          + LineEnding +
-    '  ProcessSetExe(H, ''echo'');'                  + LineEnding +
-    '  ProcessAddArg(H, ''hello from process'');'    + LineEnding +
-    '  ProcessExecute(H);'                           + LineEnding +
-    '  Output := '''';'                              + LineEnding +
-    '  Chunk := ProcessReadOutput(H);'               + LineEnding +
-    '  while Chunk <> '''' do'                       + LineEnding +
-    '  begin'                                        + LineEnding +
-    '    Output := Output + Chunk;'                  + LineEnding +
-    '    Chunk := ProcessReadOutput(H)'              + LineEnding +
-    '  end;'                                         + LineEnding +
-    '  ProcessWaitOnExit(H);'                        + LineEnding +
-    '  ProcessFree(H);'                              + LineEnding +
-    '  Write(Output)'                                + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          H:     Pointer;
+          Output: string;
+          Chunk:  string;
+        begin
+          H := ProcessCreate;
+          ProcessSetExe(H, 'echo');
+          ProcessAddArg(H, 'hello from process');
+          ProcessExecute(H);
+          Output := '';
+          Chunk := ProcessReadOutput(H);
+          while Chunk <> '' do
+          begin
+            Output := Output + Chunk;
+            Chunk := ProcessReadOutput(H)
+          end;
+          ProcessWaitOnExit(H);
+          ProcessFree(H);
+          Write(Output)
+        end.
+        ''';
 
   SrcProcessBuiltinsExitCode =
-    'program P;'                                    + LineEnding +
-    'var'                                            + LineEnding +
-    '  H:    Pointer;'                              + LineEnding +
-    '  Code: Integer;'                              + LineEnding +
-    '  Chunk: string;'                              + LineEnding +
-    'begin'                                          + LineEnding +
-    '  H := ProcessCreate;'                          + LineEnding +
-    '  ProcessSetExe(H, ''true'');'                  + LineEnding +
-    '  ProcessExecute(H);'                           + LineEnding +
-    '  Chunk := ProcessReadOutput(H);'               + LineEnding +
-    '  while Chunk <> '''' do'                       + LineEnding +
-    '    Chunk := ProcessReadOutput(H);'             + LineEnding +
-    '  ProcessWaitOnExit(H);'                        + LineEnding +
-    '  Code := ProcessExitCode(H);'                  + LineEnding +
-    '  ProcessFree(H);'                              + LineEnding +
-    '  WriteLn(IntToStr(Code))'                      + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          H:    Pointer;
+          Code: Integer;
+          Chunk: string;
+        begin
+          H := ProcessCreate;
+          ProcessSetExe(H, 'true');
+          ProcessExecute(H);
+          Chunk := ProcessReadOutput(H);
+          while Chunk <> '' do
+            Chunk := ProcessReadOutput(H);
+          ProcessWaitOnExit(H);
+          Code := ProcessExitCode(H);
+          ProcessFree(H);
+          WriteLn(IntToStr(Code))
+        end.
+        ''';
 
 procedure TE2ETests.TestRun_ChangeFileExt_ChangesExtension;
 var
@@ -2277,13 +2418,13 @@ var
   Lines:  TStringList;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcChangeFileExtTest, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcChangeFileExtTest, Output, RCode));
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('test.pas→.bak', 'test.bak', Lines[0]);
-    AssertEquals('noext→.o',      'noext.o',  Lines[1]);
-    AssertEquals('a.b.c→empty',   'a.b',      Lines[2]);
+    AssertEquals('test.pas→.bak', 'test.bak', Lines.Strings[0]);
+    AssertEquals('noext→.o',      'noext.o',  Lines.Strings[1]);
+    AssertEquals('a.b.c→empty',   'a.b',      Lines.Strings[2]);
   finally
     Lines.Free;
   end;
@@ -2296,12 +2437,12 @@ var
   Lines:  TStringList;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcExtractFileNameTest, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcExtractFileNameTest, Output, RCode));
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('/usr/bin/ls → ls', 'ls', Lines[0]);
-    AssertEquals('ls → ls',          'ls', Lines[1]);
+    AssertEquals('/usr/bin/ls → ls', 'ls', Lines.Strings[0]);
+    AssertEquals('ls → ls',          'ls', Lines.Strings[1]);
   finally
     Lines.Free;
   end;
@@ -2314,12 +2455,12 @@ var
   Lines:  TStringList;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcExtractFilePathTest, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcExtractFilePathTest, Output, RCode));
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('/usr/bin/ls → /usr/bin/', '/usr/bin/', Lines[0]);
-    AssertEquals('ls → empty',              '[]',        Lines[1]);
+    AssertEquals('/usr/bin/ls → /usr/bin/', '/usr/bin/', Lines.Strings[0]);
+    AssertEquals('ls → empty',              '[]',        Lines.Strings[1]);
   finally
     Lines.Free;
   end;
@@ -2332,12 +2473,12 @@ var
   Lines:  TStringList;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcIncludeTrailingPathDelimiterTest, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcIncludeTrailingPathDelimiterTest, Output, RCode));
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('/usr/bin → /usr/bin/',   '/usr/bin/', Lines[0]);
-    AssertEquals('/usr/bin/ unchanged',    '/usr/bin/', Lines[1]);
+    AssertEquals('/usr/bin → /usr/bin/',   '/usr/bin/', Lines.Strings[0]);
+    AssertEquals('/usr/bin/ unchanged',    '/usr/bin/', Lines.Strings[1]);
   finally
     Lines.Free;
   end;
@@ -2353,7 +2494,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcProcessBuiltinsCapture, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcProcessBuiltinsCapture, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('captured echo output', 'hello from process', Trim(Output));
 end;
@@ -2364,7 +2505,7 @@ var
   RCode:  Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcProcessBuiltinsExitCode, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcProcessBuiltinsExitCode, Output, RCode));
   AssertEquals('program exit code 0', 0, RCode);
   AssertEquals('true exits with 0', '0', Trim(Output));
 end;
@@ -2375,93 +2516,105 @@ end;
 
 const
   SrcExcBase2 =
-    'program P;'                                      + LineEnding +
-    'type'                                            + LineEnding +
-    '  Exception = class'                             + LineEnding +
-    '    FMessage: string;'                           + LineEnding +
-    '    property Message: string read FMessage;'     + LineEnding +
-    '  end;'                                          + LineEnding +
-    '  EFoo = class(Exception) end;'                  + LineEnding +
-    '  EBar = class(EFoo) end;'                       + LineEnding;
+    '''
+        program P;
+        type
+          Exception = class
+            FMessage: string;
+            property Message: string read FMessage;
+          end;
+          EFoo = class(Exception) end;
+          EBar = class(EFoo) end;
+        ''';
 
   SrcTypedExceptCorrect =
     SrcExcBase2 +
-    'var X: Integer;'                                 + LineEnding +
-    'begin'                                           + LineEnding +
-    '  X := 0;'                                       + LineEnding +
-    '  try'                                           + LineEnding +
-    '    raise EFoo.Create'                           + LineEnding +
-    '  except'                                        + LineEnding +
-    '    on E: EFoo do X := 42;'                      + LineEnding +
-    '    on E: Exception do X := 1'                   + LineEnding +
-    '  end;'                                          + LineEnding +
-    '  WriteLn(X)'                                    + LineEnding +
-    'end.';
+    '''
+        var X: Integer;
+        begin
+          X := 0;
+          try
+            raise EFoo.Create
+          except
+            on E: EFoo do X := 42;
+            on E: Exception do X := 1
+          end;
+          WriteLn(X)
+        end.
+        ''';
 
   SrcTypedExceptSubclass =
     SrcExcBase2 +
-    'var X: Integer;'                                 + LineEnding +
-    'begin'                                           + LineEnding +
-    '  X := 0;'                                       + LineEnding +
-    '  try'                                           + LineEnding +
-    '    raise EBar.Create'                           + LineEnding +
-    '  except'                                        + LineEnding +
-    '    on E: EFoo do X := 7'                        + LineEnding +
-    '  end;'                                          + LineEnding +
-    '  WriteLn(X)'                                    + LineEnding +
-    'end.';
+    '''
+        var X: Integer;
+        begin
+          X := 0;
+          try
+            raise EBar.Create
+          except
+            on E: EFoo do X := 7
+          end;
+          WriteLn(X)
+        end.
+        ''';
 
   SrcTypedExceptElseRun =
     SrcExcBase2 +
-    'var X: Integer;'                                 + LineEnding +
-    'begin'                                           + LineEnding +
-    '  X := 0;'                                       + LineEnding +
-    '  try'                                           + LineEnding +
-    '    raise EFoo.Create'                           + LineEnding +
-    '  except'                                        + LineEnding +
-    '    on E: EBar do X := 9'                        + LineEnding +
-    '    else X := 5'                                 + LineEnding +
-    '  end;'                                          + LineEnding +
-    '  WriteLn(X)'                                    + LineEnding +
-    'end.';
+    '''
+        var X: Integer;
+        begin
+          X := 0;
+          try
+            raise EFoo.Create
+          except
+            on E: EBar do X := 9
+            else X := 5
+          end;
+          WriteLn(X)
+        end.
+        ''';
 
   SrcTypedExceptBareRaise =
     SrcExcBase2 +
-    'var X: Integer;'                                 + LineEnding +
-    'begin'                                           + LineEnding +
-    '  X := 0;'                                       + LineEnding +
-    '  try'                                           + LineEnding +
-    '    try'                                         + LineEnding +
-    '      raise EFoo.Create'                         + LineEnding +
-    '    except'                                      + LineEnding +
-    '      on E: EFoo do'                             + LineEnding +
-    '      begin'                                     + LineEnding +
-    '        X := 1;'                                 + LineEnding +
-    '        raise'                                   + LineEnding +
-    '      end'                                       + LineEnding +
-    '    end'                                         + LineEnding +
-    '  except'                                        + LineEnding +
-    '    on E: EFoo do X := 2'                        + LineEnding +
-    '  end;'                                          + LineEnding +
-    '  WriteLn(X)'                                    + LineEnding +
-    'end.';
+    '''
+        var X: Integer;
+        begin
+          X := 0;
+          try
+            try
+              raise EFoo.Create
+            except
+              on E: EFoo do
+              begin
+                X := 1;
+                raise
+              end
+            end
+          except
+            on E: EFoo do X := 2
+          end;
+          WriteLn(X)
+        end.
+        ''';
 
   SrcTypedExceptUnmatched =
     SrcExcBase2 +
-    'var X: Integer;'                                 + LineEnding +
-    'begin'                                           + LineEnding +
-    '  X := 0;'                                       + LineEnding +
-    '  try'                                           + LineEnding +
-    '    try'                                         + LineEnding +
-    '      raise EFoo.Create'                         + LineEnding +
-    '    except'                                      + LineEnding +
-    '      on E: EBar do X := 9'                      + LineEnding +
-    '    end'                                         + LineEnding +
-    '  except'                                        + LineEnding +
-    '    on E: EFoo do X := 3'                        + LineEnding +
-    '  end;'                                          + LineEnding +
-    '  WriteLn(X)'                                    + LineEnding +
-    'end.';
+    '''
+        var X: Integer;
+        begin
+          X := 0;
+          try
+            try
+              raise EFoo.Create
+            except
+              on E: EBar do X := 9
+            end
+          except
+            on E: EFoo do X := 3
+          end;
+          WriteLn(X)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Typed except handler — E2E tests                                   }
@@ -2471,7 +2624,7 @@ procedure TE2ETests.TestRun_TypedExcept_CorrectHandlerMatched;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptCorrect, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptCorrect, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('EFoo handler ran', '42', Trim(Output));
 end;
@@ -2480,7 +2633,7 @@ procedure TE2ETests.TestRun_TypedExcept_SubclassMatchesParentHandler;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptSubclass, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptSubclass, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('EBar matches EFoo handler', '7', Trim(Output));
 end;
@@ -2489,7 +2642,7 @@ procedure TE2ETests.TestRun_TypedExcept_UnmatchedReraises;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptUnmatched, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptUnmatched, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('unmatched inner re-raises to outer', '3', Trim(Output));
 end;
@@ -2498,7 +2651,7 @@ procedure TE2ETests.TestRun_TypedExcept_BareRaisePropagatesToOuter;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptBareRaise, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptBareRaise, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('bare raise propagated to outer handler', '2', Trim(Output));
 end;
@@ -2507,7 +2660,7 @@ procedure TE2ETests.TestRun_TypedExcept_ElseBodyRunsWhenNoMatch;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptElseRun, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcTypedExceptElseRun, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('else body ran when no handler matched', '5', Trim(Output));
 end;
@@ -2572,7 +2725,7 @@ procedure TE2ETests.TestRun_ToString_DefaultReturnsClassName;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcToStringDefault, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcToStringDefault, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('default ToString returns class name',
     'TFoo' + LE + 'TBar' + LE, Output);
@@ -2582,7 +2735,7 @@ procedure TE2ETests.TestRun_ToString_OverrideDispatchedVirtually;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcToStringOverride, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcToStringOverride, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('override reached through static base type',
     'foo!' + LE + 'bar!' + LE, Output);
@@ -2592,7 +2745,7 @@ procedure TE2ETests.TestRun_ToString_InheritedOverrideStillReached;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcToStringInheritedOverride, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcToStringInheritedOverride, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('inherited override still reached',
     'foo override' + LE + 'foo override' + LE, Output);
@@ -2604,96 +2757,108 @@ end;
 
 const
   SrcInheritsFromBase =
-    'program P;'                          + LineEnding +
-    'type TBase = class end;'             + LineEnding +
-    'var B: TBase;'                       + LineEnding +
-    'begin'                               + LineEnding +
-    '  B := TBase.Create;'                + LineEnding +
-    '  if B.InheritsFrom(TBase) then'     + LineEnding +
-    '    WriteLn(''yes'')'                + LineEnding +
-    '  else'                              + LineEnding +
-    '    WriteLn(''no'');'                + LineEnding +
-    '  B.Free;'                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        type TBase = class end;
+        var B: TBase;
+        begin
+          B := TBase.Create;
+          if B.InheritsFrom(TBase) then
+            WriteLn('yes')
+          else
+            WriteLn('no');
+          B.Free;
+        end.
+        ''';
 
   SrcInheritsFromParent =
-    'program P;'                              + LineEnding +
-    'type TBase = class end;'                 + LineEnding +
-    '     TChild = class(TBase) end;'         + LineEnding +
-    'var C: TChild;'                          + LineEnding +
-    'begin'                                   + LineEnding +
-    '  C := TChild.Create;'                   + LineEnding +
-    '  if C.InheritsFrom(TBase) then'         + LineEnding +
-    '    WriteLn(''yes'')'                    + LineEnding +
-    '  else'                                  + LineEnding +
-    '    WriteLn(''no'');'                    + LineEnding +
-    '  C.Free;'                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        type TBase = class end;
+             TChild = class(TBase) end;
+        var C: TChild;
+        begin
+          C := TChild.Create;
+          if C.InheritsFrom(TBase) then
+            WriteLn('yes')
+          else
+            WriteLn('no');
+          C.Free;
+        end.
+        ''';
 
   SrcInheritsFromGrandParent =
-    'program P;'                                    + LineEnding +
-    'type TBase = class end;'                       + LineEnding +
-    '     TChild = class(TBase) end;'               + LineEnding +
-    '     TGrandChild = class(TChild) end;'         + LineEnding +
-    'var G: TGrandChild;'                           + LineEnding +
-    'begin'                                         + LineEnding +
-    '  G := TGrandChild.Create;'                    + LineEnding +
-    '  if G.InheritsFrom(TBase) then'               + LineEnding +
-    '    WriteLn(''yes'')'                          + LineEnding +
-    '  else'                                        + LineEnding +
-    '    WriteLn(''no'');'                          + LineEnding +
-    '  G.Free;'                                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        type TBase = class end;
+             TChild = class(TBase) end;
+             TGrandChild = class(TChild) end;
+        var G: TGrandChild;
+        begin
+          G := TGrandChild.Create;
+          if G.InheritsFrom(TBase) then
+            WriteLn('yes')
+          else
+            WriteLn('no');
+          G.Free;
+        end.
+        ''';
 
   SrcInheritsFromUnrelated =
-    'program P;'                                  + LineEnding +
-    'type TBase = class end;'                     + LineEnding +
-    '     TUnrelated = class end;'                + LineEnding +
-    'var B: TBase;'                               + LineEnding +
-    'begin'                                       + LineEnding +
-    '  B := TBase.Create;'                        + LineEnding +
-    '  if B.InheritsFrom(TUnrelated) then'        + LineEnding +
-    '    WriteLn(''yes'')'                        + LineEnding +
-    '  else'                                      + LineEnding +
-    '    WriteLn(''no'');'                        + LineEnding +
-    '  B.Free;'                                   + LineEnding +
-    'end.';
+    '''
+        program P;
+        type TBase = class end;
+             TUnrelated = class end;
+        var B: TBase;
+        begin
+          B := TBase.Create;
+          if B.InheritsFrom(TUnrelated) then
+            WriteLn('yes')
+          else
+            WriteLn('no');
+          B.Free;
+        end.
+        ''';
 
   SrcInheritsFromReverse =
-    'program P;'                              + LineEnding +
-    'type TBase = class end;'                 + LineEnding +
-    '     TChild = class(TBase) end;'         + LineEnding +
-    'var B: TBase;'                           + LineEnding +
-    'begin'                                   + LineEnding +
-    '  B := TBase.Create;'                    + LineEnding +
-    '  if B.InheritsFrom(TChild) then'        + LineEnding +
-    '    WriteLn(''yes'')'                    + LineEnding +
-    '  else'                                  + LineEnding +
-    '    WriteLn(''no'');'                    + LineEnding +
-    '  B.Free;'                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        type TBase = class end;
+             TChild = class(TBase) end;
+        var B: TBase;
+        begin
+          B := TBase.Create;
+          if B.InheritsFrom(TChild) then
+            WriteLn('yes')
+          else
+            WriteLn('no');
+          B.Free;
+        end.
+        ''';
 
   SrcInheritsFromClassType =
-    'program P;'                                  + LineEnding +
-    'type TBase = class end;'                     + LineEnding +
-    '     TChild = class(TBase) end;'             + LineEnding +
-    'var C: TChild;'                              + LineEnding +
-    '    CT: Pointer;'                            + LineEnding +
-    'begin'                                       + LineEnding +
-    '  C := TChild.Create;'                       + LineEnding +
-    '  CT := C.ClassType;'                        + LineEnding +
-    '  if CT.InheritsFrom(TBase) then'            + LineEnding +
-    '    WriteLn(''yes'')'                        + LineEnding +
-    '  else'                                      + LineEnding +
-    '    WriteLn(''no'');'                        + LineEnding +
-    '  C.Free;'                                   + LineEnding +
-    'end.';
+    '''
+        program P;
+        type TBase = class end;
+             TChild = class(TBase) end;
+        var C: TChild;
+            CT: Pointer;
+        begin
+          C := TChild.Create;
+          CT := C.ClassType;
+          if CT.InheritsFrom(TBase) then
+            WriteLn('yes')
+          else
+            WriteLn('no');
+          C.Free;
+        end.
+        ''';
 
 procedure TE2ETests.TestRun_InheritsFrom_SameClass_ReturnsTrue;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromBase, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromBase, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('same class returns true', 'yes' + LE, Output);
 end;
@@ -2702,7 +2867,7 @@ procedure TE2ETests.TestRun_InheritsFrom_Parent_ReturnsTrue;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromParent, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromParent, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('child inherits from parent', 'yes' + LE, Output);
 end;
@@ -2711,7 +2876,7 @@ procedure TE2ETests.TestRun_InheritsFrom_GrandParent_ReturnsTrue;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromGrandParent, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromGrandParent, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('grandchild inherits from base', 'yes' + LE, Output);
 end;
@@ -2720,7 +2885,7 @@ procedure TE2ETests.TestRun_InheritsFrom_Unrelated_ReturnsFalse;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromUnrelated, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromUnrelated, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('unrelated class returns false', 'no' + LE, Output);
 end;
@@ -2729,7 +2894,7 @@ procedure TE2ETests.TestRun_InheritsFrom_Reverse_ReturnsFalse;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromReverse, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromReverse, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('parent does not inherit from child', 'no' + LE, Output);
 end;
@@ -2738,7 +2903,7 @@ procedure TE2ETests.TestRun_InheritsFrom_ClassType_Works;
 var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromClassType, Output, RCode, []));
+  AssertTrue('compile+run', CompileAndRun(SrcInheritsFromClassType, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('ClassType.InheritsFrom works', 'yes' + LE, Output);
 end;
@@ -2749,39 +2914,49 @@ end;
 
 const
   SrcGetProcessID =
-    'program P;'                                      + LineEnding +
-    'begin'                                           + LineEnding +
-    '  WriteLn(GetProcessID)'                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteLn(GetProcessID)
+        end.
+        ''';
 
   SrcDirectoryExists =
-    'program P;'                                      + LineEnding +
-    'begin'                                           + LineEnding +
-    '  WriteLn(DirectoryExists(''/tmp''));'            + LineEnding +
-    '  WriteLn(DirectoryExists(''/__no_such_dir__''))' + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteLn(DirectoryExists('/tmp'));
+          WriteLn(DirectoryExists('/__no_such_dir__'))
+        end.
+        ''';
 
   SrcGetTempDir =
-    'program P;'                                      + LineEnding +
-    'begin'                                           + LineEnding +
-    '  WriteLn(GetTempDir)'                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteLn(GetTempDir)
+        end.
+        ''';
 
   SrcForceDirectories =
-    'program P;'                                      + LineEnding +
-    'var Dir: string;'                                + LineEnding +
-    'begin'                                           + LineEnding +
-    '  Dir := ParamStr(1);'                           + LineEnding +
-    '  WriteLn(ForceDirectories(Dir));'               + LineEnding +
-    '  WriteLn(DirectoryExists(Dir))'                 + LineEnding +
-    'end.';
+    '''
+        program P;
+        var Dir: string;
+        begin
+          Dir := ParamStr(1);
+          WriteLn(ForceDirectories(Dir));
+          WriteLn(DirectoryExists(Dir))
+        end.
+        ''';
 
   SrcSleepTest =
-    'program P;'                                      + LineEnding +
-    'begin'                                           + LineEnding +
-    '  Sleep(1);'                                     + LineEnding +
-    '  WriteLn(''ok'')'                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          Sleep(1);
+          WriteLn('ok')
+        end.
+        ''';
 
 procedure TE2ETests.TestRun_GetProcessID_ReturnsNonZero;
 var
@@ -2791,9 +2966,9 @@ var
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run',
-    CompileAndRun(SrcGetProcessID, Output, RCode, []));
+    CompileAndRun(SrcGetProcessID, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
-  PID := StrToIntDef(Trim(Output), 0);
+  PID := StrToInt(Trim(Output));
   AssertTrue('PID > 0', PID > 0);
 end;
 
@@ -2805,13 +2980,13 @@ var
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run',
-    CompileAndRun(SrcDirectoryExists, Output, RCode, []));
+    CompileAndRun(SrcDirectoryExists, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   Lines := TStringList.Create;
   try
     Lines.Text := Trim(Output);
-    AssertEquals('/tmp exists = 1',           '1', Lines[0]);
-    AssertEquals('missing dir = 0',           '0', Lines[1]);
+    AssertEquals('/tmp exists = 1',           '1', Lines.Strings[0]);
+    AssertEquals('missing dir = 0',           '0', Lines.Strings[1]);
   finally
     Lines.Free;
   end;
@@ -2825,7 +3000,7 @@ var
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run',
-    CompileAndRun(SrcGetTempDir, Output, RCode, []));
+    CompileAndRun(SrcGetTempDir, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   Dir := Trim(Output);
   AssertTrue('dir is non-empty', Length(Dir) > 0);
@@ -2849,8 +3024,8 @@ begin
     Lines := TStringList.Create;
     try
       Lines.Text := Trim(Output);
-      AssertEquals('ForceDirectories returned 1', '1', Lines[0]);
-      AssertEquals('DirectoryExists returned 1',  '1', Lines[1]);
+      AssertEquals('ForceDirectories returned 1', '1', Lines.Strings[0]);
+      AssertEquals('DirectoryExists returned 1',  '1', Lines.Strings[1]);
     finally
       Lines.Free;
     end;
@@ -2873,7 +3048,7 @@ var
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run',
-    CompileAndRun(SrcSleepTest, Output, RCode, []));
+    CompileAndRun(SrcSleepTest, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('output is ok', 'ok', Trim(Output));
 end;

@@ -15,7 +15,7 @@ unit cp.test.exceptions;
 interface
 
 uses
-  Classes, SysUtils, StrUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -203,65 +203,75 @@ end;
 
 const
   SrcTryFinally =
-    'program P;'                + LineEnding +
-    'var X: Integer;'           + LineEnding +
-    'begin'                     + LineEnding +
-    '  X := 0;'                 + LineEnding +
-    '  try'                     + LineEnding +
-    '    X := 1'                + LineEnding +
-    '  finally'                 + LineEnding +
-    '    X := 2'                + LineEnding +
-    '  end'                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var X: Integer;
+        begin
+          X := 0;
+          try
+            X := 1
+          finally
+            X := 2
+          end
+        end.
+        ''';
 
   SrcTryFinallyMulti =
-    'program P;'                + LineEnding +
-    'var X: Integer;'           + LineEnding +
-    'var Y: Integer;'           + LineEnding +
-    'begin'                     + LineEnding +
-    '  try'                     + LineEnding +
-    '    X := 1;'               + LineEnding +
-    '    Y := 2'                + LineEnding +
-    '  finally'                 + LineEnding +
-    '    X := 0;'               + LineEnding +
-    '    Y := 0'                + LineEnding +
-    '  end'                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var X: Integer;
+        var Y: Integer;
+        begin
+          try
+            X := 1;
+            Y := 2
+          finally
+            X := 0;
+            Y := 0
+          end
+        end.
+        ''';
 
   SrcTryExcept =
-    'program P;'                + LineEnding +
-    'var X: Integer;'           + LineEnding +
-    'begin'                     + LineEnding +
-    '  X := 0;'                 + LineEnding +
-    '  try'                     + LineEnding +
-    '    X := 1'                + LineEnding +
-    '  except'                  + LineEnding +
-    '    X := 99'               + LineEnding +
-    '  end'                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var X: Integer;
+        begin
+          X := 0;
+          try
+            X := 1
+          except
+            X := 99
+          end
+        end.
+        ''';
 
   SrcRaise =
-    'program P;'                + LineEnding +
-    'type'                      + LineEnding +
-    '  TError = class'          + LineEnding +
-    '    Code: Integer;'        + LineEnding +
-    '  end;'                    + LineEnding +
-    'var E: TError;'            + LineEnding +
-    'begin'                     + LineEnding +
-    '  E := TError.Create;'     + LineEnding +
-    '  raise E'                 + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TError = class
+            Code: Integer;
+          end;
+        var E: TError;
+        begin
+          E := TError.Create;
+          raise E
+        end.
+        ''';
 
   SrcBareRaise =
-    'program P;'                + LineEnding +
-    'var X: Integer;'           + LineEnding +
-    'begin'                     + LineEnding +
-    '  try'                     + LineEnding +
-    '    X := 1'                + LineEnding +
-    '  except'                  + LineEnding +
-    '    raise'                 + LineEnding +
-    '  end'                     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var X: Integer;
+        begin
+          try
+            X := 1
+          except
+            raise
+          end
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Lexer tests                                                          }
@@ -453,12 +463,14 @@ end;
 procedure TExceptionTests.TestSemantic_Raise_NonClass_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'          + LineEnding +
-    'var X: Integer;'     + LineEnding +
-    'begin'               + LineEnding +
-    '  X := 1;'           + LineEnding +
-    '  raise X'           + LineEnding +
-    'end.');
+    '''
+        program P;
+        var X: Integer;
+        begin
+          X := 1;
+          raise X
+        end.
+        ''');
 end;
 
 procedure TExceptionTests.TestSemantic_Raise_Bare_OK;
@@ -472,20 +484,22 @@ begin
     that inherits it can be declared, instantiated, and raised without semantic
     errors.  This mirrors the API exposed by rtl/src/main/pascal/sysutils.pas. }
   AnalyseSrc(
-    'program P;'                                          + LineEnding +
-    'type'                                                + LineEnding +
-    '  Exception = class'                                 + LineEnding +
-    '    FMessage: string;'                               + LineEnding +
-    '    constructor Create(AMessage: string);'           + LineEnding +
-    '    property Message: string read FMessage;'         + LineEnding +
-    '  end;'                                              + LineEnding +
-    '  ECompileError = class(Exception)'                  + LineEnding +
-    '  end;'                                              + LineEnding +
-    'var E: ECompileError;'                               + LineEnding +
-    'begin'                                               + LineEnding +
-    '  E := ECompileError.Create(''compile error'');'     + LineEnding +
-    '  raise E'                                           + LineEnding +
-    'end.').Free;
+    '''
+        program P;
+        type
+          Exception = class
+            FMessage: string;
+            constructor Create(AMessage: string);
+            property Message: string read FMessage;
+          end;
+          ECompileError = class(Exception)
+          end;
+        var E: ECompileError;
+        begin
+          E := ECompileError.Create('compile error');
+          raise E
+        end.
+        ''').Free;
 end;
 
 { ------------------------------------------------------------------ }
@@ -638,14 +652,16 @@ const
     This ensures there is no assignment-site _StringRelease before @fin_exc
     that could produce a false positive in the position tests below. }
   SrcTryFinallyWithStr =
-    'program P;'               + LineEnding +
-    'var S: string;'           + LineEnding +
-    'begin'                    + LineEnding +
-    '  try'                    + LineEnding +
-    '    S := ''world'''       + LineEnding +
-    '  finally'                + LineEnding +
-    '  end'                    + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          try
+            S := 'world'
+          finally
+          end
+        end.
+        ''';
 
 procedure TExceptionTests.TestCodegen_TryFinally_ArcRelease_BeforeReraise;
 var
@@ -693,20 +709,22 @@ begin
   { Verify that constructing an Exception subclass with a message argument
     emits a constructor call that passes the string argument in the IR. }
   IR := GenIR(
-    'program P;'                                          + LineEnding +
-    'type'                                                + LineEnding +
-    '  Exception = class'                                 + LineEnding +
-    '    FMessage: string;'                               + LineEnding +
-    '    constructor Create(AMessage: string);'           + LineEnding +
-    '    property Message: string read FMessage;'         + LineEnding +
-    '  end;'                                              + LineEnding +
-    '  ECompileError = class(Exception)'                  + LineEnding +
-    '  end;'                                              + LineEnding +
-    'var E: ECompileError;'                               + LineEnding +
-    'begin'                                               + LineEnding +
-    '  E := ECompileError.Create(''oops'');'              + LineEnding +
-    '  raise E'                                           + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          Exception = class
+            FMessage: string;
+            constructor Create(AMessage: string);
+            property Message: string read FMessage;
+          end;
+          ECompileError = class(Exception)
+          end;
+        var E: ECompileError;
+        begin
+          E := ECompileError.Create('oops');
+          raise E
+        end.
+        ''');
   AssertTrue('ctor call present',  Pos('$Exception_Create', IR) > 0);
   AssertTrue('string arg present', Pos('oops', IR) > 0);
   AssertTrue('raise RTL call',     Pos('$_Raise', IR) > 0);
@@ -718,67 +736,77 @@ end;
 
 const
   SrcExcBase =
-    'program P;'                                      + LineEnding +
-    'type'                                            + LineEnding +
-    '  Exception = class'                             + LineEnding +
-    '    FMessage: string;'                           + LineEnding +
-    '    constructor Create(AMessage: string);'       + LineEnding +
-    '    property Message: string read FMessage;'     + LineEnding +
-    '  end;'                                          + LineEnding +
-    '  EFoo = class(Exception) end;'                  + LineEnding +
-    '  EBar = class(Exception) end;'                  + LineEnding;
+    '''
+        program P;
+        type
+          Exception = class
+            FMessage: string;
+            constructor Create(AMessage: string);
+            property Message: string read FMessage;
+          end;
+          EFoo = class(Exception) end;
+          EBar = class(Exception) end;
+        ''';
 
   SrcTypedExceptSingle =
     SrcExcBase +
-    'var X: Integer;'                                 + LineEnding +
-    'begin'                                           + LineEnding +
-    '  try'                                           + LineEnding +
-    '    X := 1'                                      + LineEnding +
-    '  except'                                        + LineEnding +
-    '    on E: EFoo do'                               + LineEnding +
-    '      X := 42'                                   + LineEnding +
-    '  end'                                           + LineEnding +
-    'end.';
+    '''
+        var X: Integer;
+        begin
+          try
+            X := 1
+          except
+            on E: EFoo do
+              X := 42
+          end
+        end.
+        ''';
 
   SrcTypedExceptTwo =
     SrcExcBase +
-    'var X: Integer;'                                 + LineEnding +
-    'begin'                                           + LineEnding +
-    '  try'                                           + LineEnding +
-    '    X := 1'                                      + LineEnding +
-    '  except'                                        + LineEnding +
-    '    on E: EFoo do'                               + LineEnding +
-    '      X := 42;'                                  + LineEnding +
-    '    on E: EBar do'                               + LineEnding +
-    '      X := 99'                                   + LineEnding +
-    '  end'                                           + LineEnding +
-    'end.';
+    '''
+        var X: Integer;
+        begin
+          try
+            X := 1
+          except
+            on E: EFoo do
+              X := 42;
+            on E: EBar do
+              X := 99
+          end
+        end.
+        ''';
 
   SrcTypedExceptWithElse =
     SrcExcBase +
-    'var X: Integer;'                                 + LineEnding +
-    'begin'                                           + LineEnding +
-    '  try'                                           + LineEnding +
-    '    X := 1'                                      + LineEnding +
-    '  except'                                        + LineEnding +
-    '    on E: EFoo do'                               + LineEnding +
-    '      X := 42'                                   + LineEnding +
-    '    else'                                        + LineEnding +
-    '      X := 0'                                    + LineEnding +
-    '  end'                                           + LineEnding +
-    'end.';
+    '''
+        var X: Integer;
+        begin
+          try
+            X := 1
+          except
+            on E: EFoo do
+              X := 42
+            else
+              X := 0
+          end
+        end.
+        ''';
 
   SrcTypedExceptNoVar =
     SrcExcBase +
-    'var X: Integer;'                                 + LineEnding +
-    'begin'                                           + LineEnding +
-    '  try'                                           + LineEnding +
-    '    X := 1'                                      + LineEnding +
-    '  except'                                        + LineEnding +
-    '    on EFoo do'                                  + LineEnding +
-    '      X := 42'                                   + LineEnding +
-    '  end'                                           + LineEnding +
-    'end.';
+    '''
+        var X: Integer;
+        begin
+          try
+            X := 1
+          except
+            on EFoo do
+              X := 42
+          end
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Parser — typed except handlers                                     }
@@ -877,16 +905,18 @@ end;
 procedure TExceptionTests.TestSemantic_TypedExcept_NonClassType_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                             + LineEnding +
-    'var X: Integer;'                        + LineEnding +
-    'begin'                                  + LineEnding +
-    '  try'                                  + LineEnding +
-    '    X := 1'                             + LineEnding +
-    '  except'                               + LineEnding +
-    '    on E: Integer do'                   + LineEnding +
-    '      X := 0'                           + LineEnding +
-    '  end'                                  + LineEnding +
-    'end.');
+    '''
+        program P;
+        var X: Integer;
+        begin
+          try
+            X := 1
+          except
+            on E: Integer do
+              X := 0
+          end
+        end.
+        ''');
 end;
 
 procedure TExceptionTests.TestSemantic_TypedExcept_WithElse_OK;
@@ -899,15 +929,17 @@ begin
   { Handler variable E should be in scope and usable inside the handler body. }
   AnalyseSrc(
     SrcExcBase +
-    'var X: Integer;'                                     + LineEnding +
-    'begin'                                               + LineEnding +
-    '  try'                                               + LineEnding +
-    '    X := 1'                                          + LineEnding +
-    '  except'                                            + LineEnding +
-    '    on E: EFoo do'                                   + LineEnding +
-    '      X := 0'                                        + LineEnding +
-    '  end'                                               + LineEnding +
-    'end.').Free;
+    '''
+        var X: Integer;
+        begin
+          try
+            X := 1
+          except
+            on E: EFoo do
+              X := 0
+          end
+        end.
+        ''').Free;
 end;
 
 { ------------------------------------------------------------------ }
@@ -961,15 +993,17 @@ var IR: string;
 begin
   IR := GenIR(
     SrcExcBase +
-    'var X: Integer;'                                     + LineEnding +
-    'begin'                                               + LineEnding +
-    '  try'                                               + LineEnding +
-    '    X := 1'                                          + LineEnding +
-    '  except'                                            + LineEnding +
-    '    on E: EFoo do'                                   + LineEnding +
-    '      raise'                                         + LineEnding +
-    '  end'                                               + LineEnding +
-    'end.');
+    '''
+        var X: Integer;
+        begin
+          try
+            X := 1
+          except
+            on E: EFoo do
+              raise
+          end
+        end.
+        ''');
   AssertTrue('bare raise calls _Reraise', Pos('call $_Reraise', IR) > 0);
 end;
 

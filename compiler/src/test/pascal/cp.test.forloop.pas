@@ -15,7 +15,7 @@ unit cp.test.forloop;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -134,37 +134,43 @@ end;
 
 const
   SrcForUpward =
-    'program P;'             + LineEnding +
-    'var I: Integer;'        + LineEnding +
-    'var S: Integer;'        + LineEnding +
-    'begin'                  + LineEnding +
-    '  S := 0;'              + LineEnding +
-    '  for I := 1 to 5 do'  + LineEnding +
-    '    S := S + I'         + LineEnding +
-    'end.';
+    '''
+        program P;
+        var I: Integer;
+        var S: Integer;
+        begin
+          S := 0;
+          for I := 1 to 5 do
+            S := S + I
+        end.
+        ''';
 
   SrcForDownto =
-    'program P;'                  + LineEnding +
-    'var I: Integer;'             + LineEnding +
-    'var S: Integer;'             + LineEnding +
-    'begin'                       + LineEnding +
-    '  S := 0;'                   + LineEnding +
-    '  for I := 5 downto 1 do'   + LineEnding +
-    '    S := S + I'              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var I: Integer;
+        var S: Integer;
+        begin
+          S := 0;
+          for I := 5 downto 1 do
+            S := S + I
+        end.
+        ''';
 
   SrcForCompound =
-    'program P;'             + LineEnding +
-    'var I: Integer;'        + LineEnding +
-    'var S: Integer;'        + LineEnding +
-    'begin'                  + LineEnding +
-    '  S := 0;'              + LineEnding +
-    '  for I := 1 to 3 do'  + LineEnding +
-    '  begin'                + LineEnding +
-    '    S := S + I;'        + LineEnding +
-    '    S := S + 1'         + LineEnding +
-    '  end'                  + LineEnding +
-    'end.';
+    '''
+        program P;
+        var I: Integer;
+        var S: Integer;
+        begin
+          S := 0;
+          for I := 1 to 3 do
+          begin
+            S := S + I;
+            S := S + 1
+          end
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Lexer tests                                                          }
@@ -305,36 +311,42 @@ end;
 procedure TForTests.TestSemantic_For_NonOrdinalVar_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'              + LineEnding +
-    'var S: string;'          + LineEnding +
-    'begin'                   + LineEnding +
-    '  for S := 1 to 5 do'   + LineEnding +
-    '    S := S'              + LineEnding +
-    'end.');
+    '''
+        program P;
+        var S: string;
+        begin
+          for S := 1 to 5 do
+            S := S
+        end.
+        ''');
 end;
 
 procedure TForTests.TestSemantic_For_StartTypeMismatch_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                + LineEnding +
-    'var I: Integer;'           + LineEnding +
-    'var S: string;'            + LineEnding +
-    'begin'                     + LineEnding +
-    '  for I := S to 5 do'     + LineEnding +
-    '    I := I'                + LineEnding +
-    'end.');
+    '''
+        program P;
+        var I: Integer;
+        var S: string;
+        begin
+          for I := S to 5 do
+            I := I
+        end.
+        ''');
 end;
 
 procedure TForTests.TestSemantic_For_EndTypeMismatch_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                + LineEnding +
-    'var I: Integer;'           + LineEnding +
-    'var S: string;'            + LineEnding +
-    'begin'                     + LineEnding +
-    '  for I := 1 to S do'     + LineEnding +
-    '    I := I'                + LineEnding +
-    'end.');
+    '''
+        program P;
+        var I: Integer;
+        var S: string;
+        begin
+          for I := 1 to S do
+            I := I
+        end.
+        ''');
 end;
 
 { ------------------------------------------------------------------ }

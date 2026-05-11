@@ -20,7 +20,7 @@ unit cp.test.tdictionary;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -65,173 +65,185 @@ implementation
 const
   { Forward-only class declaration (interface section style) }
   DictDecl =
-    'type'                                                    + LineEnding +
-    '  TDictionary<K, V> = class'                            + LineEnding +
-    '    FKeys:     ^K;'                                      + LineEnding +
-    '    FValues:   ^V;'                                      + LineEnding +
-    '    FCount:    Integer;'                                 + LineEnding +
-    '    FCapacity: Integer;'                                 + LineEnding +
-    '    procedure Grow;'                                     + LineEnding +
-    '    function  FindKey(Key: K): Integer;'                + LineEnding +
-    '    procedure Add(Key: K; Value: V);'                   + LineEnding +
-    '    function  TryGetValue(Key: K; var Value: V): Boolean;' + LineEnding +
-    '    function  ContainsKey(Key: K): Boolean;'            + LineEnding +
-    '    procedure Remove(Key: K);'                          + LineEnding +
-    '    property Count: Integer read FCount;'               + LineEnding +
-    '  end;'                                                  + LineEnding;
+    '''
+        type
+          TDictionary<K, V> = class
+            FKeys:     ^K;
+            FValues:   ^V;
+            FCount:    Integer;
+            FCapacity: Integer;
+            procedure Grow;
+            function  FindKey(Key: K): Integer;
+            procedure Add(Key: K; Value: V);
+            function  TryGetValue(Key: K; var Value: V): Boolean;
+            function  ContainsKey(Key: K): Boolean;
+            procedure Remove(Key: K);
+            property Count: Integer read FCount;
+          end;
+        ''';
 
   { Separate method implementations }
   DictImpls =
-    'procedure TDictionary<K, V>.Grow;'                      + LineEnding +
-    'var'                                                     + LineEnding +
-    '  NewCap: Integer;'                                      + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  if Self.FCapacity = 0 then'                           + LineEnding +
-    '    NewCap := 8'                                         + LineEnding +
-    '  else'                                                  + LineEnding +
-    '    NewCap := Self.FCapacity * 2;'                       + LineEnding +
-    '  Self.FKeys   := ReallocMem(Self.FKeys,   NewCap * SizeOf(K));' + LineEnding +
-    '  Self.FValues := ReallocMem(Self.FValues, NewCap * SizeOf(V));' + LineEnding +
-    '  Self.FCapacity := NewCap'                              + LineEnding +
-    'end;'                                                    + LineEnding +
-    'function TDictionary<K, V>.FindKey(Key: K): Integer;'  + LineEnding +
-    'var'                                                     + LineEnding +
-    '  I:   Integer;'                                         + LineEnding +
-    '  Ptr: ^K;'                                              + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  Result := -1;'                                         + LineEnding +
-    '  I := 0;'                                               + LineEnding +
-    '  while I < Self.FCount do'                              + LineEnding +
-    '  begin'                                                 + LineEnding +
-    '    Ptr := Self.FKeys + I * SizeOf(K);'                 + LineEnding +
-    '    if Ptr^ = Key then'                                  + LineEnding +
-    '    begin'                                               + LineEnding +
-    '      Result := I;'                                      + LineEnding +
-    '      I := Self.FCount'                                  + LineEnding +
-    '    end'                                                 + LineEnding +
-    '    else'                                                + LineEnding +
-    '      I := I + 1'                                        + LineEnding +
-    '  end'                                                   + LineEnding +
-    'end;'                                                    + LineEnding +
-    'procedure TDictionary<K, V>.Add(Key: K; Value: V);'    + LineEnding +
-    'var'                                                     + LineEnding +
-    '  Idx:  Integer;'                                        + LineEnding +
-    '  KPtr: ^K;'                                             + LineEnding +
-    '  VPtr: ^V;'                                             + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  Idx := Self.FindKey(Key);'                            + LineEnding +
-    '  if Idx >= 0 then'                                      + LineEnding +
-    '  begin'                                                 + LineEnding +
-    '    VPtr  := Self.FValues + Idx * SizeOf(V);'           + LineEnding +
-    '    VPtr^ := Value'                                      + LineEnding +
-    '  end'                                                   + LineEnding +
-    '  else'                                                  + LineEnding +
-    '  begin'                                                 + LineEnding +
-    '    if Self.FCount = Self.FCapacity then'               + LineEnding +
-    '      Self.Grow;'                                        + LineEnding +
-    '    KPtr  := Self.FKeys   + Self.FCount * SizeOf(K);'  + LineEnding +
-    '    VPtr  := Self.FValues + Self.FCount * SizeOf(V);'  + LineEnding +
-    '    KPtr^ := Key;'                                       + LineEnding +
-    '    VPtr^ := Value;'                                     + LineEnding +
-    '    Self.FCount := Self.FCount + 1'                      + LineEnding +
-    '  end'                                                   + LineEnding +
-    'end;'                                                    + LineEnding +
-    'function TDictionary<K, V>.TryGetValue(Key: K; var Value: V): Boolean;' + LineEnding +
-    'var'                                                     + LineEnding +
-    '  Idx:  Integer;'                                        + LineEnding +
-    '  VPtr: ^V;'                                             + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  Idx    := Self.FindKey(Key);'                         + LineEnding +
-    '  Result := Idx >= 0;'                                   + LineEnding +
-    '  if Idx >= 0 then'                                      + LineEnding +
-    '  begin'                                                 + LineEnding +
-    '    VPtr  := Self.FValues + Idx * SizeOf(V);'           + LineEnding +
-    '    Value := VPtr^'                                      + LineEnding +
-    '  end'                                                   + LineEnding +
-    'end;'                                                    + LineEnding +
-    'function TDictionary<K, V>.ContainsKey(Key: K): Boolean;' + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  Result := Self.FindKey(Key) >= 0'                     + LineEnding +
-    'end;'                                                    + LineEnding +
-    'procedure TDictionary<K, V>.Remove(Key: K);'            + LineEnding +
-    'var'                                                     + LineEnding +
-    '  Idx:  Integer;'                                        + LineEnding +
-    '  I:    Integer;'                                        + LineEnding +
-    '  KDst: ^K;'                                             + LineEnding +
-    '  KSrc: ^K;'                                             + LineEnding +
-    '  VDst: ^V;'                                             + LineEnding +
-    '  VSrc: ^V;'                                             + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  Idx := Self.FindKey(Key);'                            + LineEnding +
-    '  if Idx >= 0 then'                                      + LineEnding +
-    '  begin'                                                 + LineEnding +
-    '    I := Idx;'                                           + LineEnding +
-    '    while I < Self.FCount - 1 do'                       + LineEnding +
-    '    begin'                                               + LineEnding +
-    '      KDst  := Self.FKeys   + I * SizeOf(K);'           + LineEnding +
-    '      KSrc  := Self.FKeys   + (I + 1) * SizeOf(K);'    + LineEnding +
-    '      VDst  := Self.FValues + I * SizeOf(V);'           + LineEnding +
-    '      VSrc  := Self.FValues + (I + 1) * SizeOf(V);'    + LineEnding +
-    '      KDst^ := KSrc^;'                                   + LineEnding +
-    '      VDst^ := VSrc^;'                                   + LineEnding +
-    '      I     := I + 1'                                    + LineEnding +
-    '    end;'                                                + LineEnding +
-    '    Self.FCount := Self.FCount - 1'                      + LineEnding +
-    '  end'                                                   + LineEnding +
-    'end;'                                                    + LineEnding;
+    '''
+        procedure TDictionary<K, V>.Grow;
+        var
+          NewCap: Integer;
+        begin
+          if Self.FCapacity = 0 then
+            NewCap := 8
+          else
+            NewCap := Self.FCapacity * 2;
+          Self.FKeys   := ReallocMem(Self.FKeys,   NewCap * SizeOf(K));
+          Self.FValues := ReallocMem(Self.FValues, NewCap * SizeOf(V));
+          Self.FCapacity := NewCap
+        end;
+        function TDictionary<K, V>.FindKey(Key: K): Integer;
+        var
+          I:   Integer;
+          Ptr: ^K;
+        begin
+          Result := -1;
+          I := 0;
+          while I < Self.FCount do
+          begin
+            Ptr := Self.FKeys + I * SizeOf(K);
+            if Ptr^ = Key then
+            begin
+              Result := I;
+              I := Self.FCount
+            end
+            else
+              I := I + 1
+          end
+        end;
+        procedure TDictionary<K, V>.Add(Key: K; Value: V);
+        var
+          Idx:  Integer;
+          KPtr: ^K;
+          VPtr: ^V;
+        begin
+          Idx := Self.FindKey(Key);
+          if Idx >= 0 then
+          begin
+            VPtr  := Self.FValues + Idx * SizeOf(V);
+            VPtr^ := Value
+          end
+          else
+          begin
+            if Self.FCount = Self.FCapacity then
+              Self.Grow;
+            KPtr  := Self.FKeys   + Self.FCount * SizeOf(K);
+            VPtr  := Self.FValues + Self.FCount * SizeOf(V);
+            KPtr^ := Key;
+            VPtr^ := Value;
+            Self.FCount := Self.FCount + 1
+          end
+        end;
+        function TDictionary<K, V>.TryGetValue(Key: K; var Value: V): Boolean;
+        var
+          Idx:  Integer;
+          VPtr: ^V;
+        begin
+          Idx    := Self.FindKey(Key);
+          Result := Idx >= 0;
+          if Idx >= 0 then
+          begin
+            VPtr  := Self.FValues + Idx * SizeOf(V);
+            Value := VPtr^
+          end
+        end;
+        function TDictionary<K, V>.ContainsKey(Key: K): Boolean;
+        begin
+          Result := Self.FindKey(Key) >= 0
+        end;
+        procedure TDictionary<K, V>.Remove(Key: K);
+        var
+          Idx:  Integer;
+          I:    Integer;
+          KDst: ^K;
+          KSrc: ^K;
+          VDst: ^V;
+          VSrc: ^V;
+        begin
+          Idx := Self.FindKey(Key);
+          if Idx >= 0 then
+          begin
+            I := Idx;
+            while I < Self.FCount - 1 do
+            begin
+              KDst  := Self.FKeys   + I * SizeOf(K);
+              KSrc  := Self.FKeys   + (I + 1) * SizeOf(K);
+              VDst  := Self.FValues + I * SizeOf(V);
+              VSrc  := Self.FValues + (I + 1) * SizeOf(V);
+              KDst^ := KSrc^;
+              VDst^ := VSrc^;
+              I     := I + 1
+            end;
+            Self.FCount := Self.FCount - 1
+          end
+        end;
+        ''';
 
   { Complete programs using TDictionary<Integer,Integer> }
 
   SrcCreate =
-    'program P;'                                              + LineEnding +
+    'program P;' + #10 + 
     DictDecl +
     DictImpls +
-    'var D: TDictionary<Integer, Integer>;'                  + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  D := TDictionary<Integer, Integer>.Create'            + LineEnding +
-    'end.';
+    '''
+        var D: TDictionary<Integer, Integer>;
+        begin
+          D := TDictionary<Integer, Integer>.Create
+        end.
+        ''';
 
   SrcAddGet =
-    'program P;'                                              + LineEnding +
+    'program P;' + #10 + 
     DictDecl +
     DictImpls +
-    'var'                                                     + LineEnding +
-    '  D:  TDictionary<Integer, Integer>;'                   + LineEnding +
-    '  OK: Boolean;'                                          + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  D := TDictionary<Integer, Integer>.Create;'           + LineEnding +
-    '  D.Add(1, 100);'                                        + LineEnding +
-    '  D.Add(2, 200);'                                        + LineEnding +
-    '  OK := D.ContainsKey(1)'                               + LineEnding +
-    'end.';
+    '''
+        var
+          D:  TDictionary<Integer, Integer>;
+          OK: Boolean;
+        begin
+          D := TDictionary<Integer, Integer>.Create;
+          D.Add(1, 100);
+          D.Add(2, 200);
+          OK := D.ContainsKey(1)
+        end.
+        ''';
 
   SrcTryGet =
-    'program P;'                                              + LineEnding +
+    'program P;' + #10 + 
     DictDecl +
     DictImpls +
-    'var'                                                     + LineEnding +
-    '  D:  TDictionary<Integer, Integer>;'                   + LineEnding +
-    '  V:  Integer;'                                          + LineEnding +
-    '  OK: Boolean;'                                          + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  D := TDictionary<Integer, Integer>.Create;'           + LineEnding +
-    '  D.Add(42, 99);'                                        + LineEnding +
-    '  OK := D.TryGetValue(42, V)'                           + LineEnding +
-    'end.';
+    '''
+        var
+          D:  TDictionary<Integer, Integer>;
+          V:  Integer;
+          OK: Boolean;
+        begin
+          D := TDictionary<Integer, Integer>.Create;
+          D.Add(42, 99);
+          OK := D.TryGetValue(42, V)
+        end.
+        ''';
 
   SrcRemove =
-    'program P;'                                              + LineEnding +
+    'program P;' + #10 + 
     DictDecl +
     DictImpls +
-    'var'                                                     + LineEnding +
-    '  D:  TDictionary<Integer, Integer>;'                   + LineEnding +
-    '  OK: Boolean;'                                          + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  D := TDictionary<Integer, Integer>.Create;'           + LineEnding +
-    '  D.Add(7, 70);'                                         + LineEnding +
-    '  D.Remove(7);'                                          + LineEnding +
-    '  OK := D.ContainsKey(7)'                               + LineEnding +
-    'end.';
+    '''
+        var
+          D:  TDictionary<Integer, Integer>;
+          OK: Boolean;
+        begin
+          D := TDictionary<Integer, Integer>.Create;
+          D.Add(7, 70);
+          D.Remove(7);
+          OK := D.ContainsKey(7)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                              }

@@ -13,7 +13,7 @@ unit cp.test.vtable;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -69,60 +69,70 @@ implementation
 
 const
   SrcBase =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TAnimal = class'                           + LineEnding +
-    '    procedure Speak; virtual; begin end;'    + LineEnding +
-    '  end;'                                      + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TAnimal = class
+            procedure Speak; virtual; begin end;
+          end;
+        begin end.
+        ''';
 
   SrcInherit =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TAnimal = class'                           + LineEnding +
-    '    procedure Speak; virtual; begin end;'    + LineEnding +
-    '  end;'                                      + LineEnding +
-    '  TDog = class(TAnimal)'                     + LineEnding +
-    '    procedure Speak; override; begin end;'   + LineEnding +
-    '  end;'                                      + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TAnimal = class
+            procedure Speak; virtual; begin end;
+          end;
+          TDog = class(TAnimal)
+            procedure Speak; override; begin end;
+          end;
+        begin end.
+        ''';
 
   SrcBaseWithField =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TPoint = class'                            + LineEnding +
-    '    X: Integer;'                             + LineEnding +
-    '    procedure Reset; virtual; begin end;'    + LineEnding +
-    '  end;'                                      + LineEnding +
-    'var P: TPoint;'                              + LineEnding +
-    'begin'                                       + LineEnding +
-    '  P := TPoint.Create;'                       + LineEnding +
-    '  P.X := 5'                                  + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TPoint = class
+            X: Integer;
+            procedure Reset; virtual; begin end;
+          end;
+        var P: TPoint;
+        begin
+          P := TPoint.Create;
+          P.X := 5
+        end.
+        ''';
 
   SrcStaticMethod =
-    'program P;'                          + LineEnding +
-    'type'                                + LineEnding +
-    '  TFoo = class'                      + LineEnding +
-    '    procedure Bar; begin end;'       + LineEnding +
-    '  end;'                              + LineEnding +
-    'var F: TFoo;'                        + LineEnding +
-    'begin'                               + LineEnding +
-    '  F := TFoo.Create;'                 + LineEnding +
-    '  F.Bar'                             + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+            procedure Bar; begin end;
+          end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          F.Bar
+        end.
+        ''';
 
   SrcVirtualCall =
-    'program P;'                                  + LineEnding +
-    'type'                                        + LineEnding +
-    '  TAnimal = class'                           + LineEnding +
-    '    procedure Speak; virtual; begin end;'    + LineEnding +
-    '  end;'                                      + LineEnding +
-    'var A: TAnimal;'                             + LineEnding +
-    'begin'                                       + LineEnding +
-    '  A := TAnimal.Create;'                      + LineEnding +
-    '  A.Speak'                                   + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TAnimal = class
+            procedure Speak; virtual; begin end;
+          end;
+        var A: TAnimal;
+        begin
+          A := TAnimal.Create;
+          A.Speak
+        end.
+        ''';
 
 function TVTableTests.ParseSrc(const ASrc: string): TProgram;
 var
@@ -262,18 +272,20 @@ var
   Src: string;
 begin
   Src :=
-    'program P;'                          + LineEnding +
-    'type'                                + LineEnding +
-    '  TBase = class'                     + LineEnding +
-    '  end;'                              + LineEnding +
-    '  TDerived = class(TBase)'           + LineEnding +
-    '  end;'                              + LineEnding +
-    'var B: TBase;'                       + LineEnding +
-    'var D: TDerived;'                    + LineEnding +
-    'begin'                               + LineEnding +
-    '  D := TDerived.Create;'             + LineEnding +
-    '  B := D'                            + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBase = class
+          end;
+          TDerived = class(TBase)
+          end;
+        var B: TBase;
+        var D: TDerived;
+        begin
+          D := TDerived.Create;
+          B := D
+        end.
+        ''';
   AnalyseExpectOK(Src);
 end;
 
@@ -372,16 +384,18 @@ var
   IR: string;
 begin
   SrcWith2Virtuals :=
-    'program P;'                                   + LineEnding +
-    'type'                                         + LineEnding +
-    '  TAnimal = class'                            + LineEnding +
-    '    procedure Speak; virtual; begin end;'     + LineEnding +
-    '    procedure Move; virtual; begin end;'      + LineEnding +
-    '  end;'                                       + LineEnding +
-    '  TDog = class(TAnimal)'                      + LineEnding +
-    '    procedure Speak; override; begin end;'    + LineEnding +
-    '  end;'                                       + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TAnimal = class
+            procedure Speak; virtual; begin end;
+            procedure Move; virtual; begin end;
+          end;
+          TDog = class(TAnimal)
+            procedure Speak; override; begin end;
+          end;
+        begin end.
+        ''';
   IR := GenIR(SrcWith2Virtuals);
   AssertTrue('subclass vtable inherits parent Move method',
     IRContains(IR, '$TAnimal_Move'));

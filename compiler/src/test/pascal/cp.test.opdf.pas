@@ -13,7 +13,7 @@ unit cp.test.opdf;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSemantic, uDebugOPDF;
 
 type
@@ -101,432 +101,486 @@ end;
 
 procedure TOPDFTests.TestOPDF_SectionDeclaration;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF('program P; begin end.');
-  AssertTrue('section directive present', Contains(Out, '.section .opdf'));
+  IR := GenOPDF('program P; begin end.');
+  AssertTrue('section directive present', Contains(IR, '.section .opdf'));
 end;
 
 procedure TOPDFTests.TestOPDF_HeaderMagic;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF('program P; begin end.');
-  AssertTrue('OPDF magic bytes present', Contains(Out, '.byte 79, 80, 68, 70'));
+  IR := GenOPDF('program P; begin end.');
+  AssertTrue('OPDF magic bytes present', Contains(IR, '.byte 79, 80, 68, 70'));
 end;
 
 procedure TOPDFTests.TestOPDF_HeaderVersion;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF('program P; begin end.');
-  AssertTrue('version word present', Contains(Out, '.word 1'));
+  IR := GenOPDF('program P; begin end.');
+  AssertTrue('version word present', Contains(IR, '.word 1'));
 end;
 
 procedure TOPDFTests.TestOPDF_TotalRecordsPatched;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF('program P; var X: Integer; begin end.');
+  IR := GenOPDF('program P; var X: Integer; begin end.');
   AssertFalse('TotalRecords not still zero placeholder',
-    Contains(Out, '.int  0                        # TotalRecords'));
+    Contains(IR, '.int  0                        # TotalRecords'));
 end;
 
 procedure TOPDFTests.TestOPDF_Primitive_Integer;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF('program P; var X: Integer; begin end.');
-  AssertTrue('recPrimitive Integer comment', Contains(Out, '# recPrimitive: Integer'));
-  AssertTrue('Integer name emitted', Contains(Out, '.ascii "Integer"'));
+  IR := GenOPDF('program P; var X: Integer; begin end.');
+  AssertTrue('recPrimitive Integer comment', Contains(IR, '# recPrimitive: Integer'));
+  AssertTrue('Integer name emitted', Contains(IR, '.ascii "Integer"'));
 end;
 
 procedure TOPDFTests.TestOPDF_Primitive_Boolean;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF('program P; begin end.');
-  AssertTrue('recPrimitive Boolean present', Contains(Out, '# recPrimitive: Boolean'));
+  IR := GenOPDF('program P; begin end.');
+  AssertTrue('recPrimitive Boolean present', Contains(IR, '# recPrimitive: Boolean'));
 end;
 
 procedure TOPDFTests.TestOPDF_Primitive_Int64;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF('program P; begin end.');
-  AssertTrue('recPrimitive Int64 present', Contains(Out, '# recPrimitive: Int64'));
+  IR := GenOPDF('program P; begin end.');
+  AssertTrue('recPrimitive Int64 present', Contains(IR, '# recPrimitive: Int64'));
 end;
 
 procedure TOPDFTests.TestOPDF_AnsiStr_Record;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF('program P; begin end.');
-  AssertTrue('recUtf8Str present', Contains(Out, '# recUtf8Str'));
-  AssertTrue('Utf8String name emitted', Contains(Out, '.ascii "Utf8String"'));
+  IR := GenOPDF('program P; begin end.');
+  AssertTrue('recUtf8Str present', Contains(IR, '# recUtf8Str'));
+  AssertTrue('Utf8String name emitted', Contains(IR, '.ascii "Utf8String"'));
 end;
 
 procedure TOPDFTests.TestOPDF_GlobalVar_QuadLabel;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'      + LineEnding +
-    'var MyVar: Integer;' + LineEnding +
-    'begin end.');
-  AssertTrue('global var .quad label', Contains(Out, '.quad MyVar'));
+  IR := GenOPDF(
+    '''
+        program P;
+        var MyVar: Integer;
+        begin end.
+        ''');
+  AssertTrue('global var .quad label', Contains(IR, '.quad MyVar'));
 end;
 
 procedure TOPDFTests.TestOPDF_GlobalVar_RecType;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'      + LineEnding +
-    'var MyVar: Integer;' + LineEnding +
-    'begin end.');
-  AssertTrue('recGlobalVar comment', Contains(Out, '# recGlobalVar: MyVar'));
+  IR := GenOPDF(
+    '''
+        program P;
+        var MyVar: Integer;
+        begin end.
+        ''');
+  AssertTrue('recGlobalVar comment', Contains(IR, '# recGlobalVar: MyVar'));
 end;
 
 procedure TOPDFTests.TestOPDF_Enum_RecType;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                              + LineEnding +
-    'type TColor = (clRed, clGreen, clBlue);' + LineEnding +
-    'begin end.');
-  AssertTrue('recEnum comment', Contains(Out, '# recEnum: TColor'));
+  IR := GenOPDF(
+    '''
+        program P;
+        type TColor = (clRed, clGreen, clBlue);
+        begin end.
+        ''');
+  AssertTrue('recEnum comment', Contains(IR, '# recEnum: TColor'));
 end;
 
 procedure TOPDFTests.TestOPDF_Enum_MemberName;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                              + LineEnding +
-    'type TColor = (clRed, clGreen, clBlue);' + LineEnding +
-    'begin end.');
-  AssertTrue('enum member name in output', Contains(Out, '.ascii "clRed"'));
-  AssertTrue('second member', Contains(Out, '.ascii "clBlue"'));
+  IR := GenOPDF(
+    '''
+        program P;
+        type TColor = (clRed, clGreen, clBlue);
+        begin end.
+        ''');
+  AssertTrue('enum member name in output', Contains(IR, '.ascii "clRed"'));
+  AssertTrue('second member', Contains(IR, '.ascii "clBlue"'));
 end;
 
 procedure TOPDFTests.TestOPDF_Class_RecType;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'              + LineEnding +
-    'type'                    + LineEnding +
-    '  TDog = class'          + LineEnding +
-    '    FName: string;'      + LineEnding +
-    '  end;'                  + LineEnding +
-    'begin end.');
-  AssertTrue('recClass comment', Contains(Out, '# recClass: TDog'));
+  IR := GenOPDF(
+    '''
+        program P;
+        type
+          TDog = class
+            FName: string;
+          end;
+        begin end.
+        ''');
+  AssertTrue('recClass comment', Contains(IR, '# recClass: TDog'));
 end;
 
 procedure TOPDFTests.TestOPDF_Class_VtableRef;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'              + LineEnding +
-    'type'                    + LineEnding +
-    '  TDog = class'          + LineEnding +
-    '    FName: string;'      + LineEnding +
-    '  end;'                  + LineEnding +
-    'begin end.');
-  AssertTrue('vtable reference in class record', Contains(Out, 'vtable_TDog'));
+  IR := GenOPDF(
+    '''
+        program P;
+        type
+          TDog = class
+            FName: string;
+          end;
+        begin end.
+        ''');
+  AssertTrue('vtable reference in class record', Contains(IR, 'vtable_TDog'));
 end;
 
 procedure TOPDFTests.TestOPDF_FunctionScope_RecType;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                + LineEnding +
-    'procedure Greet;'          + LineEnding +
-    'begin end;'                + LineEnding +
-    'begin end.');
-  AssertTrue('recFunctionScope comment', Contains(Out, '# recFunctionScope: Greet'));
+  IR := GenOPDF(
+    '''
+        program P;
+        procedure Greet;
+        begin end;
+        begin end.
+        ''');
+  AssertTrue('recFunctionScope comment', Contains(IR, '# recFunctionScope: Greet'));
 end;
 
 procedure TOPDFTests.TestOPDF_FunctionScope_LowPC;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                + LineEnding +
-    'procedure Greet;'          + LineEnding +
-    'begin end;'                + LineEnding +
-    'begin end.');
-  AssertTrue('LowPC label reference', Contains(Out, '.quad Greet'));
+  IR := GenOPDF(
+    '''
+        program P;
+        procedure Greet;
+        begin end;
+        begin end.
+        ''');
+  AssertTrue('LowPC label reference', Contains(IR, '.quad Greet'));
 end;
 
 procedure TOPDFTests.TestOPDF_Parameter_RecType;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                          + LineEnding +
-    'procedure Greet(Name: string);'      + LineEnding +
-    'begin end;'                          + LineEnding +
-    'begin end.');
-  AssertTrue('recParameter comment', Contains(Out, '# recParameter: Name'));
+  IR := GenOPDF(
+    '''
+        program P;
+        procedure Greet(Name: string);
+        begin end;
+        begin end.
+        ''');
+  AssertTrue('recParameter comment', Contains(IR, '# recParameter: Name'));
 end;
 
 procedure TOPDFTests.TestOPDF_LocalVar_RecType;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                  + LineEnding +
-    'procedure Compute;'          + LineEnding +
-    'var Total: Integer;'         + LineEnding +
-    'begin end;'                  + LineEnding +
-    'begin end.');
-  AssertTrue('recLocalVar comment', Contains(Out, '# recLocalVar: Total'));
+  IR := GenOPDF(
+    '''
+        program P;
+        procedure Compute;
+        var Total: Integer;
+        begin end;
+        begin end.
+        ''');
+  AssertTrue('recLocalVar comment', Contains(IR, '# recLocalVar: Total'));
 end;
 
 procedure TOPDFTests.TestOPDF_LocalVar_RBPOffset;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                  + LineEnding +
-    'procedure Compute;'          + LineEnding +
-    'var Total: Integer;'         + LineEnding +
-    'begin end;'                  + LineEnding +
-    'begin end.');
-  AssertTrue('RBP offset line present', Contains(Out, '# LocationData (RBP offset)'));
+  IR := GenOPDF(
+    '''
+        program P;
+        procedure Compute;
+        var Total: Integer;
+        begin end;
+        begin end.
+        ''');
+  AssertTrue('RBP offset line present', Contains(IR, '# LocationData (RBP offset)'));
 end;
 
 procedure TOPDFTests.TestOPDF_LineInfo_RecType;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'              + LineEnding +
-    'procedure Work;'         + LineEnding +
-    'var X: Integer;'         + LineEnding +
-    'begin'                   + LineEnding +
-    '  X := 1;'               + LineEnding +
-    'end;'                    + LineEnding +
-    'begin end.');
-  AssertTrue('recLineInfo record present', Contains(Out, '# recLineInfo'));
+  IR := GenOPDF(
+    '''
+        program P;
+        procedure Work;
+        var X: Integer;
+        begin
+          X := 1;
+        end;
+        begin end.
+        ''');
+  AssertTrue('recLineInfo record present', Contains(IR, '# recLineInfo'));
 end;
 
 procedure TOPDFTests.TestOPDF_LineInfo_FileName;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'              + LineEnding +
-    'procedure Work;'         + LineEnding +
-    'var X: Integer;'         + LineEnding +
-    'begin'                   + LineEnding +
-    '  X := 1;'               + LineEnding +
-    'end;'                    + LineEnding +
-    'begin end.');
-  AssertTrue('source filename in line info', Contains(Out, '.ascii "test.pas"'));
+  IR := GenOPDF(
+    '''
+        program P;
+        procedure Work;
+        var X: Integer;
+        begin
+          X := 1;
+        end;
+        begin end.
+        ''');
+  AssertTrue('source filename in line info', Contains(IR, '.ascii "test.pas"'));
 end;
 
 procedure TOPDFTests.TestOPDF_LineInfo_LineNumber;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'              + LineEnding +
-    'procedure Work;'         + LineEnding +
-    'var X: Integer;'         + LineEnding +
-    'begin'                   + LineEnding +
-    '  X := 1;'               + LineEnding +
-    'end;'                    + LineEnding +
-    'begin end.');
-  AssertTrue('line 5 recorded', Contains(Out, '.int  5  # LineNumber'));
+  IR := GenOPDF(
+    '''
+        program P;
+        procedure Work;
+        var X: Integer;
+        begin
+          X := 1;
+        end;
+        begin end.
+        ''');
+  AssertTrue('line 5 recorded', Contains(IR, '.int  5  # LineNumber'));
 end;
 
 procedure TOPDFTests.TestOPDF_MainScope_RecType;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'      + LineEnding +
-    'var X: Integer;' + LineEnding +
-    'begin'           + LineEnding +
-    '  X := 1;'       + LineEnding +
-    'end.');
-  AssertTrue('recFunctionScope for main', Contains(Out, '# recFunctionScope: P'));
+  IR := GenOPDF(
+    '''
+        program P;
+        var X: Integer;
+        begin
+          X := 1;
+        end.
+        ''');
+  AssertTrue('recFunctionScope for main', Contains(IR, '# recFunctionScope: P'));
 end;
 
 procedure TOPDFTests.TestOPDF_MainScope_LowPC;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'      + LineEnding +
-    'var X: Integer;' + LineEnding +
-    'begin'           + LineEnding +
-    '  X := 1;'       + LineEnding +
-    'end.');
-  AssertTrue('main LowPC label', Contains(Out, '.quad main'));
+  IR := GenOPDF(
+    '''
+        program P;
+        var X: Integer;
+        begin
+          X := 1;
+        end.
+        ''');
+  AssertTrue('main LowPC label', Contains(IR, '.quad main'));
 end;
 
 procedure TOPDFTests.TestOPDF_MainScope_LineInfo;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'      + LineEnding +
-    'var X: Integer;' + LineEnding +
-    'begin'           + LineEnding +
-    '  X := 1;'       + LineEnding +
-    'end.');
-  AssertTrue('line 4 in main body recorded', Contains(Out, '.int  4  # LineNumber'));
+  IR := GenOPDF(
+    '''
+        program P;
+        var X: Integer;
+        begin
+          X := 1;
+        end.
+        ''');
+  AssertTrue('line 4 in main body recorded', Contains(IR, '.int  4  # LineNumber'));
 end;
 
 procedure TOPDFTests.TestOPDF_Pointer_RecType;
 var
-  Out: string;
+  IR: string;
 begin
   { Use ^Integer as a class field type — inline pointer types work
     in field/var positions even though 'type T = ^Foo' in the type
     section is not yet parsed }
-  Out := GenOPDF(
-    'program P;'              + LineEnding +
-    'type TFoo = class'       + LineEnding +
-    '  FNext: ^Integer;'      + LineEnding +
-    'end;'                    + LineEnding +
-    'begin end.');
-  AssertTrue('recPointer comment', Contains(Out, '# recPointer: ^Integer'));
+  IR := GenOPDF(
+    '''
+        program P;
+        type TFoo = class
+          FNext: ^Integer;
+        end;
+        begin end.
+        ''');
+  AssertTrue('recPointer comment', Contains(IR, '# recPointer: ^Integer'));
 end;
 
 procedure TOPDFTests.TestOPDF_Array_Static_RecType;
 var
-  Out: string;
+  IR: string;
 begin
   { Inline array type in global var — type section array decls not yet parsed }
-  Out := GenOPDF(
-    'program P;'                           + LineEnding +
-    'var A: array[1..5] of Integer;'       + LineEnding +
-    'begin end.');
+  IR := GenOPDF(
+    '''
+        program P;
+        var A: array[1..5] of Integer;
+        begin end.
+        ''');
   AssertTrue('recArray comment',
-    Contains(Out, '# recArray (static): array[1..5] of Integer'));
+    Contains(IR, '# recArray (static): array[1..5] of Integer'));
 end;
 
 procedure TOPDFTests.TestOPDF_Array_Static_IsDynamic;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                           + LineEnding +
-    'var A: array[1..5] of Integer;'       + LineEnding +
-    'begin end.');
-  AssertTrue('IsDynamic=0 for static array', Contains(Out, '.byte 0  # IsDynamic'));
+  IR := GenOPDF(
+    '''
+        program P;
+        var A: array[1..5] of Integer;
+        begin end.
+        ''');
+  AssertTrue('IsDynamic=0 for static array', Contains(IR, '.byte 0  # IsDynamic'));
 end;
 
 procedure TOPDFTests.TestOPDF_Set_RecType;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                                   + LineEnding +
-    'type'                                         + LineEnding +
-    '  TDays = (Mon, Tue, Wed);'                   + LineEnding +
-    '  TDaySet = set of TDays;'                    + LineEnding +
-    'var S: TDaySet;'                              + LineEnding +
-    'begin end.');
-  AssertTrue('recSet comment', Contains(Out, '# recSet: TDaySet'));
+  IR := GenOPDF(
+    '''
+        program P;
+        type
+          TDays = (Mon, Tue, Wed);
+          TDaySet = set of TDays;
+        var S: TDaySet;
+        begin end.
+        ''');
+  AssertTrue('recSet comment', Contains(IR, '# recSet: TDaySet'));
 end;
 
 procedure TOPDFTests.TestOPDF_Set_SizeInBytes;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                                   + LineEnding +
-    'type'                                         + LineEnding +
-    '  TDays = (Mon, Tue, Wed);'                   + LineEnding +
-    '  TDaySet = set of TDays;'                    + LineEnding +
-    'var S: TDaySet;'                              + LineEnding +
-    'begin end.');
-  AssertTrue('SizeInBytes=4 for small set', Contains(Out, '.byte 4  # SizeInBytes'));
+  IR := GenOPDF(
+    '''
+        program P;
+        type
+          TDays = (Mon, Tue, Wed);
+          TDaySet = set of TDays;
+        var S: TDaySet;
+        begin end.
+        ''');
+  AssertTrue('SizeInBytes=4 for small set', Contains(IR, '.byte 4  # SizeInBytes'));
 end;
 
 procedure TOPDFTests.TestOPDF_Property_RecType;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                                      + LineEnding +
-    'type TFoo = class'                               + LineEnding +
-    '  FVal: Integer;'                                + LineEnding +
-    '  property Val: Integer read FVal write FVal;'  + LineEnding +
-    'end;'                                            + LineEnding +
-    'begin end.');
-  AssertTrue('recProperty comment', Contains(Out, '# recProperty: Val'));
+  IR := GenOPDF(
+    '''
+        program P;
+        type TFoo = class
+          FVal: Integer;
+          property Val: Integer read FVal write FVal;
+        end;
+        begin end.
+        ''');
+  AssertTrue('recProperty comment', Contains(IR, '# recProperty: Val'));
 end;
 
 procedure TOPDFTests.TestOPDF_Interface_RecType;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                    + LineEnding +
-    'type IGreeter = interface'     + LineEnding +
-    '  procedure Greet;'            + LineEnding +
-    'end;'                          + LineEnding +
-    'begin end.');
-  AssertTrue('recInterface comment', Contains(Out, '# recInterface: IGreeter'));
+  IR := GenOPDF(
+    '''
+        program P;
+        type IGreeter = interface
+          procedure Greet;
+        end;
+        begin end.
+        ''');
+  AssertTrue('recInterface comment', Contains(IR, '# recInterface: IGreeter'));
 end;
 
 procedure TOPDFTests.TestOPDF_Constant_OrdRecord;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'       + LineEnding +
-    'const MaxVal = 100;' + LineEnding +
-    'begin end.');
-  AssertTrue('recConstant for integer', Contains(Out, '# recConstant: MaxVal'));
+  IR := GenOPDF(
+    '''
+        program P;
+        const MaxVal = 100;
+        begin end.
+        ''');
+  AssertTrue('recConstant for integer', Contains(IR, '# recConstant: MaxVal'));
 end;
 
 procedure TOPDFTests.TestOPDF_Constant_OrdValue;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'          + LineEnding +
-    'const MaxVal = 100;' + LineEnding +
-    'begin end.');
-  AssertTrue('constant value embedded', Contains(Out, '.quad 100  # Value'));
+  IR := GenOPDF(
+    '''
+        program P;
+        const MaxVal = 100;
+        begin end.
+        ''');
+  AssertTrue('constant value embedded', Contains(IR, '.quad 100  # Value'));
 end;
 
 procedure TOPDFTests.TestOPDF_Constant_StrRecord;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF(
-    'program P;'                  + LineEnding +
-    'const Greeting = ''Hello'';' + LineEnding +
-    'begin end.');
-  AssertTrue('recConstant for string', Contains(Out, '# recConstant: Greeting'));
+  IR := GenOPDF(
+    '''
+        program P;
+        const Greeting = 'Hello';
+        begin end.
+        ''');
+  AssertTrue('recConstant for string', Contains(IR, '# recConstant: Greeting'));
 end;
 
 procedure TOPDFTests.TestOPDF_UnitDir_Present;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF('program P; begin end.');
-  AssertTrue('recUnitDirectory present', Contains(Out, '# recUnitDirectory'));
+  IR := GenOPDF('program P; begin end.');
+  AssertTrue('recUnitDirectory present', Contains(IR, '# recUnitDirectory'));
 end;
 
 procedure TOPDFTests.TestOPDF_UnitDir_UnitCount;
 var
-  Out: string;
+  IR: string;
 begin
-  Out := GenOPDF('program P; begin end.');
-  AssertTrue('unit count is 1', Contains(Out, '.int  1  # UnitCount'));
+  IR := GenOPDF('program P; begin end.');
+  AssertTrue('unit count is 1', Contains(IR, '.int  1  # UnitCount'));
 end;
 
 initialization

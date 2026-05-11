@@ -16,7 +16,7 @@ unit cp.test.units;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -142,51 +142,57 @@ end;
 
 const
   SrcUnitFuncs =
-    'unit MathUtils;'                            + LineEnding +
-    'interface'                                  + LineEnding +
-    'function Add(A, B: Integer): Integer;'      + LineEnding +
-    'function Mul(A, B: Integer): Integer;'      + LineEnding +
-    'implementation'                             + LineEnding +
-    'function Add(A, B: Integer): Integer;'      + LineEnding +
-    'begin'                                      + LineEnding +
-    '  Result := A + B'                          + LineEnding +
-    'end;'                                       + LineEnding +
-    'function Mul(A, B: Integer): Integer;'      + LineEnding +
-    'begin'                                      + LineEnding +
-    '  Result := A * B'                          + LineEnding +
-    'end;'                                       + LineEnding +
-    'end.';
+    '''
+        unit MathUtils;
+        interface
+        function Add(A, B: Integer): Integer;
+        function Mul(A, B: Integer): Integer;
+        implementation
+        function Add(A, B: Integer): Integer;
+        begin
+          Result := A + B
+        end;
+        function Mul(A, B: Integer): Integer;
+        begin
+          Result := A * B
+        end;
+        end.
+        ''';
 
   SrcUnitWithType =
-    'unit Shapes;'                               + LineEnding +
-    'interface'                                  + LineEnding +
-    'type'                                       + LineEnding +
-    '  TBox = record'                            + LineEnding +
-    '    W: Integer;'                            + LineEnding +
-    '    H: Integer;'                            + LineEnding +
-    '  end;'                                     + LineEnding +
-    'function Area(W, H: Integer): Integer;'     + LineEnding +
-    'implementation'                             + LineEnding +
-    'function Area(W, H: Integer): Integer;'     + LineEnding +
-    'begin'                                      + LineEnding +
-    '  Result := W * H'                          + LineEnding +
-    'end;'                                       + LineEnding +
-    'end.';
+    '''
+        unit Shapes;
+        interface
+        type
+          TBox = record
+            W: Integer;
+            H: Integer;
+          end;
+        function Area(W, H: Integer): Integer;
+        implementation
+        function Area(W, H: Integer): Integer;
+        begin
+          Result := W * H
+        end;
+        end.
+        ''';
 
   SrcUnitImplOnly =
-    'unit Internals;'                            + LineEnding +
-    'interface'                                  + LineEnding +
-    'function Pub(X: Integer): Integer;'         + LineEnding +
-    'implementation'                             + LineEnding +
-    'function Helper(X: Integer): Integer;'      + LineEnding +
-    'begin'                                      + LineEnding +
-    '  Result := X + 1'                          + LineEnding +
-    'end;'                                       + LineEnding +
-    'function Pub(X: Integer): Integer;'         + LineEnding +
-    'begin'                                      + LineEnding +
-    '  Result := Helper(X)'                      + LineEnding +
-    'end;'                                       + LineEnding +
-    'end.';
+    '''
+        unit Internals;
+        interface
+        function Pub(X: Integer): Integer;
+        implementation
+        function Helper(X: Integer): Integer;
+        begin
+          Result := X + 1
+        end;
+        function Pub(X: Integer): Integer;
+        begin
+          Result := Helper(X)
+        end;
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Lexer tests                                                          }
@@ -336,25 +342,29 @@ end;
 procedure TUnitTests.TestSemantic_Unit_SignatureMismatch_ParamCount_RaisesError;
 begin
   AnalyseUnitExpectError(
-    'unit Bad;'                                  + LineEnding +
-    'interface'                                  + LineEnding +
-    'function Add(A, B: Integer): Integer;'      + LineEnding +
-    'implementation'                             + LineEnding +
-    'function Add(A: Integer): Integer;'         + LineEnding +  { wrong: 1 param }
-    'begin'                                      + LineEnding +
-    '  Result := A'                              + LineEnding +
-    'end;'                                       + LineEnding +
-    'end.');
+    'unit Bad;' + #10 + 
+    'interface' + #10 + 
+    'function Add(A, B: Integer): Integer;' + #10 + 
+    'implementation' + #10 + 
+    'function Add(A: Integer): Integer;'         + #10 +  { wrong: 1 param }
+    '''
+        begin
+          Result := A
+        end;
+        end.
+        ''');
 end;
 
 procedure TUnitTests.TestSemantic_Unit_MissingImpl_RaisesError;
 begin
   AnalyseUnitExpectError(
-    'unit Bad;'                                  + LineEnding +
-    'interface'                                  + LineEnding +
-    'function Add(A, B: Integer): Integer;'      + LineEnding +
-    'implementation'                             + LineEnding +
-    'end.');                                     { no implementation of Add }
+    '''
+        unit Bad;
+        interface
+        function Add(A, B: Integer): Integer;
+        implementation
+        end.
+        ''');                                     { no implementation of Add }
 end;
 
 procedure TUnitTests.TestSemantic_Unit_ImplOnlyDecl_OK;
@@ -417,14 +427,16 @@ var
   U: TUnit;
 begin
   U := AnalyseUnit(
-    'unit U;'                                + LineEnding +
-    'interface'                              + LineEnding +
-    'var Counter: Integer;'                  + LineEnding +
-    'procedure Bump;'                        + LineEnding +
-    'implementation'                         + LineEnding +
-    'procedure Bump;'                        + LineEnding +
-    'begin Counter := Counter + 1 end;'      + LineEnding +
-    'end.');
+    '''
+        unit U;
+        interface
+        var Counter: Integer;
+        procedure Bump;
+        implementation
+        procedure Bump;
+        begin Counter := Counter + 1 end;
+        end.
+        ''');
   U.Free;
 end;
 
@@ -433,16 +445,18 @@ var
   U: TUnit;
 begin
   U := AnalyseUnit(
-    'unit U;'                                + LineEnding +
-    'interface'                              + LineEnding +
-    'procedure Bump;'                        + LineEnding +
-    'implementation'                         + LineEnding +
-    'type'                                   + LineEnding +
-    '  TMode = (mA, mB, mC);'                + LineEnding +
-    'var CurrentMode: TMode;'                + LineEnding +
-    'procedure Bump;'                        + LineEnding +
-    'begin CurrentMode := mA end;'           + LineEnding +
-    'end.');
+    '''
+        unit U;
+        interface
+        procedure Bump;
+        implementation
+        type
+          TMode = (mA, mB, mC);
+        var CurrentMode: TMode;
+        procedure Bump;
+        begin CurrentMode := mA end;
+        end.
+        ''');
   U.Free;
 end;
 
@@ -451,16 +465,18 @@ var
   U: TUnit;
 begin
   U := AnalyseUnit(
-    'unit U;'                                          + LineEnding +
-    'interface'                                        + LineEnding +
-    'function Add(A, B: Integer): Integer; overload;' + LineEnding +
-    'function Add(A, B: Double):  Double;  overload;' + LineEnding +
-    'implementation'                                   + LineEnding +
-    'function Add(A, B: Integer): Integer; overload;' + LineEnding +
-    'begin Result := A + B end;'                       + LineEnding +
-    'function Add(A, B: Double): Double; overload;'    + LineEnding +
-    'begin Result := A + B end;'                       + LineEnding +
-    'end.');
+    '''
+        unit U;
+        interface
+        function Add(A, B: Integer): Integer; overload;
+        function Add(A, B: Double):  Double;  overload;
+        implementation
+        function Add(A, B: Integer): Integer; overload;
+        begin Result := A + B end;
+        function Add(A, B: Double): Double; overload;
+        begin Result := A + B end;
+        end.
+        ''');
   U.Free;
 end;
 

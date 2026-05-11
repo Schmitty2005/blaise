@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project>
   <name>blaise-rtl</name>
-  <!-- version inherited from root aggregator -->
 
   <build>
     <packaging>library</packaging>
@@ -13,11 +12,6 @@
   </build>
 
   <test>
-    <framework>fptest</framework>
-    <testSource>TestRunner.pas</testSource>
-    <frameworkOptions>
-      <option>--all</option>
-      <option>--format=plain</option>
-    </frameworkOptions>
+    <testSource>testpunit2.pas</testSource>
   </test>
 </project>

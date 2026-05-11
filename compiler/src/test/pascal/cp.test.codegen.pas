@@ -13,7 +13,7 @@ unit cp.test.codegen;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSemantic, uCodeGenQBE;
 
 type
@@ -246,12 +246,13 @@ procedure TCodeGenTests.TestStringEq_EmitsStringEquals;
 var
   IR: string;
 begin
-  IR := GenerateIR(
-    'program P;'                                   + LineEnding +
-    'var S1, S2: string; B: Boolean;'              + LineEnding +
-    'begin'                                        + LineEnding +
-    '  B := S1 = S2'                               + LineEnding +
-    'end.');
+  IR := GenerateIR('''
+    program P;
+    var S1, S2: string; B: Boolean;
+    begin
+      B := S1 = S2
+    end.
+    ''');
   AssertTrue('Uses _StringEquals', IRContains(IR, '$_StringEquals'));
 end;
 
@@ -259,12 +260,13 @@ procedure TCodeGenTests.TestStringNe_EmitsStringEqualsNegated;
 var
   IR: string;
 begin
-  IR := GenerateIR(
-    'program P;'                                   + LineEnding +
-    'var S1, S2: string; B: Boolean;'              + LineEnding +
-    'begin'                                        + LineEnding +
-    '  B := S1 <> S2'                              + LineEnding +
-    'end.');
+  IR := GenerateIR('''
+    program P;
+    var S1, S2: string; B: Boolean;
+    begin
+      B := S1 <> S2
+    end.
+    ''');
   AssertTrue('Uses _StringEquals for <>', IRContains(IR, '$_StringEquals'));
 end;
 
@@ -272,16 +274,17 @@ procedure TCodeGenTests.TestStringEq_SemanticCompiles;
 var
   IR: string;
 begin
-  IR := GenerateIR(
-    'program P;'                                   + LineEnding +
-    'function Same(A, B: string): Boolean;'        + LineEnding +
-    'begin'                                        + LineEnding +
-    '  Result := A = B'                            + LineEnding +
-    'end;'                                         + LineEnding +
-    'var B: Boolean;'                              + LineEnding +
-    'begin'                                        + LineEnding +
-    '  B := Same(''hello'', ''world'')'            + LineEnding +
-    'end.');
+  IR := GenerateIR('''
+    program P;
+    function Same(A, B: string): Boolean;
+    begin
+      Result := A = B
+    end;
+    var B: Boolean;
+    begin
+      B := Same('hello', 'world')
+    end.
+    ''');
   AssertTrue('Compiles', Length(IR) > 0);
   AssertTrue('Uses _StringEquals', IRContains(IR, '$_StringEquals'));
 end;
@@ -338,16 +341,17 @@ procedure TCodeGenTests.TestBoolFunc_ReturnTrue;
 var
   IR: string;
 begin
-  IR := GenerateIR(
-    'program P;'                                   + LineEnding +
-    'function IsOK: Boolean;'                      + LineEnding +
-    'begin'                                        + LineEnding +
-    '  Result := True'                             + LineEnding +
-    'end;'                                         + LineEnding +
-    'var B: Boolean;'                              + LineEnding +
-    'begin'                                        + LineEnding +
-    '  B := IsOK'                                  + LineEnding +
-    'end.');
+  IR := GenerateIR('''
+    program P;
+    function IsOK: Boolean;
+    begin
+      Result := True
+    end;
+    var B: Boolean;
+    begin
+      B := IsOK
+    end.
+    ''');
   AssertTrue('IsOK function emitted', IRContains(IR, '$IsOK'));
   AssertTrue('True emits copy 1', IRContains(IR, 'copy 1'));
 end;

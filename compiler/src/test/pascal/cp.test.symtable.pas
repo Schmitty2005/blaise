@@ -13,7 +13,7 @@ unit cp.test.symtable;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uSymbolTable;
 
 type

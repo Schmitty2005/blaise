@@ -13,7 +13,7 @@ unit cp.test.overload;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -153,147 +153,167 @@ end;
 
 const
   SrcTwoArities =
-    'program P;'                                            + LineEnding +
-    'procedure Greet; overload;'                            + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  WriteLn(''hello'')'                                  + LineEnding +
-    'end;'                                                  + LineEnding +
-    'procedure Greet(N: Integer); overload;'                + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  WriteLn(N)'                                          + LineEnding +
-    'end;'                                                  + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  Greet;'                                              + LineEnding +
-    '  Greet(42)'                                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        procedure Greet; overload;
+        begin
+          WriteLn('hello')
+        end;
+        procedure Greet(N: Integer); overload;
+        begin
+          WriteLn(N)
+        end;
+        begin
+          Greet;
+          Greet(42)
+        end.
+        ''';
 
   SrcDupNoOverload =
-    'program P;'                                            + LineEnding +
-    'procedure Greet;'                                      + LineEnding +
-    'begin'                                                 + LineEnding +
-    'end;'                                                  + LineEnding +
-    'procedure Greet(N: Integer);'                          + LineEnding +
-    'begin'                                                 + LineEnding +
-    'end;'                                                  + LineEnding +
-    'begin'                                                 + LineEnding +
-    'end.';
+    '''
+        program P;
+        procedure Greet;
+        begin
+        end;
+        procedure Greet(N: Integer);
+        begin
+        end;
+        begin
+        end.
+        ''';
 
   SrcMixedOverloadFlag =
-    'program P;'                                            + LineEnding +
-    'procedure Greet; overload;'                            + LineEnding +
-    'begin'                                                 + LineEnding +
-    'end;'                                                  + LineEnding +
-    'procedure Greet(N: Integer);'                          + LineEnding +
-    'begin'                                                 + LineEnding +
-    'end;'                                                  + LineEnding +
-    'begin'                                                 + LineEnding +
-    'end.';
+    '''
+        program P;
+        procedure Greet; overload;
+        begin
+        end;
+        procedure Greet(N: Integer);
+        begin
+        end;
+        begin
+        end.
+        ''';
 
   SrcNoMatchingArity =
-    'program P;'                                            + LineEnding +
-    'procedure Greet; overload;'                            + LineEnding +
-    'begin'                                                 + LineEnding +
-    'end;'                                                  + LineEnding +
-    'procedure Greet(N: Integer); overload;'                + LineEnding +
-    'begin'                                                 + LineEnding +
-    'end;'                                                  + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  Greet(1, 2)'                                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        procedure Greet; overload;
+        begin
+        end;
+        procedure Greet(N: Integer); overload;
+        begin
+        end;
+        begin
+          Greet(1, 2)
+        end.
+        ''';
 
   SrcTypeDistinct =
-    'program P;'                                            + LineEnding +
-    'procedure Show(N: Integer); overload;'                 + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  WriteLn(N)'                                          + LineEnding +
-    'end;'                                                  + LineEnding +
-    'procedure Show(S: string); overload;'                  + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  WriteLn(S)'                                          + LineEnding +
-    'end;'                                                  + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  Show(42);'                                           + LineEnding +
-    '  Show(''hi'')'                                        + LineEnding +
-    'end.';
+    '''
+        program P;
+        procedure Show(N: Integer); overload;
+        begin
+          WriteLn(N)
+        end;
+        procedure Show(S: string); overload;
+        begin
+          WriteLn(S)
+        end;
+        begin
+          Show(42);
+          Show('hi')
+        end.
+        ''';
 
   { Two same-arity overloads — Integer + Double.  Calling with an
     Integer literal must pick the Integer overload (exact match). }
   SrcExactBeatsWidening =
-    'program P;'                                            + LineEnding +
-    'procedure F(N: Integer); overload;'                    + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  WriteLn(N)'                                          + LineEnding +
-    'end;'                                                  + LineEnding +
-    'procedure F(D: Double); overload;'                     + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  WriteLn(DoubleToStr(D))'                             + LineEnding +
-    'end;'                                                  + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  F(42)'                                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        procedure F(N: Integer); overload;
+        begin
+          WriteLn(N)
+        end;
+        procedure F(D: Double); overload;
+        begin
+          WriteLn(DoubleToStr(D))
+        end;
+        begin
+          F(42)
+        end.
+        ''';
 
   { Single Double overload, called with Integer — widening succeeds. }
   SrcWideningUsed =
-    'program P;'                                            + LineEnding +
-    'procedure F(D: Double); overload;'                     + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  WriteLn(DoubleToStr(D))'                             + LineEnding +
-    'end;'                                                  + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  F(42)'                                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        procedure F(D: Double); overload;
+        begin
+          WriteLn(DoubleToStr(D))
+        end;
+        begin
+          F(42)
+        end.
+        ''';
 
   SrcClassOverload =
-    'program P;'                                            + LineEnding +
-    'type'                                                  + LineEnding +
-    '  TFoo = class'                                        + LineEnding +
-    '    procedure Show(N: Integer); overload;'             + LineEnding +
-    '    procedure Show(S: string); overload;'              + LineEnding +
-    '  end;'                                                + LineEnding +
-    '  procedure TFoo.Show(N: Integer); overload;'          + LineEnding +
-    '  begin WriteLn(N) end;'                               + LineEnding +
-    '  procedure TFoo.Show(S: string); overload;'           + LineEnding +
-    '  begin WriteLn(S) end;'                               + LineEnding +
-    'var F: TFoo;'                                          + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  F := TFoo.Create;'                                   + LineEnding +
-    '  F.Show(42);'                                         + LineEnding +
-    '  F.Show(''hi'')'                                      + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+            procedure Show(N: Integer); overload;
+            procedure Show(S: string); overload;
+          end;
+          procedure TFoo.Show(N: Integer); overload;
+          begin WriteLn(N) end;
+          procedure TFoo.Show(S: string); overload;
+          begin WriteLn(S) end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          F.Show(42);
+          F.Show('hi')
+        end.
+        ''';
 
   SrcClassDupNoOverload =
-    'program P;'                                            + LineEnding +
-    'type'                                                  + LineEnding +
-    '  TFoo = class'                                        + LineEnding +
-    '    procedure Show(N: Integer);'                       + LineEnding +
-    '    procedure Show(S: string);'                        + LineEnding +
-    '  end;'                                                + LineEnding +
-    '  procedure TFoo.Show(N: Integer);'                    + LineEnding +
-    '  begin end;'                                          + LineEnding +
-    '  procedure TFoo.Show(S: string);'                     + LineEnding +
-    '  begin end;'                                          + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TFoo = class
+            procedure Show(N: Integer);
+            procedure Show(S: string);
+          end;
+          procedure TFoo.Show(N: Integer);
+          begin end;
+          procedure TFoo.Show(S: string);
+          begin end;
+        begin end.
+        ''';
 
   SrcVirtualOverload =
-    'program P;'                                            + LineEnding +
-    'type'                                                  + LineEnding +
-    '  TBase = class'                                       + LineEnding +
-    '    procedure Greet(N: Integer); overload; virtual;'   + LineEnding +
-    '    procedure Greet(S: string);  overload; virtual;'   + LineEnding +
-    '  end;'                                                + LineEnding +
-    '  TChild = class(TBase)'                               + LineEnding +
-    '    procedure Greet(N: Integer); overload; override;'  + LineEnding +
-    '    procedure Greet(S: string);  overload; override;'  + LineEnding +
-    '  end;'                                                + LineEnding +
-    '  procedure TBase.Greet(N: Integer); overload;'        + LineEnding +
-    '  begin WriteLn(''base int '', N) end;'                + LineEnding +
-    '  procedure TBase.Greet(S: string); overload;'         + LineEnding +
-    '  begin WriteLn(''base str '', S) end;'                + LineEnding +
-    '  procedure TChild.Greet(N: Integer); overload;'       + LineEnding +
-    '  begin WriteLn(''child int '', N) end;'               + LineEnding +
-    '  procedure TChild.Greet(S: string); overload;'        + LineEnding +
-    '  begin WriteLn(''child str '', S) end;'               + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TBase = class
+            procedure Greet(N: Integer); overload; virtual;
+            procedure Greet(S: string);  overload; virtual;
+          end;
+          TChild = class(TBase)
+            procedure Greet(N: Integer); overload; override;
+            procedure Greet(S: string);  overload; override;
+          end;
+          procedure TBase.Greet(N: Integer); overload;
+          begin WriteLn('base int ', N) end;
+          procedure TBase.Greet(S: string); overload;
+          begin WriteLn('base str ', S) end;
+          procedure TChild.Greet(N: Integer); overload;
+          begin WriteLn('child int ', N) end;
+          procedure TChild.Greet(S: string); overload;
+          begin WriteLn('child str ', S) end;
+        begin end.
+        ''';
 
   { Two same-arity overloads — Double + Single — both reachable from an
     integer literal only by widening, with equal score → ambiguous. }

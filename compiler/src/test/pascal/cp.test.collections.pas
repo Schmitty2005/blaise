@@ -28,7 +28,7 @@ unit cp.test.collections;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -102,174 +102,192 @@ implementation
 const
   { Minimal TObjectList inline source }
   SrcTObjectListBase =
-    'program P;'                                                    + LineEnding +
-    'type'                                                          + LineEnding +
-    '  TObjectList = class'                                         + LineEnding +
-    '    FData:     ^Pointer;'                                      + LineEnding +
-    '    FCount:    Integer;'                                       + LineEnding +
-    '    FCapacity: Integer;'                                       + LineEnding +
-    '    procedure Grow;'                                           + LineEnding +
-    '    var NewCap: Integer;'                                      + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      if Self.FCapacity = 0 then NewCap := 4'                  + LineEnding +
-    '      else NewCap := Self.FCapacity * 2;'                      + LineEnding +
-    '      Self.FData     := ReallocMem(Self.FData, NewCap * SizeOf(Pointer));' + LineEnding +
-    '      Self.FCapacity := NewCap'                                + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    function Add(AObject: Pointer): Integer;'                  + LineEnding +
-    '    var Dest: ^Pointer;'                                       + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      if Self.FCount = Self.FCapacity then Self.Grow;'         + LineEnding +
-    '      Dest        := Self.FData + Self.FCount * SizeOf(Pointer);' + LineEnding +
-    '      Dest^       := AObject;'                                 + LineEnding +
-    '      Self.FCount := Self.FCount + 1;'                         + LineEnding +
-    '      Result      := Self.FCount - 1'                          + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    function Get(AIndex: Integer): Pointer;'                   + LineEnding +
-    '    var Src: ^Pointer;'                                        + LineEnding +
-    '    begin'                                                      + LineEnding +
-    '      Src    := Self.FData + AIndex * SizeOf(Pointer);'        + LineEnding +
-    '      Result := Src^'                                          + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    property Count: Integer read FCount;'                      + LineEnding +
-    '  end;'                                                        + LineEnding;
+    '''
+        program P;
+        type
+          TObjectList = class
+            FData:     ^Pointer;
+            FCount:    Integer;
+            FCapacity: Integer;
+            procedure Grow;
+            var NewCap: Integer;
+            begin
+              if Self.FCapacity = 0 then NewCap := 4
+              else NewCap := Self.FCapacity * 2;
+              Self.FData     := ReallocMem(Self.FData, NewCap * SizeOf(Pointer));
+              Self.FCapacity := NewCap
+            end;
+            function Add(AObject: Pointer): Integer;
+            var Dest: ^Pointer;
+            begin
+              if Self.FCount = Self.FCapacity then Self.Grow;
+              Dest        := Self.FData + Self.FCount * SizeOf(Pointer);
+              Dest^       := AObject;
+              Self.FCount := Self.FCount + 1;
+              Result      := Self.FCount - 1
+            end;
+            function Get(AIndex: Integer): Pointer;
+            var Src: ^Pointer;
+            begin
+              Src    := Self.FData + AIndex * SizeOf(Pointer);
+              Result := Src^
+            end;
+            property Count: Integer read FCount;
+          end;
+        ''';
 
   SrcTObjectListUse =
     SrcTObjectListBase +
-    'var L: TObjectList;'                                           + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TObjectList.Create;'                                    + LineEnding +
-    '  L.Add(nil);'                                                 + LineEnding +
-    '  L.Add(nil)'                                                  + LineEnding +
-    'end.';
+    '''
+        var L: TObjectList;
+        begin
+          L := TObjectList.Create;
+          L.Add(nil);
+          L.Add(nil)
+        end.
+        ''';
 
   SrcTObjectListGet =
     SrcTObjectListBase +
-    'var'                                                           + LineEnding +
-    '  L: TObjectList;'                                             + LineEnding +
-    '  P: Pointer;'                                                 + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TObjectList.Create;'                                    + LineEnding +
-    '  L.Add(nil);'                                                 + LineEnding +
-    '  P := L.Get(0)'                                               + LineEnding +
-    'end.';
+    '''
+        var
+          L: TObjectList;
+          P: Pointer;
+        begin
+          L := TObjectList.Create;
+          L.Add(nil);
+          P := L.Get(0)
+        end.
+        ''';
 
   { CompareStr/CompareText test }
   SrcCompareStr =
-    'program P;'                                                    + LineEnding +
-    'var N: Integer;'                                               + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  N := CompareStr(''abc'', ''abd'')'                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := CompareStr('abc', 'abd')
+        end.
+        ''';
 
   SrcCompareText =
-    'program P;'                                                    + LineEnding +
-    'var N: Integer;'                                               + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  N := CompareText(''ABC'', ''abc'')'                          + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := CompareText('ABC', 'abc')
+        end.
+        ''';
 
   { ZeroMem test }
   SrcZeroMem =
-    'program P;'                                                    + LineEnding +
-    'var P: Pointer;'                                               + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  P := GetMem(16);'                                            + LineEnding +
-    '  ZeroMem(P, 16)'                                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var P: Pointer;
+        begin
+          P := GetMem(16);
+          ZeroMem(P, 16)
+        end.
+        ''';
 
   { Minimal TStringList inline source }
   SrcTStringListBase =
-    'program P;'                                                    + LineEnding +
-    'type'                                                          + LineEnding +
-    '  TStringList = class'                                         + LineEnding +
-    '    FStrings:    ^string;'                                     + LineEnding +
-    '    FObjects:    ^Pointer;'                                     + LineEnding +
-    '    FCount:      Integer;'                                     + LineEnding +
-    '    FCapacity:   Integer;'                                     + LineEnding +
-    '    FSorted:     Boolean;'                                     + LineEnding +
-    '    procedure Grow;'                                           + LineEnding +
-    '    var OldCap, NewCap: Integer;'                              + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      OldCap := Self.FCapacity;'                               + LineEnding +
-    '      if OldCap = 0 then NewCap := 4'                          + LineEnding +
-    '      else NewCap := OldCap * 2;'                              + LineEnding +
-    '      Self.FStrings  := ReallocMem(Self.FStrings, NewCap * SizeOf(string));' + LineEnding +
-    '      Self.FObjects  := ReallocMem(Self.FObjects, NewCap * SizeOf(Pointer));' + LineEnding +
-    '      ZeroMem(Self.FStrings + OldCap * SizeOf(string), (NewCap - OldCap) * SizeOf(string));' + LineEnding +
-    '      Self.FCapacity := NewCap'                                + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    function Add(S: string): Integer;'                         + LineEnding +
-    '    var'                                                        + LineEnding +
-    '      StrP: ^string;'                                          + LineEnding +
-    '      ObjP: ^Pointer;'                                         + LineEnding +
-    '    begin'                                                      + LineEnding +
-    '      if Self.FCount = Self.FCapacity then Self.Grow;'         + LineEnding +
-    '      StrP        := Self.FStrings + Self.FCount * SizeOf(string);' + LineEnding +
-    '      ObjP        := Self.FObjects + Self.FCount * SizeOf(Pointer);' + LineEnding +
-    '      StrP^       := S;'                                       + LineEnding +
-    '      ObjP^       := nil;'                                     + LineEnding +
-    '      Result      := Self.FCount;'                             + LineEnding +
-    '      Self.FCount := Self.FCount + 1'                          + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    function Get(AIndex: Integer): string;'                    + LineEnding +
-    '    var Ptr: ^string;'                                         + LineEnding +
-    '    begin'                                                      + LineEnding +
-    '      Ptr    := Self.FStrings + AIndex * SizeOf(string);'      + LineEnding +
-    '      Result := Ptr^'                                          + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    function Find(S: string; var Index: Integer): Boolean;'   + LineEnding +
-    '    var'                                                        + LineEnding +
-    '      Lo, Hi, Mid, Cmp: Integer;'                              + LineEnding +
-    '      Ptr: ^string;'                                           + LineEnding +
-    '      MStr: string;'                                           + LineEnding +
-    '    begin'                                                      + LineEnding +
-    '      Lo := 0;'                                                + LineEnding +
-    '      Hi := Self.FCount - 1;'                                  + LineEnding +
-    '      while Lo <= Hi do'                                       + LineEnding +
-    '      begin'                                                    + LineEnding +
-    '        Mid  := (Lo + Hi) div 2;'                              + LineEnding +
-    '        Ptr  := Self.FStrings + Mid * SizeOf(string);'         + LineEnding +
-    '        MStr := Ptr^;'                                         + LineEnding +
-    '        Cmp  := CompareText(S, MStr);'                         + LineEnding +
-    '        if Cmp = 0 then'                                       + LineEnding +
-    '        begin'                                                   + LineEnding +
-    '          Index  := Mid;'                                       + LineEnding +
-    '          Result := True;'                                      + LineEnding +
-    '          Exit'                                                  + LineEnding +
-    '        end'                                                    + LineEnding +
-    '        else if Cmp < 0 then'                                   + LineEnding +
-    '          Hi := Mid - 1'                                        + LineEnding +
-    '        else'                                                    + LineEnding +
-    '          Lo := Mid + 1'                                        + LineEnding +
-    '      end;'                                                     + LineEnding +
-    '      Index  := Lo;'                                            + LineEnding +
-    '      Result := False'                                          + LineEnding +
-    '    end;'                                                       + LineEnding +
-    '    property Count: Integer read FCount;'                      + LineEnding +
-    '  end;'                                                        + LineEnding;
+    '''
+        program P;
+        type
+          TStringList = class
+            FStrings:    ^string;
+            FObjects:    ^Pointer;
+            FCount:      Integer;
+            FCapacity:   Integer;
+            FSorted:     Boolean;
+            procedure Grow;
+            var OldCap, NewCap: Integer;
+            begin
+              OldCap := Self.FCapacity;
+              if OldCap = 0 then NewCap := 4
+              else NewCap := OldCap * 2;
+              Self.FStrings  := ReallocMem(Self.FStrings, NewCap * SizeOf(string));
+              Self.FObjects  := ReallocMem(Self.FObjects, NewCap * SizeOf(Pointer));
+              ZeroMem(Self.FStrings + OldCap * SizeOf(string), (NewCap - OldCap) * SizeOf(string));
+              Self.FCapacity := NewCap
+            end;
+            function Add(S: string): Integer;
+            var
+              StrP: ^string;
+              ObjP: ^Pointer;
+            begin
+              if Self.FCount = Self.FCapacity then Self.Grow;
+              StrP        := Self.FStrings + Self.FCount * SizeOf(string);
+              ObjP        := Self.FObjects + Self.FCount * SizeOf(Pointer);
+              StrP^       := S;
+              ObjP^       := nil;
+              Result      := Self.FCount;
+              Self.FCount := Self.FCount + 1
+            end;
+            function Get(AIndex: Integer): string;
+            var Ptr: ^string;
+            begin
+              Ptr    := Self.FStrings + AIndex * SizeOf(string);
+              Result := Ptr^
+            end;
+            function Find(S: string; var Index: Integer): Boolean;
+            var
+              Lo, Hi, Mid, Cmp: Integer;
+              Ptr: ^string;
+              MStr: string;
+            begin
+              Lo := 0;
+              Hi := Self.FCount - 1;
+              while Lo <= Hi do
+              begin
+                Mid  := (Lo + Hi) div 2;
+                Ptr  := Self.FStrings + Mid * SizeOf(string);
+                MStr := Ptr^;
+                Cmp  := CompareText(S, MStr);
+                if Cmp = 0 then
+                begin
+                  Index  := Mid;
+                  Result := True;
+                  Exit
+                end
+                else if Cmp < 0 then
+                  Hi := Mid - 1
+                else
+                  Lo := Mid + 1
+              end;
+              Index  := Lo;
+              Result := False
+            end;
+            property Count: Integer read FCount;
+          end;
+        ''';
 
   SrcTStringListUse =
     SrcTStringListBase +
-    'var L: TStringList;'                                           + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TStringList.Create;'                                    + LineEnding +
-    '  L.Add(''hello'');'                                            + LineEnding +
-    '  L.Add(''world'')'                                             + LineEnding +
-    'end.';
+    '''
+        var L: TStringList;
+        begin
+          L := TStringList.Create;
+          L.Add('hello');
+          L.Add('world')
+        end.
+        ''';
 
   SrcTStringListFind =
     SrcTStringListBase +
-    'var'                                                           + LineEnding +
-    '  L: TStringList;'                                             + LineEnding +
-    '  Idx: Integer;'                                               + LineEnding +
-    '  Found: Boolean;'                                             + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TStringList.Create;'                                    + LineEnding +
-    '  L.Add(''alpha'');'                                            + LineEnding +
-    '  L.Add(''beta'');'                                             + LineEnding +
-    '  Found := L.Find(''alpha'', Idx)'                              + LineEnding +
-    'end.';
+    '''
+        var
+          L: TStringList;
+          Idx: Integer;
+          Found: Boolean;
+        begin
+          L := TStringList.Create;
+          L.Add('alpha');
+          L.Add('beta');
+          Found := L.Find('alpha', Idx)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                              }
@@ -470,133 +488,151 @@ end;
 const
   { Minimal TStringList with Text property and file methods }
   SrcTStringListTextBase =
-    'program P;'                                                    + LineEnding +
-    'type'                                                          + LineEnding +
-    '  TStringList = class'                                         + LineEnding +
-    '    FStrings:  ^string;'                                       + LineEnding +
-    '    FObjects:  ^Pointer;'                                      + LineEnding +
-    '    FCount:    Integer;'                                       + LineEnding +
-    '    FCapacity: Integer;'                                       + LineEnding +
-    '    procedure Grow;'                                           + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    function Add(S: string): Integer;'                         + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Result := 0'                                             + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    procedure Clear;'                                          + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Self.FCount := 0'                                        + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    function Get(AIndex: Integer): string;'                    + LineEnding +
-    '    var Ptr: ^string;'                                         + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Ptr := Self.FStrings + AIndex * SizeOf(string);'         + LineEnding +
-    '      Result := Ptr^'                                          + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    procedure Put(AIndex: Integer; S: string);'                + LineEnding +
-    '    var Ptr: ^string;'                                         + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Ptr := Self.FStrings + AIndex * SizeOf(string);'         + LineEnding +
-    '      Ptr^ := S'                                               + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    function GetObject(AIndex: Integer): Pointer;'             + LineEnding +
-    '    var Ptr: ^Pointer;'                                        + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Ptr := Self.FObjects + AIndex * SizeOf(Pointer);'        + LineEnding +
-    '      Result := Ptr^'                                          + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    procedure SetObject(AIndex: Integer; AObject: Pointer);'   + LineEnding +
-    '    var Ptr: ^Pointer;'                                        + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Ptr := Self.FObjects + AIndex * SizeOf(Pointer);'        + LineEnding +
-    '      Ptr^ := AObject'                                         + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    function GetText: string;'                                 + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    procedure SetText(AText: string);'                         + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Self.Clear'                                              + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    procedure LoadFromFile(APath: string);'                    + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      Self.SetText(ReadFile(APath))'                           + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    procedure SaveToFile(APath: string);'                      + LineEnding +
-    '    begin'                                                     + LineEnding +
-    '      WriteFile(APath, Self.GetText + #10)'                    + LineEnding +
-    '    end;'                                                      + LineEnding +
-    '    property Count: Integer read FCount;'                      + LineEnding +
-    '    property Text: string read GetText write SetText;'         + LineEnding +
-    '    property Strings[Index: Integer]: string read Get write Put;' + LineEnding +
-    '    property Objects[Index: Integer]: Pointer read GetObject write SetObject;' + LineEnding +
-    '  end;'                                                        + LineEnding;
+    '''
+        program P;
+        type
+          TStringList = class
+            FStrings:  ^string;
+            FObjects:  ^Pointer;
+            FCount:    Integer;
+            FCapacity: Integer;
+            procedure Grow;
+            begin
+            end;
+            function Add(S: string): Integer;
+            begin
+              Result := 0
+            end;
+            procedure Clear;
+            begin
+              Self.FCount := 0
+            end;
+            function Get(AIndex: Integer): string;
+            var Ptr: ^string;
+            begin
+              Ptr := Self.FStrings + AIndex * SizeOf(string);
+              Result := Ptr^
+            end;
+            procedure Put(AIndex: Integer; S: string);
+            var Ptr: ^string;
+            begin
+              Ptr := Self.FStrings + AIndex * SizeOf(string);
+              Ptr^ := S
+            end;
+            function GetObject(AIndex: Integer): Pointer;
+            var Ptr: ^Pointer;
+            begin
+              Ptr := Self.FObjects + AIndex * SizeOf(Pointer);
+              Result := Ptr^
+            end;
+            procedure SetObject(AIndex: Integer; AObject: Pointer);
+            var Ptr: ^Pointer;
+            begin
+              Ptr := Self.FObjects + AIndex * SizeOf(Pointer);
+              Ptr^ := AObject
+            end;
+            function GetText: string;
+            begin
+            end;
+            procedure SetText(AText: string);
+            begin
+              Self.Clear
+            end;
+            procedure LoadFromFile(APath: string);
+            begin
+              Self.SetText(ReadFile(APath))
+            end;
+            procedure SaveToFile(APath: string);
+            begin
+              WriteFile(APath, Self.GetText + #10)
+            end;
+            property Count: Integer read FCount;
+            property Text: string read GetText write SetText;
+            property Strings[Index: Integer]: string read Get write Put;
+            property Objects[Index: Integer]: Pointer read GetObject write SetObject;
+          end;
+        ''';
 
   SrcTextGet =
     SrcTStringListTextBase +
-    'var L: TStringList; S: string;'                                + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TStringList.Create;'                                    + LineEnding +
-    '  S := L.Text'                                                 + LineEnding +
-    'end.';
+    '''
+        var L: TStringList; S: string;
+        begin
+          L := TStringList.Create;
+          S := L.Text
+        end.
+        ''';
 
   SrcTextSet =
     SrcTStringListTextBase +
-    'var L: TStringList;'                                           + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TStringList.Create;'                                    + LineEnding +
-    '  L.Text := ''hello'''                                         + LineEnding +
-    'end.';
+    '''
+        var L: TStringList;
+        begin
+          L := TStringList.Create;
+          L.Text := 'hello'
+        end.
+        ''';
 
   SrcLoadFromFile =
     SrcTStringListTextBase +
-    'var L: TStringList;'                                           + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TStringList.Create;'                                    + LineEnding +
-    '  L.LoadFromFile(''/tmp/test.pas'')'                           + LineEnding +
-    'end.';
+    '''
+        var L: TStringList;
+        begin
+          L := TStringList.Create;
+          L.LoadFromFile('/tmp/test.pas')
+        end.
+        ''';
 
   SrcSaveToFile =
     SrcTStringListTextBase +
-    'var L: TStringList;'                                           + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TStringList.Create;'                                    + LineEnding +
-    '  L.SaveToFile(''/tmp/out.txt'')'                              + LineEnding +
-    'end.';
+    '''
+        var L: TStringList;
+        begin
+          L := TStringList.Create;
+          L.SaveToFile('/tmp/out.txt')
+        end.
+        ''';
 
   SrcStringsRead =
     SrcTStringListTextBase +
-    'var L: TStringList; S: string;'                                + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TStringList.Create;'                                    + LineEnding +
-    '  S := L.Strings[0]'                                           + LineEnding +
-    'end.';
+    '''
+        var L: TStringList; S: string;
+        begin
+          L := TStringList.Create;
+          S := L.Strings[0]
+        end.
+        ''';
 
   SrcStringsWrite =
     SrcTStringListTextBase +
-    'var L: TStringList;'                                           + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TStringList.Create;'                                    + LineEnding +
-    '  L.Strings[0] := ''hello'''                                   + LineEnding +
-    'end.';
+    '''
+        var L: TStringList;
+        begin
+          L := TStringList.Create;
+          L.Strings[0] := 'hello'
+        end.
+        ''';
 
   SrcObjectsRead =
     SrcTStringListTextBase +
-    'var L: TStringList; P: Pointer;'                               + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TStringList.Create;'                                    + LineEnding +
-    '  P := L.Objects[0]'                                           + LineEnding +
-    'end.';
+    '''
+        var L: TStringList; P: Pointer;
+        begin
+          L := TStringList.Create;
+          P := L.Objects[0]
+        end.
+        ''';
 
   SrcObjectsWrite =
     SrcTStringListTextBase +
-    'var L: TStringList; P: Pointer;'                               + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  L := TStringList.Create;'                                    + LineEnding +
-    '  P := nil;'                                                   + LineEnding +
-    '  L.Objects[0] := P'                                           + LineEnding +
-    'end.';
+    '''
+        var L: TStringList; P: Pointer;
+        begin
+          L := TStringList.Create;
+          P := nil;
+          L.Objects[0] := P
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Text property                                                        }

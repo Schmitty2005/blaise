@@ -16,7 +16,7 @@ unit cp.test.varparams;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -126,43 +126,49 @@ end;
 
 const
   SrcVarSet =
-    'program VarTest;'                              + LineEnding +
-    'procedure SetVal(var X: Integer);'             + LineEnding +
-    'begin'                                         + LineEnding +
-    '  X := 42'                                     + LineEnding +
-    'end;'                                          + LineEnding +
-    'var V: Integer;'                               + LineEnding +
-    'begin'                                         + LineEnding +
-    '  V := 0;'                                     + LineEnding +
-    '  SetVal(V)'                                   + LineEnding +
-    'end.';
+    '''
+        program VarTest;
+        procedure SetVal(var X: Integer);
+        begin
+          X := 42
+        end;
+        var V: Integer;
+        begin
+          V := 0;
+          SetVal(V)
+        end.
+        ''';
 
   SrcVarSwap =
-    'program SwapTest;'                             + LineEnding +
-    'procedure Swap(var A, B: Integer);'            + LineEnding +
-    'var T: Integer;'                               + LineEnding +
-    'begin'                                         + LineEnding +
-    '  T := A;'                                     + LineEnding +
-    '  A := B;'                                     + LineEnding +
-    '  B := T'                                      + LineEnding +
-    'end;'                                          + LineEnding +
-    'var X, Y: Integer;'                            + LineEnding +
-    'begin'                                         + LineEnding +
-    '  X := 1;'                                     + LineEnding +
-    '  Y := 2;'                                     + LineEnding +
-    '  Swap(X, Y)'                                  + LineEnding +
-    'end.';
+    '''
+        program SwapTest;
+        procedure Swap(var A, B: Integer);
+        var T: Integer;
+        begin
+          T := A;
+          A := B;
+          B := T
+        end;
+        var X, Y: Integer;
+        begin
+          X := 1;
+          Y := 2;
+          Swap(X, Y)
+        end.
+        ''';
 
   SrcMixed =
-    'program MixedTest;'                            + LineEnding +
-    'procedure P(var A: Integer; B: Integer);'      + LineEnding +
-    'begin'                                         + LineEnding +
-    '  A := B'                                      + LineEnding +
-    'end;'                                          + LineEnding +
-    'var X: Integer;'                               + LineEnding +
-    'begin'                                         + LineEnding +
-    '  P(X, 5)'                                     + LineEnding +
-    'end.';
+    '''
+        program MixedTest;
+        procedure P(var A: Integer; B: Integer);
+        begin
+          A := B
+        end;
+        var X: Integer;
+        begin
+          P(X, 5)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Parser tests                                                         }
@@ -205,10 +211,12 @@ procedure TVarParamTests.TestParse_VarParam_ValueParam_IsNotVar;
 var P: TProgram; MD: TMethodDecl;
 begin
   P := ParseSrc(
-    'program T;'                                    + LineEnding +
-    'procedure Q(X: Integer);'                      + LineEnding +
-    'begin end;'                                    + LineEnding +
-    'begin end.');
+    '''
+        program T;
+        procedure Q(X: Integer);
+        begin end;
+        begin end.
+        ''');
   try
     MD := TMethodDecl(P.Block.ProcDecls[0]);
     AssertFalse('X is not var param', TMethodParam(MD.Params[0]).IsVarParam);
@@ -227,23 +235,23 @@ end;
 procedure TVarParamTests.TestSemantic_VarParam_NonVariable_RaisesError;
 begin
   AnalyseExpectError(
-    'program Bad;'                                  + LineEnding +
-    'procedure Inc(var X: Integer);'                + LineEnding +
-    'begin X := X + 1 end;'                        + LineEnding +
-    'begin'                                         + LineEnding +
-    '  Inc(42)'                                     + LineEnding +  { literal, not a variable }
+    'program Bad;' + #10 + 
+    'procedure Inc(var X: Integer);' + #10 + 
+    'begin X := X + 1 end;' + #10 + 
+    'begin' + #10 + 
+    '  Inc(42)'                                     + #10 +  { literal, not a variable }
     'end.');
 end;
 
 procedure TVarParamTests.TestSemantic_VarParam_TypeMismatch_RaisesError;
 begin
   AnalyseExpectError(
-    'program Bad;'                                  + LineEnding +
-    'procedure SetI(var X: Integer);'               + LineEnding +
-    'begin X := 1 end;'                             + LineEnding +
-    'var B: Boolean;'                               + LineEnding +
-    'begin'                                         + LineEnding +
-    '  SetI(B)'                                     + LineEnding +  { wrong type }
+    'program Bad;' + #10 + 
+    'procedure SetI(var X: Integer);' + #10 + 
+    'begin X := 1 end;' + #10 + 
+    'var B: Boolean;' + #10 + 
+    'begin' + #10 + 
+    '  SetI(B)'                                     + #10 +  { wrong type }
     'end.');
 end;
 
@@ -301,13 +309,15 @@ begin
     must emit  loadl %_var_N  to get the original caller's address, then pass
     that value.  Passing %_var_N directly (the slot address) is wrong. }
   IR := GenIR(
-    'program FwdTest;'                                + LineEnding +
-    'procedure SetToFive(var N: Integer);'            + LineEnding +
-    'begin N := 5 end;'                               + LineEnding +
-    'procedure SetViaCaller(var N: Integer);'         + LineEnding +
-    'begin SetToFive(N) end;'                         + LineEnding +
-    'var V: Integer;'                                 + LineEnding +
-    'begin V := 0; SetViaCaller(V) end.');
+    '''
+        program FwdTest;
+        procedure SetToFive(var N: Integer);
+        begin N := 5 end;
+        procedure SetViaCaller(var N: Integer);
+        begin SetToFive(N) end;
+        var V: Integer;
+        begin V := 0; SetViaCaller(V) end.
+        ''');
   AssertTrue('SetViaCaller must loadl %_var_N to obtain original pointer',
     Pos('loadl %_var_N', IR) > 0);
   AssertFalse('must NOT pass slot address directly',
@@ -317,22 +327,24 @@ end;
 procedure TVarParamTests.TestCodegen_VarParam_ForwardToMethod;
 const
   SrcMethodFwd =
-    'program MethodFwd;'                              + LineEnding +
-    'type'                                            + LineEnding +
-    '  THelper = class'                               + LineEnding +
-    '    procedure SetVal(var N: Integer);'           + LineEnding +
-    '  end;'                                          + LineEnding +
-    'procedure THelper.SetVal(var N: Integer);'       + LineEnding +
-    'begin N := 7 end;'                               + LineEnding +
-    'procedure Wrapper(H: THelper; var N: Integer);'  + LineEnding +
-    'begin H.SetVal(N) end;'                          + LineEnding +
-    'var H: THelper; V: Integer;'                     + LineEnding +
-    'begin'                                           + LineEnding +
-    '  H := THelper.Create;'                          + LineEnding +
-    '  V := 0;'                                       + LineEnding +
-    '  Wrapper(H, V);'                                + LineEnding +
-    '  H.Free'                                        + LineEnding +
-    'end.';
+    '''
+        program MethodFwd;
+        type
+          THelper = class
+            procedure SetVal(var N: Integer);
+          end;
+        procedure THelper.SetVal(var N: Integer);
+        begin N := 7 end;
+        procedure Wrapper(H: THelper; var N: Integer);
+        begin H.SetVal(N) end;
+        var H: THelper; V: Integer;
+        begin
+          H := THelper.Create;
+          V := 0;
+          Wrapper(H, V);
+          H.Free
+        end.
+        ''';
 var IR: string;
 begin
   { Wrapper(H: THelper; var N: Integer) calls H.SetVal(N).
@@ -352,16 +364,18 @@ begin
   { Pass R.Count (a field access expression) as a var argument.
     Must analyse without error — field accesses are L-values. }
   Prog := AnalyseSrc(
-    'program P;'                                            + LineEnding +
-    'type'                                                  + LineEnding +
-    '  TRec = record Count: Integer; end;'                  + LineEnding +
-    'procedure Bump(var N: Integer);'                       + LineEnding +
-    'begin Inc(N) end;'                                     + LineEnding +
-    'var R: TRec;'                                          + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  R.Count := 0;'                                       + LineEnding +
-    '  Bump(R.Count)'                                       + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TRec = record Count: Integer; end;
+        procedure Bump(var N: Integer);
+        begin Inc(N) end;
+        var R: TRec;
+        begin
+          R.Count := 0;
+          Bump(R.Count)
+        end.
+        ''');
   Prog.Free;
 end;
 
@@ -371,18 +385,20 @@ var
 begin
   { Pass P^.Count (pointer deref + field) as a var argument. }
   Prog := AnalyseSrc(
-    'program P;'                                            + LineEnding +
-    'type'                                                  + LineEnding +
-    '  TRec = record Count: Integer; end;'                  + LineEnding +
-    '  PRec = ^TRec;'                                       + LineEnding +
-    'procedure Bump(var N: Integer);'                       + LineEnding +
-    'begin Inc(N) end;'                                     + LineEnding +
-    'var P: PRec; R: TRec;'                                 + LineEnding +
-    'begin'                                                 + LineEnding +
-    '  P := @R;'                                            + LineEnding +
-    '  P^.Count := 0;'                                      + LineEnding +
-    '  Bump(P^.Count)'                                      + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TRec = record Count: Integer; end;
+          PRec = ^TRec;
+        procedure Bump(var N: Integer);
+        begin Inc(N) end;
+        var P: PRec; R: TRec;
+        begin
+          P := @R;
+          P^.Count := 0;
+          Bump(P^.Count)
+        end.
+        ''');
   Prog.Free;
 end;
 

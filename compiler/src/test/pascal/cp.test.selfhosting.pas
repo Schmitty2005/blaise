@@ -18,7 +18,7 @@ unit cp.test.selfhosting;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -101,163 +101,199 @@ implementation
 const
   { Gap 1: multiple type sections }
   SrcTwoTypeBlocks =
-    'program P;'                          + LineEnding +
-    'type'                                + LineEnding +
-    '  TA = class'                        + LineEnding +
-    '    FX: Integer;'                    + LineEnding +
-    '  end;'                              + LineEnding +
-    'type'                                + LineEnding +
-    '  TB = class'                        + LineEnding +
-    '    FY: Integer;'                    + LineEnding +
-    '  end;'                              + LineEnding +
-    'begin'                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TA = class
+            FX: Integer;
+          end;
+        type
+          TB = class
+            FY: Integer;
+          end;
+        begin
+        end.
+        ''';
 
   SrcTypeVarTypeVar =
-    'program P;'                          + LineEnding +
-    'type'                                + LineEnding +
-    '  TA = class'                        + LineEnding +
-    '    FX: Integer;'                    + LineEnding +
-    '  end;'                              + LineEnding +
-    'var'                                 + LineEnding +
-    '  A: TA;'                            + LineEnding +
-    'type'                                + LineEnding +
-    '  TB = class'                        + LineEnding +
-    '    FY: Integer;'                    + LineEnding +
-    '  end;'                              + LineEnding +
-    'var'                                 + LineEnding +
-    '  B: TB;'                            + LineEnding +
-    'begin'                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TA = class
+            FX: Integer;
+          end;
+        var
+          A: TA;
+        type
+          TB = class
+            FY: Integer;
+          end;
+        var
+          B: TB;
+        begin
+        end.
+        ''';
 
   SrcVarThenType =
-    'program P;'                          + LineEnding +
-    'var'                                 + LineEnding +
-    '  N: Integer;'                       + LineEnding +
-    'type'                                + LineEnding +
-    '  TA = class'                        + LineEnding +
-    '    FX: Integer;'                    + LineEnding +
-    '  end;'                              + LineEnding +
-    'begin'                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          N: Integer;
+        type
+          TA = class
+            FX: Integer;
+          end;
+        begin
+        end.
+        ''';
 
   SrcTwoClassesBothUsed =
-    'program P;'                          + LineEnding +
-    'type'                                + LineEnding +
-    '  TA = class'                        + LineEnding +
-    '    FX: Integer;'                    + LineEnding +
-    '  end;'                              + LineEnding +
-    'type'                                + LineEnding +
-    '  TB = class'                        + LineEnding +
-    '    FY: Integer;'                    + LineEnding +
-    '  end;'                              + LineEnding +
-    'var'                                 + LineEnding +
-    '  A: TA;'                            + LineEnding +
-    '  B: TB;'                            + LineEnding +
-    'begin'                               + LineEnding +
-    '  A := TA.Create;'                   + LineEnding +
-    '  B := TB.Create'                    + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TA = class
+            FX: Integer;
+          end;
+        type
+          TB = class
+            FY: Integer;
+          end;
+        var
+          A: TA;
+          B: TB;
+        begin
+          A := TA.Create;
+          B := TB.Create
+        end.
+        ''';
 
   { Gap 2: CLI args }
   SrcParamCount =
-    'program P;'                          + LineEnding +
-    'var N: Integer;'                     + LineEnding +
-    'begin'                               + LineEnding +
-    '  N := ParamCount'                   + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := ParamCount
+        end.
+        ''';
 
   SrcParamStr =
-    'program P;'                          + LineEnding +
-    'var S: string;'                      + LineEnding +
-    'begin'                               + LineEnding +
-    '  S := ParamStr(0)'                  + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          S := ParamStr(0)
+        end.
+        ''';
 
   { Gap 2: file I/O }
   SrcReadFile =
-    'program P;'                          + LineEnding +
-    'var S: string;'                      + LineEnding +
-    'begin'                               + LineEnding +
-    '  S := ReadFile(''test.txt'')'       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          S := ReadFile('test.txt')
+        end.
+        ''';
 
   SrcWriteFile =
-    'program P;'                          + LineEnding +
-    'begin'                               + LineEnding +
-    '  WriteFile(''out.txt'', ''hello'')' + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          WriteFile('out.txt', 'hello')
+        end.
+        ''';
 
   SrcFileExists =
-    'program P;'                          + LineEnding +
-    'var B: Boolean;'                     + LineEnding +
-    'begin'                               + LineEnding +
-    '  B := FileExists(''test.txt'')'     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var B: Boolean;
+        begin
+          B := FileExists('test.txt')
+        end.
+        ''';
 
   { Gap 2: environment and process }
   SrcGetEnvVar =
-    'program P;'                          + LineEnding +
-    'var S: string;'                      + LineEnding +
-    'begin'                               + LineEnding +
-    '  S := GetEnvVar(''PATH'')'          + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          S := GetEnvVar('PATH')
+        end.
+        ''';
 
   SrcGetEnvironmentVariable =
-    'program P;'                          + LineEnding +
-    'var S: string;'                      + LineEnding +
-    'begin'                               + LineEnding +
-    '  S := GetEnvironmentVariable(''PATH'')' + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          S := GetEnvironmentVariable('PATH')
+        end.
+        ''';
 
   SrcExec =
-    'program P;'                          + LineEnding +
-    'var N: Integer;'                     + LineEnding +
-    'begin'                               + LineEnding +
-    '  N := Exec(''echo hello'')'         + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := Exec('echo hello')
+        end.
+        ''';
 
   SrcHalt =
-    'program P;'                          + LineEnding +
-    'begin'                               + LineEnding +
-    '  Halt(0)'                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        begin
+          Halt(0)
+        end.
+        ''';
 
   { Step 11: file path manipulation }
   SrcChangeFileExt =
-    'program P;'                                   + LineEnding +
-    'var S: string;'                               + LineEnding +
-    'begin'                                        + LineEnding +
-    '  S := ChangeFileExt(''test.pas'', ''.bak'')' + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          S := ChangeFileExt('test.pas', '.bak')
+        end.
+        ''';
 
   SrcExtractFileName =
-    'program P;'                                   + LineEnding +
-    'var S: string;'                               + LineEnding +
-    'begin'                                        + LineEnding +
-    '  S := ExtractFileName(''/usr/bin/ls'')'      + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          S := ExtractFileName('/usr/bin/ls')
+        end.
+        ''';
 
   SrcExtractFilePath =
-    'program P;'                                   + LineEnding +
-    'var S: string;'                               + LineEnding +
-    'begin'                                        + LineEnding +
-    '  S := ExtractFilePath(''/usr/bin/ls'')'      + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          S := ExtractFilePath('/usr/bin/ls')
+        end.
+        ''';
 
   SrcIncludeTrailingPathDelimiter =
-    'program P;'                                              + LineEnding +
-    'var S: string;'                                          + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  S := IncludeTrailingPathDelimiter(''/usr/bin'')'       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var S: string;
+        begin
+          S := IncludeTrailingPathDelimiter('/usr/bin')
+        end.
+        ''';
 
   SrcMaxInt =
-    'program P;'         + LineEnding +
-    'var N: Int64;'      + LineEnding +
-    'begin'              + LineEnding +
-    '  N := MaxInt;'     + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Int64;
+        begin
+          N := MaxInt;
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                              }

@@ -18,7 +18,7 @@ unit cp.test.genericconstraints;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -75,12 +75,14 @@ procedure TGenericConstraintTests.TestParse_GenericType_ClassConstraint;
 var Prog: TProgram; TD: TTypeDecl; GD: TGenericTypeDef;
 begin
   Prog := ParseSrc(
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TBox<T: class> = class'                      + LineEnding +
-    '    FItem: Integer;'                           + LineEnding +
-    '  end;'                                        + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TBox<T: class> = class
+            FItem: Integer;
+          end;
+        begin end.
+        ''');
   try
     TD := TTypeDecl(Prog.Block.TypeDecls[0]);
     AssertTrue(TD.Def is TGenericTypeDef);
@@ -95,12 +97,14 @@ procedure TGenericConstraintTests.TestParse_GenericType_RecordConstraint;
 var Prog: TProgram; TD: TTypeDecl; GD: TGenericTypeDef;
 begin
   Prog := ParseSrc(
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TBox<T: record> = class'                     + LineEnding +
-    '    FItem: Integer;'                           + LineEnding +
-    '  end;'                                        + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TBox<T: record> = class
+            FItem: Integer;
+          end;
+        begin end.
+        ''');
   try
     TD := TTypeDecl(Prog.Block.TypeDecls[0]);
     GD := TGenericTypeDef(TD.Def);
@@ -112,13 +116,15 @@ procedure TGenericConstraintTests.TestParse_GenericType_NamedConstraint;
 var Prog: TProgram; TD: TTypeDecl; GD: TGenericTypeDef;
 begin
   Prog := ParseSrc(
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TAnimal = class(TObject) X: Integer; end;'   + LineEnding +
-    '  TPen<T: TAnimal> = class'                    + LineEnding +
-    '    FCount: Integer;'                          + LineEnding +
-    '  end;'                                        + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TAnimal = class(TObject) X: Integer; end;
+          TPen<T: TAnimal> = class
+            FCount: Integer;
+          end;
+        begin end.
+        ''');
   try
     TD := TTypeDecl(Prog.Block.TypeDecls[1]);
     GD := TGenericTypeDef(TD.Def);
@@ -130,12 +136,14 @@ procedure TGenericConstraintTests.TestParse_GenericType_TwoParamsWithMixedConstr
 var Prog: TProgram; TD: TTypeDecl; GD: TGenericTypeDef;
 begin
   Prog := ParseSrc(
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TPair<K, V: class> = class'                  + LineEnding +
-    '    FKey: Integer;'                            + LineEnding +
-    '  end;'                                        + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPair<K, V: class> = class
+            FKey: Integer;
+          end;
+        begin end.
+        ''');
   try
     TD := TTypeDecl(Prog.Block.TypeDecls[0]);
     GD := TGenericTypeDef(TD.Def);
@@ -149,10 +157,12 @@ procedure TGenericConstraintTests.TestParse_GenericFunc_ClassConstraint;
 var Prog: TProgram; MD: TMethodDecl;
 begin
   Prog := ParseSrc(
-    'program P;'                                    + LineEnding +
-    'function Id<T: class>(A: T): T;'               + LineEnding +
-    'begin Result := A end;'                        + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        function Id<T: class>(A: T): T;
+        begin Result := A end;
+        begin end.
+        ''');
   try
     MD := TMethodDecl(Prog.Block.ProcDecls[0]);
     AssertNotNull(MD.TypeParams);
@@ -164,11 +174,13 @@ procedure TGenericConstraintTests.TestParse_GenericFunc_NamedConstraint;
 var Prog: TProgram; MD: TMethodDecl;
 begin
   Prog := ParseSrc(
-    'program P;'                                         + LineEnding +
-    'type TAnimal = class(TObject) X: Integer; end;'     + LineEnding +
-    'function Box<T: TAnimal>(A: T): Integer;'           + LineEnding +
-    'begin Result := 0 end;'                             + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type TAnimal = class(TObject) X: Integer; end;
+        function Box<T: TAnimal>(A: T): Integer;
+        begin Result := 0 end;
+        begin end.
+        ''');
   try
     MD := TMethodDecl(Prog.Block.ProcDecls[0]);
     AssertEquals('TAnimal', MD.TypeParamConstraints[0]);
@@ -179,60 +191,68 @@ procedure TGenericConstraintTests.TestSemantic_GenericFunc_ClassConstraint_Viola
 begin
   { Integer is not a class — must raise }
   AnalyseExpectError(
-    'program P;'                                    + LineEnding +
-    'function Id<T: class>(A: T): T;'               + LineEnding +
-    'begin Result := A end;'                        + LineEnding +
-    'var N: Integer;'                               + LineEnding +
-    'begin'                                         + LineEnding +
-    '  N := Id<Integer>(5)'                         + LineEnding +
-    'end.');
+    '''
+        program P;
+        function Id<T: class>(A: T): T;
+        begin Result := A end;
+        var N: Integer;
+        begin
+          N := Id<Integer>(5)
+        end.
+        ''');
 end;
 
 procedure TGenericConstraintTests.TestSemantic_GenericFunc_ClassConstraint_Satisfied;
 var Prog: TProgram;
 begin
   Prog := AnalyseSrc(
-    'program P;'                                    + LineEnding +
-    'type TAnimal = class(TObject) X: Integer; end;' + LineEnding +
-    'function Id<T: class>(A: T): T;'               + LineEnding +
-    'begin Result := A end;'                        + LineEnding +
-    'var A: TAnimal;'                               + LineEnding +
-    'begin'                                         + LineEnding +
-    '  A := TAnimal.Create;'                        + LineEnding +
-    '  A := Id<TAnimal>(A);'                        + LineEnding +
-    '  A.Free'                                      + LineEnding +
-    'end.');
+    '''
+        program P;
+        type TAnimal = class(TObject) X: Integer; end;
+        function Id<T: class>(A: T): T;
+        begin Result := A end;
+        var A: TAnimal;
+        begin
+          A := TAnimal.Create;
+          A := Id<TAnimal>(A);
+          A.Free
+        end.
+        ''');
   try AssertNotNull(Prog); finally Prog.Free; end;
 end;
 
 procedure TGenericConstraintTests.TestSemantic_GenericType_ClassConstraint_Violation;
 begin
   AnalyseExpectError(
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TBox<T: class> = class'                      + LineEnding +
-    '    FItem: Integer;'                           + LineEnding +
-    '  end;'                                        + LineEnding +
-    'var B: TBox<Integer>;'                         + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TBox<T: class> = class
+            FItem: Integer;
+          end;
+        var B: TBox<Integer>;
+        begin end.
+        ''');
 end;
 
 procedure TGenericConstraintTests.TestSemantic_GenericFunc_NamedConstraint_Violation;
 begin
   { TCat does not inherit from TDog → must raise }
   AnalyseExpectError(
-    'program P;'                                             + LineEnding +
-    'type'                                                   + LineEnding +
-    '  TDog = class(TObject) X: Integer; end;'               + LineEnding +
-    '  TCat = class(TObject) Y: Integer; end;'               + LineEnding +
-    'function Use<T: TDog>(A: T): Integer;'                  + LineEnding +
-    'begin Result := 0 end;'                                 + LineEnding +
-    'var C: TCat; N: Integer;'                               + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  C := TCat.Create;'                                    + LineEnding +
-    '  N := Use<TCat>(C);'                                   + LineEnding +
-    '  C.Free'                                               + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TDog = class(TObject) X: Integer; end;
+          TCat = class(TObject) Y: Integer; end;
+        function Use<T: TDog>(A: T): Integer;
+        begin Result := 0 end;
+        var C: TCat; N: Integer;
+        begin
+          C := TCat.Create;
+          N := Use<TCat>(C);
+          C.Free
+        end.
+        ''');
 end;
 
 procedure TGenericConstraintTests.TestSemantic_GenericFunc_NamedConstraint_Satisfied;
@@ -240,18 +260,20 @@ var Prog: TProgram;
 begin
   { TPuppy inherits from TDog → OK }
   Prog := AnalyseSrc(
-    'program P;'                                             + LineEnding +
-    'type'                                                   + LineEnding +
-    '  TDog = class(TObject) X: Integer; end;'               + LineEnding +
-    '  TPuppy = class(TDog) Y: Integer; end;'                + LineEnding +
-    'function Use<T: TDog>(A: T): Integer;'                  + LineEnding +
-    'begin Result := 0 end;'                                 + LineEnding +
-    'var P: TPuppy; N: Integer;'                             + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  P := TPuppy.Create;'                                  + LineEnding +
-    '  N := Use<TPuppy>(P);'                                 + LineEnding +
-    '  P.Free'                                               + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TDog = class(TObject) X: Integer; end;
+          TPuppy = class(TDog) Y: Integer; end;
+        function Use<T: TDog>(A: T): Integer;
+        begin Result := 0 end;
+        var P: TPuppy; N: Integer;
+        begin
+          P := TPuppy.Create;
+          N := Use<TPuppy>(P);
+          P.Free
+        end.
+        ''');
   try AssertNotNull(Prog); finally Prog.Free; end;
 end;
 

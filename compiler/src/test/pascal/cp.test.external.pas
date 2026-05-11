@@ -13,7 +13,7 @@ unit cp.test.external;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSemantic, uCodeGenQBE;
 
 type
@@ -118,10 +118,12 @@ var
   Decl: TMethodDecl;
 begin
   Prog := ParseSrc(
-    'program Test;'              + LineEnding +
-    'procedure Foo; external;'   + LineEnding +
-    'begin'                      + LineEnding +
-    'end.'
+    '''
+        program Test;
+        procedure Foo; external;
+        begin
+        end.
+        '''
   );
   try
     AssertEquals('Should have one proc decl', 1, Prog.Block.ProcDecls.Count);
@@ -138,10 +140,12 @@ var
   Decl: TMethodDecl;
 begin
   Prog := ParseSrc(
-    'program Test;'              + LineEnding +
-    'procedure Foo; external;'   + LineEnding +
-    'begin'                      + LineEnding +
-    'end.'
+    '''
+        program Test;
+        procedure Foo; external;
+        begin
+        end.
+        '''
   );
   try
     Decl := TMethodDecl(Prog.Block.ProcDecls.Items[0]);
@@ -158,10 +162,12 @@ var
   Decl: TMethodDecl;
 begin
   Prog := ParseSrc(
-    'program Test;'                          + LineEnding +
-    'procedure Foo; external name ''c_foo'';' + LineEnding +
-    'begin'                                  + LineEnding +
-    'end.'
+    '''
+        program Test;
+        procedure Foo; external name 'c_foo';
+        begin
+        end.
+        '''
   );
   try
     Decl := TMethodDecl(Prog.Block.ProcDecls.Items[0]);
@@ -178,10 +184,12 @@ var
   Decl: TMethodDecl;
 begin
   Prog := ParseSrc(
-    'program Test;'                        + LineEnding +
-    'function Bar: Integer; external;'     + LineEnding +
-    'begin'                                + LineEnding +
-    'end.'
+    '''
+        program Test;
+        function Bar: Integer; external;
+        begin
+        end.
+        '''
   );
   try
     AssertEquals('Should have one func decl', 1, Prog.Block.ProcDecls.Count);
@@ -198,10 +206,12 @@ var
   Decl: TMethodDecl;
 begin
   Prog := ParseSrc(
-    'program Test;'                                       + LineEnding +
-    'function Bar: Integer; external name ''c_bar'';'     + LineEnding +
-    'begin'                                               + LineEnding +
-    'end.'
+    '''
+        program Test;
+        function Bar: Integer; external name 'c_bar';
+        begin
+        end.
+        '''
   );
   try
     Decl := TMethodDecl(Prog.Block.ProcDecls.Items[0]);
@@ -216,12 +226,14 @@ var
   U: TUnit;
 begin
   U := ParseUnit(
-    'unit MyLib;'                            + LineEnding +
-    'interface'                              + LineEnding +
-    'procedure Foo; external;'              + LineEnding +
-    'function Bar: Integer; external;'      + LineEnding +
-    'implementation'                         + LineEnding +
-    'end.'
+    '''
+        unit MyLib;
+        interface
+        procedure Foo; external;
+        function Bar: Integer; external;
+        implementation
+        end.
+        '''
   );
   try
     AssertEquals('Interface should have 2 proc decls',
@@ -243,11 +255,13 @@ var
   SA:   TSemanticAnalyser;
 begin
   Prog := ParseSrc(
-    'program Test;'              + LineEnding +
-    'procedure Foo; external;'   + LineEnding +
-    'begin'                      + LineEnding +
-    '  Foo'                      + LineEnding +
-    'end.'
+    '''
+        program Test;
+        procedure Foo; external;
+        begin
+          Foo
+        end.
+        '''
   );
   SA := TSemanticAnalyser.Create;
   try
@@ -265,12 +279,14 @@ var
   SA:   TSemanticAnalyser;
 begin
   Prog := ParseSrc(
-    'program Test;'                      + LineEnding +
-    'function Bar: Integer; external;'   + LineEnding +
-    'var x: Integer;'                    + LineEnding +
-    'begin'                              + LineEnding +
-    '  x := Bar'                         + LineEnding +
-    'end.'
+    '''
+        program Test;
+        function Bar: Integer; external;
+        var x: Integer;
+        begin
+          x := Bar
+        end.
+        '''
   );
   SA := TSemanticAnalyser.Create;
   try
@@ -289,10 +305,12 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'              + LineEnding +
-    'procedure Foo; external;'   + LineEnding +
-    'begin'                      + LineEnding +
-    'end.'
+    '''
+        program Test;
+        procedure Foo; external;
+        begin
+        end.
+        '''
   );
   { An external declaration must NOT emit a QBE function body for Foo }
   AssertFalse('External proc must not emit a function body',
@@ -304,11 +322,13 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'              + LineEnding +
-    'procedure Foo; external;'   + LineEnding +
-    'begin'                      + LineEnding +
-    '  Foo'                      + LineEnding +
-    'end.'
+    '''
+        program Test;
+        procedure Foo; external;
+        begin
+          Foo
+        end.
+        '''
   );
   AssertTrue('Call to external proc should appear in IR',
     IRContains(IR, 'call $Foo'));
@@ -319,11 +339,13 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program Test;'                          + LineEnding +
-    'procedure Foo; external name ''c_foo'';' + LineEnding +
-    'begin'                                  + LineEnding +
-    '  Foo'                                  + LineEnding +
-    'end.'
+    '''
+        program Test;
+        procedure Foo; external name 'c_foo';
+        begin
+          Foo
+        end.
+        '''
   );
   { Call site must use the C symbol name, not the Pascal name }
   AssertTrue('Call should use C symbol name',

@@ -13,7 +13,7 @@ unit cp.test.methods;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -137,36 +137,40 @@ end;
 
 const
   SrcCounter =
-    'program P;'                     + LineEnding +
-    'type'                           + LineEnding +
-    '  TCounter = class'             + LineEnding +
-    '    Value: Integer;'            + LineEnding +
-    '    procedure SetValue(AVal: Integer);' + LineEnding +
-    '    begin'                      + LineEnding +
-    '      Self.Value := AVal'       + LineEnding +
-    '    end;'                       + LineEnding +
-    '  end;'                         + LineEnding +
-    'var C: TCounter;'               + LineEnding +
-    'begin'                          + LineEnding +
-    '  C := TCounter.Create;'        + LineEnding +
-    '  C.SetValue(42)'               + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TCounter = class
+            Value: Integer;
+            procedure SetValue(AVal: Integer);
+            begin
+              Self.Value := AVal
+            end;
+          end;
+        var C: TCounter;
+        begin
+          C := TCounter.Create;
+          C.SetValue(42)
+        end.
+        ''';
 
   SrcNoParamMethod =
-    'program P;'                     + LineEnding +
-    'type'                           + LineEnding +
-    '  TFoo = class'                 + LineEnding +
-    '    X: Integer;'                + LineEnding +
-    '    procedure Reset;'           + LineEnding +
-    '    begin'                      + LineEnding +
-    '      Self.X := 0'              + LineEnding +
-    '    end;'                       + LineEnding +
-    '  end;'                         + LineEnding +
-    'var F: TFoo;'                   + LineEnding +
-    'begin'                          + LineEnding +
-    '  F := TFoo.Create;'            + LineEnding +
-    '  F.Reset'                      + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+            procedure Reset;
+            begin
+              Self.X := 0
+            end;
+          end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          F.Reset
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Lexer                                                               }
@@ -365,54 +369,60 @@ end;
 procedure TMethodTests.TestSemantic_MethodCall_UnknownMethod_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                   + LineEnding +
-    'type'                         + LineEnding +
-    '  TFoo = class'               + LineEnding +
-    '    X: Integer;'              + LineEnding +
-    '  end;'                       + LineEnding +
-    'var F: TFoo;'                 + LineEnding +
-    'begin'                        + LineEnding +
-    '  F := TFoo.Create;'          + LineEnding +
-    '  F.NoSuchMethod'             + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          F.NoSuchMethod
+        end.
+        ''');
 end;
 
 procedure TMethodTests.TestSemantic_MethodCall_ArgTypeMismatch_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                           + LineEnding +
-    'type'                                 + LineEnding +
-    '  TFoo = class'                       + LineEnding +
-    '    X: Integer;'                      + LineEnding +
-    '    procedure SetX(AVal: Integer);'   + LineEnding +
-    '    begin'                            + LineEnding +
-    '      Self.X := AVal'                 + LineEnding +
-    '    end;'                             + LineEnding +
-    '  end;'                               + LineEnding +
-    'var F: TFoo;'                         + LineEnding +
-    'begin'                                + LineEnding +
-    '  F := TFoo.Create;'                  + LineEnding +
-    '  F.SetX(''not an int'')'             + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+            procedure SetX(AVal: Integer);
+            begin
+              Self.X := AVal
+            end;
+          end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          F.SetX('not an int')
+        end.
+        ''');
 end;
 
 procedure TMethodTests.TestSemantic_MethodCall_WrongArgCount_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                           + LineEnding +
-    'type'                                 + LineEnding +
-    '  TFoo = class'                       + LineEnding +
-    '    X: Integer;'                      + LineEnding +
-    '    procedure SetX(AVal: Integer);'   + LineEnding +
-    '    begin'                            + LineEnding +
-    '      Self.X := AVal'                 + LineEnding +
-    '    end;'                             + LineEnding +
-    '  end;'                               + LineEnding +
-    'var F: TFoo;'                         + LineEnding +
-    'begin'                                + LineEnding +
-    '  F := TFoo.Create;'                  + LineEnding +
-    '  F.SetX(1, 2)'                       + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+            procedure SetX(AVal: Integer);
+            begin
+              Self.X := AVal
+            end;
+          end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          F.SetX(1, 2)
+        end.
+        ''');
 end;
 
 procedure TMethodTests.TestSemantic_Method_SelfIsClassType;

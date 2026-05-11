@@ -13,7 +13,7 @@ unit cp.test.functions;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -135,40 +135,44 @@ end;
 
 const
   SrcGetterClass =
-    'program P;'                               + LineEnding +
-    'type'                                     + LineEnding +
-    '  TBox = class'                           + LineEnding +
-    '    Value: Integer;'                      + LineEnding +
-    '    procedure SetValue(AVal: Integer);'   + LineEnding +
-    '    begin'                                + LineEnding +
-    '      Self.Value := AVal'                 + LineEnding +
-    '    end;'                                 + LineEnding +
-    '    function GetValue: Integer;'          + LineEnding +
-    '    begin'                                + LineEnding +
-    '      Result := Self.Value'               + LineEnding +
-    '    end;'                                 + LineEnding +
-    '  end;'                                   + LineEnding +
-    'var B: TBox; N: Integer;'                 + LineEnding +
-    'begin'                                    + LineEnding +
-    '  B := TBox.Create;'                      + LineEnding +
-    '  B.SetValue(42);'                        + LineEnding +
-    '  N := B.GetValue()'                      + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox = class
+            Value: Integer;
+            procedure SetValue(AVal: Integer);
+            begin
+              Self.Value := AVal
+            end;
+            function GetValue: Integer;
+            begin
+              Result := Self.Value
+            end;
+          end;
+        var B: TBox; N: Integer;
+        begin
+          B := TBox.Create;
+          B.SetValue(42);
+          N := B.GetValue()
+        end.
+        ''';
 
   SrcAdderClass =
-    'program P;'                               + LineEnding +
-    'type'                                     + LineEnding +
-    '  TCalc = class'                          + LineEnding +
-    '    function Add(A: Integer; B: Integer): Integer;' + LineEnding +
-    '    begin'                                + LineEnding +
-    '      Result := A + B'                   + LineEnding +
-    '    end;'                                 + LineEnding +
-    '  end;'                                   + LineEnding +
-    'var C: TCalc; N: Integer;'                + LineEnding +
-    'begin'                                    + LineEnding +
-    '  C := TCalc.Create;'                     + LineEnding +
-    '  N := C.Add(3, 4)'                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TCalc = class
+            function Add(A: Integer; B: Integer): Integer;
+            begin
+              Result := A + B
+            end;
+          end;
+        var C: TCalc; N: Integer;
+        begin
+          C := TCalc.Create;
+          N := C.Add(3, 4)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Lexer                                                               }
@@ -353,37 +357,41 @@ end;
 procedure TFunctionTests.TestSemantic_FunctionCall_ReturnTypeMismatch_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                              + LineEnding +
-    'type'                                    + LineEnding +
-    '  TFoo = class'                          + LineEnding +
-    '    function GetVal: Integer;'           + LineEnding +
-    '    begin'                               + LineEnding +
-    '      Result := 1'                       + LineEnding +
-    '    end;'                                + LineEnding +
-    '  end;'                                  + LineEnding +
-    'var F: TFoo; S: string;'                 + LineEnding +
-    'begin'                                   + LineEnding +
-    '  F := TFoo.Create;'                     + LineEnding +
-    '  S := F.GetVal()'                       + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            function GetVal: Integer;
+            begin
+              Result := 1
+            end;
+          end;
+        var F: TFoo; S: string;
+        begin
+          F := TFoo.Create;
+          S := F.GetVal()
+        end.
+        ''');
 end;
 
 procedure TFunctionTests.TestSemantic_FunctionCall_WrongArgCount_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                              + LineEnding +
-    'type'                                    + LineEnding +
-    '  TFoo = class'                          + LineEnding +
-    '    function GetVal: Integer;'           + LineEnding +
-    '    begin'                               + LineEnding +
-    '      Result := 0'                       + LineEnding +
-    '    end;'                                + LineEnding +
-    '  end;'                                  + LineEnding +
-    'var F: TFoo; N: Integer;'                + LineEnding +
-    'begin'                                   + LineEnding +
-    '  F := TFoo.Create;'                     + LineEnding +
-    '  N := F.GetVal(1)'                      + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            function GetVal: Integer;
+            begin
+              Result := 0
+            end;
+          end;
+        var F: TFoo; N: Integer;
+        begin
+          F := TFoo.Create;
+          N := F.GetVal(1)
+        end.
+        ''');
 end;
 
 procedure TFunctionTests.TestSemantic_Result_AvailableInBody;
@@ -391,34 +399,38 @@ begin
   { If Result is not in scope, analysing it as an identifier would raise
     an ESemanticError. A clean pass proves Result is defined. }
   AnalyseSrc(
-    'program P;'                              + LineEnding +
-    'type'                                    + LineEnding +
-    '  TFoo = class'                          + LineEnding +
-    '    function GetOne: Integer;'           + LineEnding +
-    '    begin'                               + LineEnding +
-    '      Result := 1'                       + LineEnding +
-    '    end;'                                + LineEnding +
-    '  end;'                                  + LineEnding +
-    'var F: TFoo; N: Integer;'                + LineEnding +
-    'begin'                                   + LineEnding +
-    '  F := TFoo.Create;'                     + LineEnding +
-    '  N := F.GetOne()'                       + LineEnding +
-    'end.'
+    '''
+        program P;
+        type
+          TFoo = class
+            function GetOne: Integer;
+            begin
+              Result := 1
+            end;
+          end;
+        var F: TFoo; N: Integer;
+        begin
+          F := TFoo.Create;
+          N := F.GetOne()
+        end.
+        '''
   ).Free;
 end;
 
 procedure TFunctionTests.TestSemantic_Result_WrongType_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                              + LineEnding +
-    'type'                                    + LineEnding +
-    '  TFoo = class'                          + LineEnding +
-    '    function GetInt: Integer;'           + LineEnding +
-    '    begin'                               + LineEnding +
-    '      Result := ''not an int'''          + LineEnding +
-    '    end;'                                + LineEnding +
-    '  end;'                                  + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            function GetInt: Integer;
+            begin
+              Result := 'not an int'
+            end;
+          end;
+        begin end.
+        ''');
 end;
 
 { ------------------------------------------------------------------ }

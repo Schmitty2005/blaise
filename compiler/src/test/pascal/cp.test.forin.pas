@@ -15,7 +15,7 @@ unit cp.test.forin;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -153,27 +153,31 @@ end;
 
 const
   SrcEnumTypes =
-    'type'                                                    + LineEnding +
-    '  TMyEnum = class'                                       + LineEnding +
-    '    FCurrent: Integer;'                                  + LineEnding +
-    '    function MoveNext: Boolean;'                         + LineEnding +
-    '    function GetCurrent: Integer;'                       + LineEnding +
-    '    property Current: Integer read GetCurrent;'          + LineEnding +
-    '  end;'                                                  + LineEnding +
-    '  TMyCol = class'                                        + LineEnding +
-    '    function GetEnumerator: TMyEnum;'                    + LineEnding +
-    '  end;';
+    '''
+        type
+          TMyEnum = class
+            FCurrent: Integer;
+            function MoveNext: Boolean;
+            function GetCurrent: Integer;
+            property Current: Integer read GetCurrent;
+          end;
+          TMyCol = class
+            function GetEnumerator: TMyEnum;
+          end;
+        ''';
 
   SrcForIn =
-    'program P;'                                              + LineEnding +
-    SrcEnumTypes                                              + LineEnding +
-    'var'                                                     + LineEnding +
-    '  Col: TMyCol;'                                          + LineEnding +
-    '  X:   Integer;'                                         + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for X in Col do'                                       + LineEnding +
-    '    X := X + 1'                                          + LineEnding +
-    'end.';
+    'program P;' + #10 + 
+    SrcEnumTypes + #10 + 
+    '''
+        var
+          Col: TMyCol;
+          X:   Integer;
+        begin
+          for X in Col do
+            X := X + 1
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Parser tests                                                         }
@@ -229,86 +233,96 @@ end;
 procedure TForInTests.TestSemantic_ForIn_NoGetEnumerator_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                                              + LineEnding +
-    'type'                                                    + LineEnding +
-    '  TBadCol = class'                                       + LineEnding +
-    '    FCount: Integer;'                                    + LineEnding +
-    '  end;'                                                  + LineEnding +
-    'var'                                                     + LineEnding +
-    '  Col: TBadCol;'                                         + LineEnding +
-    '  X:   Integer;'                                         + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for X in Col do'                                       + LineEnding +
-    '    X := X + 1'                                          + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TBadCol = class
+            FCount: Integer;
+          end;
+        var
+          Col: TBadCol;
+          X:   Integer;
+        begin
+          for X in Col do
+            X := X + 1
+        end.
+        ''');
 end;
 
 procedure TForInTests.TestSemantic_ForIn_MoveNextNotBoolean_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                                              + LineEnding +
-    'type'                                                    + LineEnding +
-    '  TBadEnum = class'                                      + LineEnding +
-    '    function MoveNext: Integer;'                         + LineEnding +
-    '    function GetCurrent: Integer;'                       + LineEnding +
-    '    property Current: Integer read GetCurrent;'          + LineEnding +
-    '  end;'                                                  + LineEnding +
-    '  TBadCol = class'                                       + LineEnding +
-    '    function GetEnumerator: TBadEnum;'                   + LineEnding +
-    '  end;'                                                  + LineEnding +
-    'var'                                                     + LineEnding +
-    '  Col: TBadCol;'                                         + LineEnding +
-    '  X:   Integer;'                                         + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for X in Col do'                                       + LineEnding +
-    '    X := X + 1'                                          + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TBadEnum = class
+            function MoveNext: Integer;
+            function GetCurrent: Integer;
+            property Current: Integer read GetCurrent;
+          end;
+          TBadCol = class
+            function GetEnumerator: TBadEnum;
+          end;
+        var
+          Col: TBadCol;
+          X:   Integer;
+        begin
+          for X in Col do
+            X := X + 1
+        end.
+        ''');
 end;
 
 procedure TForInTests.TestSemantic_ForIn_NoCurrent_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                                              + LineEnding +
-    'type'                                                    + LineEnding +
-    '  TBadEnum = class'                                      + LineEnding +
-    '    function MoveNext: Boolean;'                         + LineEnding +
-    '  end;'                                                  + LineEnding +
-    '  TBadCol = class'                                       + LineEnding +
-    '    function GetEnumerator: TBadEnum;'                   + LineEnding +
-    '  end;'                                                  + LineEnding +
-    'var'                                                     + LineEnding +
-    '  Col: TBadCol;'                                         + LineEnding +
-    '  X:   Integer;'                                         + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for X in Col do'                                       + LineEnding +
-    '    X := X + 1'                                          + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TBadEnum = class
+            function MoveNext: Boolean;
+          end;
+          TBadCol = class
+            function GetEnumerator: TBadEnum;
+          end;
+        var
+          Col: TBadCol;
+          X:   Integer;
+        begin
+          for X in Col do
+            X := X + 1
+        end.
+        ''');
 end;
 
 procedure TForInTests.TestSemantic_ForIn_VarTypeMismatch_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                                              + LineEnding +
-    SrcEnumTypes                                              + LineEnding +
-    'var'                                                     + LineEnding +
-    '  Col: TMyCol;'                                          + LineEnding +
-    '  X:   string;'                                          + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for X in Col do'                                       + LineEnding +
-    '    X := X'                                              + LineEnding +
-    'end.');
+    'program P;' + #10 + 
+    SrcEnumTypes + #10 + 
+    '''
+        var
+          Col: TMyCol;
+          X:   string;
+        begin
+          for X in Col do
+            X := X
+        end.
+        ''');
 end;
 
 procedure TForInTests.TestSemantic_ForIn_CollNotClass_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                                              + LineEnding +
-    'var'                                                     + LineEnding +
-    '  X: Integer;'                                           + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for X in X do'                                         + LineEnding +
-    '    X := X + 1'                                          + LineEnding +
-    'end.');
+    '''
+        program P;
+        var
+          X: Integer;
+        begin
+          for X in X do
+            X := X + 1
+        end.
+        ''');
 end;
 
 { ------------------------------------------------------------------ }
@@ -378,24 +392,28 @@ end;
 
 const
   SrcArrayForIn =
-    'program P;'                                              + LineEnding +
-    'var'                                                     + LineEnding +
-    '  Arr: array[0..4] of Integer;'                          + LineEnding +
-    '  X:   Integer;'                                         + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for X in Arr do'                                       + LineEnding +
-    '    X := X + 1'                                          + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          Arr: array[0..4] of Integer;
+          X:   Integer;
+        begin
+          for X in Arr do
+            X := X + 1
+        end.
+        ''';
 
   SrcArrayForInNonZero =
-    'program P;'                                              + LineEnding +
-    'var'                                                     + LineEnding +
-    '  Arr: array[3..7] of Integer;'                          + LineEnding +
-    '  X:   Integer;'                                         + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for X in Arr do'                                       + LineEnding +
-    '    X := X + 1'                                          + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          Arr: array[3..7] of Integer;
+          X:   Integer;
+        begin
+          for X in Arr do
+            X := X + 1
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Semantic tests — static array                                        }
@@ -409,14 +427,16 @@ end;
 procedure TForInTests.TestSemantic_ArrayForIn_VarTypeMismatch_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                                              + LineEnding +
-    'var'                                                     + LineEnding +
-    '  Arr: array[0..4] of Integer;'                          + LineEnding +
-    '  X:   string;'                                          + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for X in Arr do'                                       + LineEnding +
-    '    X := X'                                              + LineEnding +
-    'end.');
+    '''
+        program P;
+        var
+          Arr: array[0..4] of Integer;
+          X:   string;
+        begin
+          for X in Arr do
+            X := X
+        end.
+        ''');
 end;
 
 procedure TForInTests.TestSemantic_ArrayForIn_NonZeroBased_OK;
@@ -471,24 +491,28 @@ end;
 
 const
   SrcStringForIn =
-    'program P;'                                              + LineEnding +
-    'var'                                                     + LineEnding +
-    '  S: string;'                                            + LineEnding +
-    '  B: Byte;'                                              + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for B in S do'                                         + LineEnding +
-    '    B := 0'                                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          S: string;
+          B: Byte;
+        begin
+          for B in S do
+            B := 0
+        end.
+        ''';
 
   SrcStringForInIntVar =
-    'program P;'                                              + LineEnding +
-    'var'                                                     + LineEnding +
-    '  S: string;'                                            + LineEnding +
-    '  I: Integer;'                                           + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for I in S do'                                         + LineEnding +
-    '    I := 0'                                              + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          S: string;
+          I: Integer;
+        begin
+          for I in S do
+            I := 0
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Semantic tests — string                                              }
@@ -508,14 +532,16 @@ end;
 procedure TForInTests.TestSemantic_StringForIn_NonOrdinalVar_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                                              + LineEnding +
-    'var'                                                     + LineEnding +
-    '  S: string;'                                            + LineEnding +
-    '  P: string;'                                            + LineEnding +
-    'begin'                                                   + LineEnding +
-    '  for P in S do'                                         + LineEnding +
-    '    P := P'                                              + LineEnding +
-    'end.');
+    '''
+        program P;
+        var
+          S: string;
+          P: string;
+        begin
+          for P in S do
+            P := P
+        end.
+        ''');
 end;
 
 { ------------------------------------------------------------------ }

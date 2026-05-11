@@ -15,7 +15,7 @@ unit cp.test.chainedfields;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -63,46 +63,52 @@ end;
 
 const
   SrcTwoDeep =
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TInner = record'                             + LineEnding +
-    '    Value: Integer;'                           + LineEnding +
-    '  end;'                                        + LineEnding +
-    '  TOuter = record'                             + LineEnding +
-    '    Inner: TInner;'                            + LineEnding +
-    '  end;'                                        + LineEnding +
-    'var O: TOuter; N: Integer;'                    + LineEnding +
-    'begin'                                         + LineEnding +
-    '  N := O.Inner.Value'                          + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TInner = record
+            Value: Integer;
+          end;
+          TOuter = record
+            Inner: TInner;
+          end;
+        var O: TOuter; N: Integer;
+        begin
+          N := O.Inner.Value
+        end.
+        ''';
 
   SrcThreeDeep =
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TA = record X: Integer; end;'                + LineEnding +
-    '  TB = record A: TA; end;'                     + LineEnding +
-    '  TC = record B: TB; end;'                     + LineEnding +
-    'var C: TC; N: Integer;'                        + LineEnding +
-    'begin'                                         + LineEnding +
-    '  N := C.B.A.X'                                + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TA = record X: Integer; end;
+          TB = record A: TA; end;
+          TC = record B: TB; end;
+        var C: TC; N: Integer;
+        begin
+          N := C.B.A.X
+        end.
+        ''';
 
   SrcClassFieldOfRecord =
-    'program P;'                                    + LineEnding +
-    'type'                                          + LineEnding +
-    '  TThing = class(TObject)'                     + LineEnding +
-    '    Inner: Integer;'                           + LineEnding +
-    '  end;'                                        + LineEnding +
-    '  TBox = record'                               + LineEnding +
-    '    Thing: TThing;'                            + LineEnding +
-    '  end;'                                        + LineEnding +
-    'var B: TBox; N: Integer; T: TThing;'           + LineEnding +
-    'begin'                                         + LineEnding +
-    '  B.Thing := TThing.Create;'                   + LineEnding +
-    '  N := B.Thing.Inner;'                         + LineEnding +
-    '  T := B.Thing;'                               + LineEnding +
-    '  T.Free'                                      + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TThing = class(TObject)
+            Inner: Integer;
+          end;
+          TBox = record
+            Thing: TThing;
+          end;
+        var B: TBox; N: Integer; T: TThing;
+        begin
+          B.Thing := TThing.Create;
+          N := B.Thing.Inner;
+          T := B.Thing;
+          T.Free
+        end.
+        ''';
 
 procedure TChainedFieldTests.TestParse_TwoDots_HasBase;
 var Prog: TProgram; Assn: TAssignment; Fld: TFieldAccessExpr;
@@ -169,26 +175,28 @@ end;
 procedure TChainedFieldTests.TestCodegen_ImplicitSelfChain_LoadsThroughSelf;
 const
   Src =
-    'program P;'                                          + LineEnding +
-    'type'                                                + LineEnding +
-    '  TLeaf = class'                                     + LineEnding +
-    '    Value: Integer;'                                 + LineEnding +
-    '  end;'                                              + LineEnding +
-    '  TInner = class'                                    + LineEnding +
-    '    Leaf: TLeaf;'                                    + LineEnding +
-    '  end;'                                              + LineEnding +
-    '  TOuter = class'                                    + LineEnding +
-    '    FInner: TInner;'                                 + LineEnding +
-    '    procedure Work;'                                 + LineEnding +
-    '  end;'                                              + LineEnding +
-    'procedure TOuter.Work;'                              + LineEnding +
-    'var I, K: Integer;'                                  + LineEnding +
-    'begin'                                               + LineEnding +
-    '  K := 0;'                                           + LineEnding +
-    '  for I := 0 to FInner.Leaf.Value - 1 do K := K + 1;'+ LineEnding +
-    'end;'                                                + LineEnding +
-    'begin'                                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TLeaf = class
+            Value: Integer;
+          end;
+          TInner = class
+            Leaf: TLeaf;
+          end;
+          TOuter = class
+            FInner: TInner;
+            procedure Work;
+          end;
+        procedure TOuter.Work;
+        var I, K: Integer;
+        begin
+          K := 0;
+          for I := 0 to FInner.Leaf.Value - 1 do K := K + 1;
+        end;
+        begin
+        end.
+        ''';
 var IR: string;
 begin
   IR := GenIR(Src);

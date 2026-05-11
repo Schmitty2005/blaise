@@ -16,7 +16,7 @@ unit cp.test.pointers;
 interface
 
 uses
-  Classes, SysUtils, StrUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -63,57 +63,69 @@ implementation
 const
   { Untyped pointer variable declaration }
   SrcUntypedPtr =
-    'program P;'                                             + LineEnding +
-    'var P: Pointer;'                                        + LineEnding +
-    'begin'                                                  + LineEnding +
-    'end.';
+    '''
+        program P;
+        var P: Pointer;
+        begin
+        end.
+        ''';
 
   { Typed pointer variable declaration }
   SrcTypedPtrDecl =
-    'program P;'                                             + LineEnding +
-    'var P: ^Integer;'                                       + LineEnding +
-    'begin'                                                  + LineEnding +
-    'end.';
+    '''
+        program P;
+        var P: ^Integer;
+        begin
+        end.
+        ''';
 
   { GetMem allocation }
   SrcGetMem =
-    'program P;'                                             + LineEnding +
-    'var P: Pointer;'                                        + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  P := GetMem(8)'                                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        var P: Pointer;
+        begin
+          P := GetMem(8)
+        end.
+        ''';
 
   { FreeMem call }
   SrcFreeMem =
-    'program P;'                                             + LineEnding +
-    'var P: Pointer;'                                        + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  P := GetMem(8);'                                      + LineEnding +
-    '  FreeMem(P)'                                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        var P: Pointer;
+        begin
+          P := GetMem(8);
+          FreeMem(P)
+        end.
+        ''';
 
   { Typed pointer: write and read through a typed pointer variable.
     No allocation needed — we test AST/IR shapes, not runtime correctness. }
   SrcTypedPtrRW =
-    'program P;'                                             + LineEnding +
-    'var'                                                    + LineEnding +
-    '  Ptr: ^Integer;'                                       + LineEnding +
-    '  V: Integer;'                                          + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  Ptr^ := 42;'                                          + LineEnding +
-    '  V := Ptr^'                                            + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          Ptr: ^Integer;
+          V: Integer;
+        begin
+          Ptr^ := 42;
+          V := Ptr^
+        end.
+        ''';
 
   { Pointer arithmetic }
   SrcPtrArith =
-    'program P;'                                             + LineEnding +
-    'var'                                                    + LineEnding +
-    '  P1: Pointer;'                                         + LineEnding +
-    '  P2: Pointer;'                                         + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  P1 := GetMem(16);'                                    + LineEnding +
-    '  P2 := P1 + 4'                                         + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          P1: Pointer;
+          P2: Pointer;
+        begin
+          P1 := GetMem(16);
+          P2 := P1 + 4
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                             }

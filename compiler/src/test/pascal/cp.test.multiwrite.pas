@@ -15,7 +15,7 @@ unit cp.test.multiwrite;
 interface
 
 uses
-  Classes, SysUtils, StrUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -81,12 +81,14 @@ var
   WriteIntCalls, NewlineCalls: Integer;
 begin
   IR := GenIR(
-    'program P;'                    + LineEnding +
-    'var I, J: Integer;'            + LineEnding +
-    'begin'                         + LineEnding +
-    '  I := 1; J := 2;'             + LineEnding +
-    '  WriteLn(I, J)'               + LineEnding +
-    'end.');
+    '''
+        program P;
+        var I, J: Integer;
+        begin
+          I := 1; J := 2;
+          WriteLn(I, J)
+        end.
+        ''');
   WriteIntCalls := CountOccurrences(IR, 'call $_SysWriteInt(');
   NewlineCalls  := CountOccurrences(IR, 'call $_SysWriteNewline(');
   AssertEquals('2 _SysWriteInt calls for values', 2, WriteIntCalls);
@@ -97,12 +99,14 @@ procedure TMultiWriteTests.TestCodegen_WriteLn_ThreeArgs_EmitsTrailingNewline;
 var IR: string;
 begin
   IR := GenIR(
-    'program P;'                     + LineEnding +
-    'var A, B, C: Integer;'          + LineEnding +
-    'begin'                          + LineEnding +
-    '  A := 1; B := 2; C := 3;'      + LineEnding +
-    '  WriteLn(A, B, C)'             + LineEnding +
-    'end.');
+    '''
+        program P;
+        var A, B, C: Integer;
+        begin
+          A := 1; B := 2; C := 3;
+          WriteLn(A, B, C)
+        end.
+        ''');
   AssertTrue('emits newline call', Pos('call $_SysWriteNewline(', IR) > 0);
   AssertEquals('3 _SysWriteInt calls for values',
     3, CountOccurrences(IR, 'call $_SysWriteInt('));
@@ -112,12 +116,14 @@ procedure TMultiWriteTests.TestCodegen_Write_TwoArgs_NoTrailingNewline;
 var IR: string;
 begin
   IR := GenIR(
-    'program P;'                    + LineEnding +
-    'var I, J: Integer;'            + LineEnding +
-    'begin'                         + LineEnding +
-    '  I := 1; J := 2;'             + LineEnding +
-    '  Write(I, J)'                 + LineEnding +
-    'end.');
+    '''
+        program P;
+        var I, J: Integer;
+        begin
+          I := 1; J := 2;
+          Write(I, J)
+        end.
+        ''');
   { Write must not issue a trailing newline call.  The format string is
     always defined in the data section, so we look specifically for the
     call (not the declaration). }
@@ -131,13 +137,15 @@ procedure TMultiWriteTests.TestCodegen_WriteLn_MixedStringAndInteger;
 var IR: string;
 begin
   IR := GenIR(
-    'program P;'                          + LineEnding +
-    'var I: Integer; S: string;'          + LineEnding +
-    'begin'                               + LineEnding +
-    '  I := 7;'                           + LineEnding +
-    '  S := ''hi'';'                      + LineEnding +
-    '  WriteLn(S, I)'                     + LineEnding +
-    'end.');
+    '''
+        program P;
+        var I: Integer; S: string;
+        begin
+          I := 7;
+          S := 'hi';
+          WriteLn(S, I)
+        end.
+        ''');
   AssertTrue('uses _SysWriteStr for string', Pos('call $_SysWriteStr(', IR) > 0);
   AssertTrue('uses _SysWriteInt for integer', Pos('call $_SysWriteInt(', IR) > 0);
 end;
@@ -146,10 +154,12 @@ procedure TMultiWriteTests.TestCodegen_WriteLn_Empty_StillEmitsNewline;
 var IR: string;
 begin
   IR := GenIR(
-    'program P;'                + LineEnding +
-    'begin'                     + LineEnding +
-    '  WriteLn'                 + LineEnding +
-    'end.');
+    '''
+        program P;
+        begin
+          WriteLn
+        end.
+        ''');
   AssertTrue('empty WriteLn still emits newline',
     Pos('call $_SysWriteNewline(w 1)', IR) > 0);
 end;

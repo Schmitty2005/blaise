@@ -13,7 +13,7 @@ unit cp.test.classes;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -195,12 +195,14 @@ end;
 
 const
   SrcSimpleClass =
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'begin end.';
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        begin end.
+        ''';
 
 procedure TClassTests.TestParse_ClassSection_Exists;
 var
@@ -253,13 +255,15 @@ var
   CD:   TClassTypeDef;
 begin
   Prog := ParseSrc(
-    'program P;'              + LineEnding +
-    'type'                    + LineEnding +
-    '  TPerson = class'       + LineEnding +
-    '    Name: string;'       + LineEnding +
-    '    Age: Integer;'       + LineEnding +
-    '  end;'                  + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TPerson = class
+            Name: string;
+            Age: Integer;
+          end;
+        begin end.
+        ''');
   try
     CD := TClassTypeDef(TTypeDecl(Prog.Block.TypeDecls[0]).Def);
     AssertEquals('2 fields', 2, CD.Fields.Count);
@@ -276,15 +280,17 @@ var
   CD:   TClassTypeDef;
 begin
   Prog := ParseSrc(
-    'program P;'                    + LineEnding +
-    'type'                          + LineEnding +
-    '  TAnimal = class'             + LineEnding +
-    '    Name: string;'             + LineEnding +
-    '  end;'                        + LineEnding +
-    '  TDog = class(TAnimal)'       + LineEnding +
-    '    Breed: string;'            + LineEnding +
-    '  end;'                        + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TAnimal = class
+            Name: string;
+          end;
+          TDog = class(TAnimal)
+            Breed: string;
+          end;
+        begin end.
+        ''');
   try
     CD := TClassTypeDef(TTypeDecl(Prog.Block.TypeDecls[1]).Def);
     AssertEquals('Parent class', 'TAnimal', CD.ParentName);
@@ -299,13 +305,15 @@ var
   Decl: TVarDecl;
 begin
   Prog := ParseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var F: TFoo;'        + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin end.
+        ''');
   try
     Decl := TVarDecl(Prog.Block.Decls[0]);
     AssertEquals('Var name', 'F', Decl.Names[0]);
@@ -322,15 +330,17 @@ var
   Expr:   TFieldAccessExpr;
 begin
   Prog := ParseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var F: TFoo;'        + LineEnding +
-    'begin'               + LineEnding +
-    '  F := TFoo.Create'  + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create
+        end.
+        ''');
   try
     Assign := TAssignment(Prog.Block.Stmts[0]);
     AssertEquals('Assigns to F', 'F', Assign.Name);
@@ -349,15 +359,17 @@ var
   Stmt: TFieldAssignment;
 begin
   Prog := ParseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var F: TFoo;'        + LineEnding +
-    'begin'               + LineEnding +
-    '  F.X := 99'         + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin
+          F.X := 99
+        end.
+        ''');
   try
     Stmt := TFieldAssignment(Prog.Block.Stmts[0]);
     AssertEquals('Record var',  'F',  Stmt.RecordName);
@@ -404,13 +416,15 @@ var
   Prog: TProgram;
 begin
   Prog := AnalyseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var F: TFoo;'        + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin end.
+        ''');
   try
     AssertEquals('F is tyClass',
       Ord(tyClass),
@@ -427,15 +441,17 @@ var
   Expr:   TFieldAccessExpr;
 begin
   Prog := AnalyseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var F: TFoo;'        + LineEnding +
-    'begin'               + LineEnding +
-    '  F := TFoo.Create'  + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create
+        end.
+        ''');
   try
     Assign := TAssignment(Prog.Block.Stmts[0]);
     Expr   := TFieldAccessExpr(Assign.Expr);
@@ -450,30 +466,34 @@ end;
 procedure TClassTests.TestSemantic_ClassFieldAssign_OK;
 begin
   AnalyseSrc(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var F: TFoo;'        + LineEnding +
-    'begin'               + LineEnding +
-    '  F.X := 42'         + LineEnding +
-    'end.'
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin
+          F.X := 42
+        end.
+        '''
   ).Free;
 end;
 
 procedure TClassTests.TestSemantic_ClassFieldAssign_TypeMismatch_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var F: TFoo;'        + LineEnding +
-    'begin'               + LineEnding +
-    '  F.X := ''hello'''  + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin
+          F.X := 'hello'
+        end.
+        ''');
 end;
 
 procedure TClassTests.TestSemantic_ClassFieldAccess_TypeIsFieldType;
@@ -482,15 +502,17 @@ var
   Access: TFieldAccessExpr;
 begin
   Prog := AnalyseSrc(
-    'program P;'              + LineEnding +
-    'type'                    + LineEnding +
-    '  TFoo = class'          + LineEnding +
-    '    X: Integer;'         + LineEnding +
-    '  end;'                  + LineEnding +
-    'var F: TFoo; N: Integer;' + LineEnding +
-    'begin'                   + LineEnding +
-    '  N := F.X'              + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo; N: Integer;
+        begin
+          N := F.X
+        end.
+        ''');
   try
     Access := TFieldAccessExpr(TAssignment(Prog.Block.Stmts[0]).Expr);
     AssertTrue('IsClassAccess', Access.IsClassAccess);
@@ -504,15 +526,17 @@ end;
 procedure TClassTests.TestSemantic_ClassFieldAccess_UnknownField_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'              + LineEnding +
-    'type'                    + LineEnding +
-    '  TFoo = class'          + LineEnding +
-    '    X: Integer;'         + LineEnding +
-    '  end;'                  + LineEnding +
-    'var F: TFoo; N: Integer;' + LineEnding +
-    'begin'                   + LineEnding +
-    '  N := F.Z'              + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo; N: Integer;
+        begin
+          N := F.Z
+        end.
+        ''');
 end;
 
 { ------------------------------------------------------------------ }
@@ -524,13 +548,15 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var F: TFoo;'        + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin end.
+        ''');
   { Program-level class var F is a data-section global pointer slot }
   AssertTrue('data decl for F', Pos('$F', IR) > 0);
 end;
@@ -540,13 +566,15 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var F: TFoo;'        + LineEnding +
-    'begin end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin end.
+        ''');
   { Program-level class var F is zero-initialised via data section entry }
   AssertTrue('zero init via data section', Pos('data $F = { l 0 }', IR) > 0);
 end;
@@ -560,15 +588,17 @@ begin
     bookkeeping needed for ARC.  The user pointer still points at the vptr
     (offset 0); field offsets are unchanged. }
   IR := GenIR(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var F: TFoo;'        + LineEnding +
-    'begin'               + LineEnding +
-    '  F := TFoo.Create'  + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create
+        end.
+        ''');
   AssertTrue('calls _ClassAlloc', Pos('call $_ClassAlloc', IR) > 0);
   AssertTrue('does not call calloc directly', Pos('call $calloc', IR) = 0);
   AssertTrue('stores pointer', Pos('storel', IR) > 0);
@@ -579,15 +609,17 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'          + LineEnding +
-    'type'                + LineEnding +
-    '  TFoo = class'      + LineEnding +
-    '    X: Integer;'     + LineEnding +
-    '  end;'              + LineEnding +
-    'var F: TFoo;'        + LineEnding +
-    'begin'               + LineEnding +
-    '  F.X := 42'         + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin
+          F.X := 42
+        end.
+        ''');
   { F is a program-level global — loaded via $F }
   AssertTrue('loads pointer', Pos('loadl $F', IR) > 0);
   AssertTrue('stores value',  Pos('storew', IR) > 0);
@@ -598,15 +630,17 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'              + LineEnding +
-    'type'                    + LineEnding +
-    '  TFoo = class'          + LineEnding +
-    '    X: Integer;'         + LineEnding +
-    '  end;'                  + LineEnding +
-    'var F: TFoo; N: Integer;' + LineEnding +
-    'begin'                   + LineEnding +
-    '  N := F.X'              + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo; N: Integer;
+        begin
+          N := F.X
+        end.
+        ''');
   { F is a program-level global — loaded via $F }
   AssertTrue('loads pointer', Pos('loadl $F', IR) > 0);
   AssertTrue('loads field',   Pos('loadw', IR) > 0);
@@ -618,21 +652,23 @@ end;
 
 const
   SrcSeparateImpl =
-    'program P;'                        + LineEnding +
-    'type'                              + LineEnding +
-    '  TFoo = class'                    + LineEnding +
-    '    X: Integer;'                   + LineEnding +
-    '    procedure SetX(AVal: Integer);' + LineEnding +
-    '  end;'                            + LineEnding +
-    'procedure TFoo.SetX(AVal: Integer);' + LineEnding +
-    'begin'                             + LineEnding +
-    '  Self.X := AVal'                  + LineEnding +
-    'end;'                              + LineEnding +
-    'var F: TFoo;'                      + LineEnding +
-    'begin'                             + LineEnding +
-    '  F := TFoo.Create;'               + LineEnding +
-    '  F.SetX(42)'                      + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+            procedure SetX(AVal: Integer);
+          end;
+        procedure TFoo.SetX(AVal: Integer);
+        begin
+          Self.X := AVal
+        end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          F.SetX(42)
+        end.
+        ''';
 
 procedure TClassTests.TestParse_SeparateImpl_ForwardDeclNoBody;
 var
@@ -687,16 +723,18 @@ end;
 
 const
   SrcFree =
-    'program P;'             + LineEnding +
-    'type'                   + LineEnding +
-    '  TFoo = class'         + LineEnding +
-    '    X: Integer;'        + LineEnding +
-    '  end;'                 + LineEnding +
-    'var F: TFoo;'           + LineEnding +
-    'begin'                  + LineEnding +
-    '  F := TFoo.Create;'    + LineEnding +
-    '  F.Free'               + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          F.Free
+        end.
+        ''';
 
 procedure TClassTests.TestSemantic_Free_OK;
 begin
@@ -722,32 +760,36 @@ end;
 
 const
   SrcArcBasic =
-    'program P;'                  + LineEnding +
-    'type'                        + LineEnding +
-    '  TFoo = class'              + LineEnding +
-    '    X: Integer;'             + LineEnding +
-    '  end;'                      + LineEnding +
-    'var F: TFoo;'                + LineEnding +
-    'begin'                       + LineEnding +
-    '  F := TFoo.Create'          + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TFoo = class
+            X: Integer;
+          end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create
+        end.
+        ''';
 
   SrcArcFieldClass =
-    'program P;'                  + LineEnding +
-    'type'                        + LineEnding +
-    '  TInner = class'            + LineEnding +
-    '    V: Integer;'             + LineEnding +
-    '  end;'                      + LineEnding +
-    '  TOuter = class'            + LineEnding +
-    '    Child: TInner;'          + LineEnding +
-    '  end;'                      + LineEnding +
-    'var A, B: TOuter;'           + LineEnding +
-    'begin'                       + LineEnding +
-    '  A := TOuter.Create;'       + LineEnding +
-    '  B := TOuter.Create;'       + LineEnding +
-    '  A.Child := TInner.Create;' + LineEnding +
-    '  B.Child := A.Child'        + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TInner = class
+            V: Integer;
+          end;
+          TOuter = class
+            Child: TInner;
+          end;
+        var A, B: TOuter;
+        begin
+          A := TOuter.Create;
+          B := TOuter.Create;
+          A.Child := TInner.Create;
+          B.Child := A.Child
+        end.
+        ''';
 
 procedure TClassTests.TestCodegen_ClassVarAssign_InsertsAddRefRelease;
 var IR: string;
@@ -808,7 +850,7 @@ begin
   StartPos := Pos('function $_FieldCleanup_TOuter', IR);
   AssertTrue('TOuter cleanup present', StartPos > 0);
   OuterBody := Copy(IR, StartPos, MaxInt);
-  EndPos   := Pos(LineEnding + '}', OuterBody);
+  EndPos   := Pos(#10 + '}', OuterBody);
   AssertTrue('TOuter cleanup has end', EndPos > 0);
   OuterBody := Copy(OuterBody, 1, EndPos);
   AssertTrue('TOuter cleanup releases class-typed field',
@@ -822,16 +864,18 @@ begin
     A class with a virtual method must get its vtable pointer stored at
     offset 0 immediately after _ClassAlloc. }
   IR := GenIR(
-    'program P;'                              + LineEnding +
-    'type'                                    + LineEnding +
-    '  TFoo = class'                          + LineEnding +
-    '    procedure Done; virtual;'            + LineEnding +
-    '  end;'                                  + LineEnding +
-    'procedure TFoo.Done; begin end;'         + LineEnding +
-    'var F: TFoo;'                            + LineEnding +
-    'begin'                                   + LineEnding +
-    '  F := TFoo.Create'                      + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            procedure Done; virtual;
+          end;
+        procedure TFoo.Done; begin end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create
+        end.
+        ''');
   AssertTrue('no-arg ctor stores vtable', Pos('storel $vtable_TFoo', IR) > 0);
 end;
 
@@ -842,20 +886,22 @@ begin
     The vtable pointer must still be stored at offset 0 even when a
     user-defined Create method is called with arguments. }
   IR := GenIR(
-    'program P;'                              + LineEnding +
-    'type'                                    + LineEnding +
-    '  TFoo = class'                          + LineEnding +
-    '    FN: Integer;'                        + LineEnding +
-    '    procedure Create(N: Integer);'       + LineEnding +
-    '    procedure Done; virtual;'            + LineEnding +
-    '  end;'                                  + LineEnding +
-    'procedure TFoo.Create(N: Integer);'      + LineEnding +
-    'begin FN := N end;'                      + LineEnding +
-    'procedure TFoo.Done; begin end;'         + LineEnding +
-    'var F: TFoo;'                            + LineEnding +
-    'begin'                                   + LineEnding +
-    '  F := TFoo.Create(42)'                  + LineEnding +
-    'end.');
+    '''
+        program P;
+        type
+          TFoo = class
+            FN: Integer;
+            procedure Create(N: Integer);
+            procedure Done; virtual;
+          end;
+        procedure TFoo.Create(N: Integer);
+        begin FN := N end;
+        procedure TFoo.Done; begin end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create(42)
+        end.
+        ''');
   AssertTrue('with-arg ctor stores vtable', Pos('storel $vtable_TFoo', IR) > 0);
 end;
 

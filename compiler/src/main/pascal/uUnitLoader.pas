@@ -99,6 +99,7 @@ begin
       P := TParser.Create(L);
       try
         Result := P.ParseUnit;
+        Result.SourceFile := APath;
       finally
         P.Free;
       end;

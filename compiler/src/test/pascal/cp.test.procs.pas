@@ -13,7 +13,7 @@ unit cp.test.procs;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -143,43 +143,49 @@ end;
 
 const
   SrcWithProc =
-    'program P;'                          + LineEnding +
-    'var N: Integer;'                     + LineEnding +
-    'procedure PrintIt(X: Integer);'      + LineEnding +
-    'begin'                               + LineEnding +
-    '  WriteLn(X)'                        + LineEnding +
-    'end;'                                + LineEnding +
-    'begin'                               + LineEnding +
-    '  N := 7;'                           + LineEnding +
-    '  PrintIt(N)'                        + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        procedure PrintIt(X: Integer);
+        begin
+          WriteLn(X)
+        end;
+        begin
+          N := 7;
+          PrintIt(N)
+        end.
+        ''';
 
   SrcWithFunc =
-    'program P;'                          + LineEnding +
-    'var N: Integer;'                     + LineEnding +
-    'function Add(A, B: Integer): Integer;' + LineEnding +
-    'begin'                               + LineEnding +
-    '  Result := A + B'                   + LineEnding +
-    'end;'                                + LineEnding +
-    'begin'                               + LineEnding +
-    '  N := Add(3, 4)'                    + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        function Add(A, B: Integer): Integer;
+        begin
+          Result := A + B
+        end;
+        begin
+          N := Add(3, 4)
+        end.
+        ''';
 
   SrcTwoProcs =
-    'program P;'                          + LineEnding +
-    'var N: Integer;'                     + LineEnding +
-    'procedure Inner(X: Integer);'        + LineEnding +
-    'begin'                               + LineEnding +
-    '  WriteLn(X)'                        + LineEnding +
-    'end;'                                + LineEnding +
-    'procedure Outer(Y: Integer);'        + LineEnding +
-    'begin'                               + LineEnding +
-    '  Inner(Y)'                          + LineEnding +
-    'end;'                                + LineEnding +
-    'begin'                               + LineEnding +
-    '  N := 1;'                           + LineEnding +
-    '  Outer(N)'                          + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        procedure Inner(X: Integer);
+        begin
+          WriteLn(X)
+        end;
+        procedure Outer(Y: Integer);
+        begin
+          Inner(Y)
+        end;
+        begin
+          N := 1;
+          Outer(N)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Parser tests                                                        }
@@ -394,29 +400,33 @@ end;
 procedure TProcFuncTests.TestSemantic_ProcCall_WrongArgCount_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                        + LineEnding +
-    'var N: Integer;'                   + LineEnding +
-    'procedure Foo(X: Integer);'        + LineEnding +
-    'begin'                             + LineEnding +
-    '  WriteLn(X)'                      + LineEnding +
-    'end;'                              + LineEnding +
-    'begin'                             + LineEnding +
-    '  Foo(1, 2)'                       + LineEnding +
-    'end.');
+    '''
+        program P;
+        var N: Integer;
+        procedure Foo(X: Integer);
+        begin
+          WriteLn(X)
+        end;
+        begin
+          Foo(1, 2)
+        end.
+        ''');
 end;
 
 procedure TProcFuncTests.TestSemantic_ProcCall_ArgTypeMismatch_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                        + LineEnding +
-    'var N: Integer;'                   + LineEnding +
-    'procedure Foo(X: Integer);'        + LineEnding +
-    'begin'                             + LineEnding +
-    '  WriteLn(X)'                      + LineEnding +
-    'end;'                              + LineEnding +
-    'begin'                             + LineEnding +
-    '  Foo(''not an int'')'             + LineEnding +
-    'end.');
+    '''
+        program P;
+        var N: Integer;
+        procedure Foo(X: Integer);
+        begin
+          WriteLn(X)
+        end;
+        begin
+          Foo('not an int')
+        end.
+        ''');
 end;
 
 procedure TProcFuncTests.TestSemantic_FuncCall_ReturnsCorrectType;
@@ -444,10 +454,12 @@ end;
 procedure TProcFuncTests.TestSemantic_UnknownProc_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'       + LineEnding +
-    'begin'            + LineEnding +
-    '  NoSuchProc(1)'  + LineEnding +
-    'end.');
+    '''
+        program P;
+        begin
+          NoSuchProc(1)
+        end.
+        ''');
 end;
 
 procedure TProcFuncTests.TestSemantic_Proc_CanCallOtherProc;
@@ -528,12 +540,14 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'                                    + LineEnding +
-    'procedure F(D: Double);'                       + LineEnding +
-    'begin'                                         + LineEnding +
-    '  WriteLn(DoubleToStr(D))'                     + LineEnding +
-    'end;'                                          + LineEnding +
-    'begin F(3.14) end.');
+    '''
+        program P;
+        procedure F(D: Double);
+        begin
+          WriteLn(DoubleToStr(D))
+        end;
+        begin F(3.14) end.
+        ''');
   AssertTrue('Double param spilt with ''stored''',
     Pos('stored %_par_D', IR) > 0);
   AssertFalse('Double param must NOT use ''storel''',
@@ -545,12 +559,14 @@ var
   IR: string;
 begin
   IR := GenIR(
-    'program P;'                                    + LineEnding +
-    'procedure F(S: Single);'                       + LineEnding +
-    'begin'                                         + LineEnding +
-    '  WriteLn(SingleToStr(S))'                     + LineEnding +
-    'end;'                                          + LineEnding +
-    'begin F(1.5) end.');
+    '''
+        program P;
+        procedure F(S: Single);
+        begin
+          WriteLn(SingleToStr(S))
+        end;
+        begin F(1.5) end.
+        ''');
   AssertTrue('Single param spilt with ''stores''',
     Pos('stores %_par_S', IR) > 0);
   AssertFalse('Single param must NOT use ''storel''',

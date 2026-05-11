@@ -17,7 +17,7 @@ unit cp.test.tlist;
 interface
 
 uses
-  Classes, SysUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -60,148 +60,162 @@ implementation
 
 const
   SrcSizeOfInteger =
-    'program P;'                                             + LineEnding +
-    'var N: Integer;'                                        + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  N := SizeOf(Integer)'                                 + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := SizeOf(Integer)
+        end.
+        ''';
 
   SrcSizeOfInt64 =
-    'program P;'                                             + LineEnding +
-    'var N: Integer;'                                        + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  N := SizeOf(Int64)'                                   + LineEnding +
-    'end.';
+    '''
+        program P;
+        var N: Integer;
+        begin
+          N := SizeOf(Int64)
+        end.
+        ''';
 
   SrcNilToTypedPtr =
-    'program P;'                                             + LineEnding +
-    'var P: ^Integer;'                                       + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  P := nil'                                             + LineEnding +
-    'end.';
+    '''
+        program P;
+        var P: ^Integer;
+        begin
+          P := nil
+        end.
+        ''';
 
   SrcPointerToTypedPtr =
-    'program P;'                                             + LineEnding +
-    'var'                                                    + LineEnding +
-    '  P: ^Integer;'                                         + LineEnding +
-    '  Q: Pointer;'                                          + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  Q := GetMem(4);'                                      + LineEnding +
-    '  P := Q'                                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        var
+          P: ^Integer;
+          Q: Pointer;
+        begin
+          Q := GetMem(4);
+          P := Q
+        end.
+        ''';
 
   SrcTListType =
-    'program P;'                                             + LineEnding +
-    'type'                                                   + LineEnding +
-    '  TList<T> = class'                                     + LineEnding +
-    '    FData: ^T;'                                         + LineEnding +
-    '    FCount: Integer;'                                   + LineEnding +
-    '    FCapacity: Integer;'                                + LineEnding +
-    '    procedure Add(Value: T);'                           + LineEnding +
-    '    var'                                                + LineEnding +
-    '      Dest: ^T;'                                        + LineEnding +
-    '    begin'                                              + LineEnding +
-    '      Dest := Self.FData + Self.FCount * SizeOf(T);'   + LineEnding +
-    '      Dest^ := Value;'                                  + LineEnding +
-    '      Self.FCount := Self.FCount + 1'                   + LineEnding +
-    '    end;'                                               + LineEnding +
-    '    function Get(AIndex: Integer): T;'                  + LineEnding +
-    '    var'                                                + LineEnding +
-    '      Src: ^T;'                                         + LineEnding +
-    '    begin'                                              + LineEnding +
-    '      Src := Self.FData + AIndex * SizeOf(T);'         + LineEnding +
-    '      Result := Src^'                                   + LineEnding +
-    '    end;'                                               + LineEnding +
-    '    property Count: Integer read FCount;'               + LineEnding +
-    '  end;'                                                 + LineEnding +
-    'var'                                                    + LineEnding +
-    '  L: TList<Integer>;'                                   + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  L := TList<Integer>.Create;'                          + LineEnding +
-    '  L.Add(10);'                                           + LineEnding +
-    '  L.Add(20)'                                            + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TList<T> = class
+            FData: ^T;
+            FCount: Integer;
+            FCapacity: Integer;
+            procedure Add(Value: T);
+            var
+              Dest: ^T;
+            begin
+              Dest := Self.FData + Self.FCount * SizeOf(T);
+              Dest^ := Value;
+              Self.FCount := Self.FCount + 1
+            end;
+            function Get(AIndex: Integer): T;
+            var
+              Src: ^T;
+            begin
+              Src := Self.FData + AIndex * SizeOf(T);
+              Result := Src^
+            end;
+            property Count: Integer read FCount;
+          end;
+        var
+          L: TList<Integer>;
+        begin
+          L := TList<Integer>.Create;
+          L.Add(10);
+          L.Add(20)
+        end.
+        ''';
 
   SrcTListGetResult =
-    'program P;'                                             + LineEnding +
-    'type'                                                   + LineEnding +
-    '  TList<T> = class'                                     + LineEnding +
-    '    FData: ^T;'                                         + LineEnding +
-    '    FCount: Integer;'                                   + LineEnding +
-    '    FCapacity: Integer;'                                + LineEnding +
-    '    procedure Add(Value: T);'                           + LineEnding +
-    '    var'                                                + LineEnding +
-    '      Dest: ^T;'                                        + LineEnding +
-    '    begin'                                              + LineEnding +
-    '      Dest := Self.FData + Self.FCount * SizeOf(T);'   + LineEnding +
-    '      Dest^ := Value;'                                  + LineEnding +
-    '      Self.FCount := Self.FCount + 1'                   + LineEnding +
-    '    end;'                                               + LineEnding +
-    '    function Get(AIndex: Integer): T;'                  + LineEnding +
-    '    var'                                                + LineEnding +
-    '      Src: ^T;'                                         + LineEnding +
-    '    begin'                                              + LineEnding +
-    '      Src := Self.FData + AIndex * SizeOf(T);'         + LineEnding +
-    '      Result := Src^'                                   + LineEnding +
-    '    end;'                                               + LineEnding +
-    '    property Count: Integer read FCount;'               + LineEnding +
-    '  end;'                                                 + LineEnding +
-    'var'                                                    + LineEnding +
-    '  L: TList<Integer>;'                                   + LineEnding +
-    '  V: Integer;'                                          + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  L := TList<Integer>.Create;'                          + LineEnding +
-    '  L.Add(42);'                                           + LineEnding +
-    '  V := L.Get(0)'                                        + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TList<T> = class
+            FData: ^T;
+            FCount: Integer;
+            FCapacity: Integer;
+            procedure Add(Value: T);
+            var
+              Dest: ^T;
+            begin
+              Dest := Self.FData + Self.FCount * SizeOf(T);
+              Dest^ := Value;
+              Self.FCount := Self.FCount + 1
+            end;
+            function Get(AIndex: Integer): T;
+            var
+              Src: ^T;
+            begin
+              Src := Self.FData + AIndex * SizeOf(T);
+              Result := Src^
+            end;
+            property Count: Integer read FCount;
+          end;
+        var
+          L: TList<Integer>;
+          V: Integer;
+        begin
+          L := TList<Integer>.Create;
+          L.Add(42);
+          V := L.Get(0)
+        end.
+        ''';
 
   SrcTListFull =
-    'program P;'                                             + LineEnding +
-    'type'                                                   + LineEnding +
-    '  TList<T> = class'                                     + LineEnding +
-    '    FData: ^T;'                                         + LineEnding +
-    '    FCount: Integer;'                                   + LineEnding +
-    '    FCapacity: Integer;'                                + LineEnding +
-    '    procedure Grow;'                                    + LineEnding +
-    '    var'                                                + LineEnding +
-    '      NewCap: Integer;'                                 + LineEnding +
-    '    begin'                                              + LineEnding +
-    '      if Self.FCapacity = 0 then'                       + LineEnding +
-    '        NewCap := 4'                                    + LineEnding +
-    '      else'                                             + LineEnding +
-    '        NewCap := Self.FCapacity * 2;'                  + LineEnding +
-    '      Self.FData := ReallocMem(Self.FData,'             + LineEnding +
-    '        NewCap * SizeOf(T));'                           + LineEnding +
-    '      Self.FCapacity := NewCap'                         + LineEnding +
-    '    end;'                                               + LineEnding +
-    '    procedure Add(Value: T);'                           + LineEnding +
-    '    var'                                                + LineEnding +
-    '      Dest: ^T;'                                        + LineEnding +
-    '    begin'                                              + LineEnding +
-    '      if Self.FCount = Self.FCapacity then'             + LineEnding +
-    '        Self.Grow;'                                     + LineEnding +
-    '      Dest := Self.FData + Self.FCount * SizeOf(T);'   + LineEnding +
-    '      Dest^ := Value;'                                  + LineEnding +
-    '      Self.FCount := Self.FCount + 1'                   + LineEnding +
-    '    end;'                                               + LineEnding +
-    '    function Get(AIndex: Integer): T;'                  + LineEnding +
-    '    var'                                                + LineEnding +
-    '      Src: ^T;'                                         + LineEnding +
-    '    begin'                                              + LineEnding +
-    '      Src := Self.FData + AIndex * SizeOf(T);'         + LineEnding +
-    '      Result := Src^'                                   + LineEnding +
-    '    end;'                                               + LineEnding +
-    '    property Count: Integer read FCount;'               + LineEnding +
-    '  end;'                                                 + LineEnding +
-    'var'                                                    + LineEnding +
-    '  L: TList<Integer>;'                                   + LineEnding +
-    '  V: Integer;'                                          + LineEnding +
-    'begin'                                                  + LineEnding +
-    '  L := TList<Integer>.Create;'                          + LineEnding +
-    '  L.Add(10);'                                           + LineEnding +
-    '  L.Add(20);'                                           + LineEnding +
-    '  V := L.Get(0)'                                        + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TList<T> = class
+            FData: ^T;
+            FCount: Integer;
+            FCapacity: Integer;
+            procedure Grow;
+            var
+              NewCap: Integer;
+            begin
+              if Self.FCapacity = 0 then
+                NewCap := 4
+              else
+                NewCap := Self.FCapacity * 2;
+              Self.FData := ReallocMem(Self.FData,
+                NewCap * SizeOf(T));
+              Self.FCapacity := NewCap
+            end;
+            procedure Add(Value: T);
+            var
+              Dest: ^T;
+            begin
+              if Self.FCount = Self.FCapacity then
+                Self.Grow;
+              Dest := Self.FData + Self.FCount * SizeOf(T);
+              Dest^ := Value;
+              Self.FCount := Self.FCount + 1
+            end;
+            function Get(AIndex: Integer): T;
+            var
+              Src: ^T;
+            begin
+              Src := Self.FData + AIndex * SizeOf(T);
+              Result := Src^
+            end;
+            property Count: Integer read FCount;
+          end;
+        var
+          L: TList<Integer>;
+          V: Integer;
+        begin
+          L := TList<Integer>.Create;
+          L.Add(10);
+          L.Add(20);
+          V := L.Get(0)
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                              }

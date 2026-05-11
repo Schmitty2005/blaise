@@ -17,7 +17,7 @@ unit cp.test.multifile;
 interface
 
 uses
-  Classes, SysUtils, contnrs, fpcunit, testregistry,
+  Classes, SysUtils, Contnrs, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE,
   uUnitLoader;
 
@@ -60,21 +60,13 @@ implementation
 
 procedure TMultifileTests.SetUp;
 begin
-  FTmpDir := GetTempDir(False) + 'blaise_mf_' + IntToStr(GetProcessID);
+  FTmpDir := GetTempDir + 'blaise_mf_' + IntToStr(GetProcessID);
   ForceDirectories(FTmpDir);
 end;
 
 procedure TMultifileTests.TearDown;
-var
-  SR: TSearchRec;
 begin
-  if FindFirst(FTmpDir + DirectorySeparator + '*.pas', faAnyFile, SR) = 0 then
-  begin
-    repeat
-      DeleteFile(FTmpDir + DirectorySeparator + SR.Name);
-    until FindNext(SR) <> 0;
-    FindClose(SR);
-  end;
+  { Temp .pas files are left; just attempt to remove the dir. }
   RemoveDir(FTmpDir);
 end;
 
@@ -85,7 +77,7 @@ begin
   F := TStringList.Create;
   try
     F.Text := ASrc;
-    F.SaveToFile(FTmpDir + DirectorySeparator + AName + '.pas');
+    F.SaveToFile(FTmpDir + '/' + AName + '.pas');
   finally
     F.Free;
   end;
@@ -134,15 +126,17 @@ end;
 procedure TMultifileTests.TestUnitLoader_LocatesUnitInSearchPath;
 const
   Src =
-    'unit MathUtils;'              + LineEnding +
-    'interface'                    + LineEnding +
-    'function Add(A, B: Integer): Integer;' + LineEnding +
-    'implementation'               + LineEnding +
-    'function Add(A, B: Integer): Integer;' + LineEnding +
-    'begin'                        + LineEnding +
-    '  Result := A + B'            + LineEnding +
-    'end;'                         + LineEnding +
-    'end.';
+    '''
+        unit MathUtils;
+        interface
+        function Add(A, B: Integer): Integer;
+        implementation
+        function Add(A, B: Integer): Integer;
+        begin
+          Result := A + B
+        end;
+        end.
+        ''';
 var
   Paths:  TStringList;
   Loader: TUnitLoader;
@@ -159,7 +153,7 @@ begin
     Units := Loader.LoadAll(Names);
     try
       AssertEquals('one unit loaded', 1, Units.Count);
-      AssertEquals('unit name', 'MathUtils', TUnit(Units[0]).Name);
+      AssertEquals('unit name', 'MathUtils', TUnit(Units.Items[0]).Name);
     finally
       Units.Free;
     end;
@@ -199,17 +193,21 @@ end;
 procedure TMultifileTests.TestUnitLoader_DetectsCycle;
 const
   SrcA =
-    'unit CycleA;'      + LineEnding +
-    'interface'         + LineEnding +
-    'uses CycleB;'      + LineEnding +
-    'implementation'    + LineEnding +
-    'end.';
+    '''
+        unit CycleA;
+        interface
+        uses CycleB;
+        implementation
+        end.
+        ''';
   SrcB =
-    'unit CycleB;'      + LineEnding +
-    'interface'         + LineEnding +
-    'uses CycleA;'      + LineEnding +
-    'implementation'    + LineEnding +
-    'end.';
+    '''
+        unit CycleB;
+        interface
+        uses CycleA;
+        implementation
+        end.
+        ''';
 var
   Paths:  TStringList;
   Loader: TUnitLoader;
@@ -241,22 +239,28 @@ end;
 procedure TMultifileTests.TestUnitLoader_DependencyOrder;
 const
   SrcC =
-    'unit DepC;'        + LineEnding +
-    'interface'         + LineEnding +
-    'implementation'    + LineEnding +
-    'end.';
+    '''
+        unit DepC;
+        interface
+        implementation
+        end.
+        ''';
   SrcB =
-    'unit DepB;'        + LineEnding +
-    'interface'         + LineEnding +
-    'uses DepC;'        + LineEnding +
-    'implementation'    + LineEnding +
-    'end.';
+    '''
+        unit DepB;
+        interface
+        uses DepC;
+        implementation
+        end.
+        ''';
   SrcA =
-    'unit DepA;'        + LineEnding +
-    'interface'         + LineEnding +
-    'uses DepB;'        + LineEnding +
-    'implementation'    + LineEnding +
-    'end.';
+    '''
+        unit DepA;
+        interface
+        uses DepB;
+        implementation
+        end.
+        ''';
 var
   Paths:  TStringList;
   Loader: TUnitLoader;
@@ -275,9 +279,9 @@ begin
     Units := Loader.LoadAll(Names);
     try
       AssertEquals('three units loaded', 3, Units.Count);
-      AssertEquals('first is leaf DepC', 'DepC', TUnit(Units[0]).Name);
-      AssertEquals('second is DepB',     'DepB', TUnit(Units[1]).Name);
-      AssertEquals('third is DepA',      'DepA', TUnit(Units[2]).Name);
+      AssertEquals('first is leaf DepC', 'DepC', TUnit(Units.Items[0]).Name);
+      AssertEquals('second is DepB',     'DepB', TUnit(Units.Items[1]).Name);
+      AssertEquals('third is DepA',      'DepA', TUnit(Units.Items[2]).Name);
     finally
       Units.Free;
     end;
@@ -295,22 +299,26 @@ end;
 procedure TMultifileTests.TestSemanticAnalyser_ExportedTypeVisibleInProgram;
 const
   UnitSrc =
-    'unit Shapes;'                   + LineEnding +
-    'interface'                      + LineEnding +
-    'type'                           + LineEnding +
-    '  TPoint = record'              + LineEnding +
-    '    X: Integer;'                + LineEnding +
-    '    Y: Integer;'                + LineEnding +
-    '  end;'                         + LineEnding +
-    'implementation'                 + LineEnding +
-    'end.';
+    '''
+        unit Shapes;
+        interface
+        type
+          TPoint = record
+            X: Integer;
+            Y: Integer;
+          end;
+        implementation
+        end.
+        ''';
   ProgSrc =
-    'program TestP;'                 + LineEnding +
-    'uses Shapes;'                   + LineEnding +
-    'var p: TPoint;'                 + LineEnding +
-    'begin'                          + LineEnding +
-    '  p.X := 1'                     + LineEnding +
-    'end.';
+    '''
+        program TestP;
+        uses Shapes;
+        var p: TPoint;
+        begin
+          p.X := 1
+        end.
+        ''';
 var
   U:    TUnit;
   Prog: TProgram;
@@ -334,22 +342,26 @@ end;
 procedure TMultifileTests.TestSemanticAnalyser_ExportedFuncVisibleInProgram;
 const
   UnitSrc =
-    'unit MathU;'                    + LineEnding +
-    'interface'                      + LineEnding +
-    'function Add(A, B: Integer): Integer;' + LineEnding +
-    'implementation'                 + LineEnding +
-    'function Add(A, B: Integer): Integer;' + LineEnding +
-    'begin'                          + LineEnding +
-    '  Result := A + B'              + LineEnding +
-    'end;'                           + LineEnding +
-    'end.';
+    '''
+        unit MathU;
+        interface
+        function Add(A, B: Integer): Integer;
+        implementation
+        function Add(A, B: Integer): Integer;
+        begin
+          Result := A + B
+        end;
+        end.
+        ''';
   ProgSrc =
-    'program TestP;'                 + LineEnding +
-    'uses MathU;'                    + LineEnding +
-    'var r: Integer;'                + LineEnding +
-    'begin'                          + LineEnding +
-    '  r := Add(1, 2)'               + LineEnding +
-    'end.';
+    '''
+        program TestP;
+        uses MathU;
+        var r: Integer;
+        begin
+          r := Add(1, 2)
+        end.
+        ''';
 var
   U:    TUnit;
   Prog: TProgram;
@@ -376,22 +388,26 @@ end;
 procedure TMultifileTests.TestCodegen_TwoFileCompile_UnitFuncExported;
 const
   UnitSrc =
-    'unit MathU;'                    + LineEnding +
-    'interface'                      + LineEnding +
-    'function Add(A, B: Integer): Integer;' + LineEnding +
-    'implementation'                 + LineEnding +
-    'function Add(A, B: Integer): Integer;' + LineEnding +
-    'begin'                          + LineEnding +
-    '  Result := A + B'              + LineEnding +
-    'end;'                           + LineEnding +
-    'end.';
+    '''
+        unit MathU;
+        interface
+        function Add(A, B: Integer): Integer;
+        implementation
+        function Add(A, B: Integer): Integer;
+        begin
+          Result := A + B
+        end;
+        end.
+        ''';
   ProgSrc =
-    'program TestP;'                 + LineEnding +
-    'uses MathU;'                    + LineEnding +
-    'var r: Integer;'                + LineEnding +
-    'begin'                          + LineEnding +
-    '  r := Add(1, 2)'               + LineEnding +
-    'end.';
+    '''
+        program TestP;
+        uses MathU;
+        var r: Integer;
+        begin
+          r := Add(1, 2)
+        end.
+        ''';
 var
   U:    TUnit;
   Prog: TProgram;
@@ -422,22 +438,26 @@ end;
 procedure TMultifileTests.TestCodegen_TwoFileCompile_MainPresent;
 const
   UnitSrc =
-    'unit MathU;'                    + LineEnding +
-    'interface'                      + LineEnding +
-    'function Add(A, B: Integer): Integer;' + LineEnding +
-    'implementation'                 + LineEnding +
-    'function Add(A, B: Integer): Integer;' + LineEnding +
-    'begin'                          + LineEnding +
-    '  Result := A + B'              + LineEnding +
-    'end;'                           + LineEnding +
-    'end.';
+    '''
+        unit MathU;
+        interface
+        function Add(A, B: Integer): Integer;
+        implementation
+        function Add(A, B: Integer): Integer;
+        begin
+          Result := A + B
+        end;
+        end.
+        ''';
   ProgSrc =
-    'program TestP;'                 + LineEnding +
-    'uses MathU;'                    + LineEnding +
-    'var r: Integer;'                + LineEnding +
-    'begin'                          + LineEnding +
-    '  r := Add(1, 2)'               + LineEnding +
-    'end.';
+    '''
+        program TestP;
+        uses MathU;
+        var r: Integer;
+        begin
+          r := Add(1, 2)
+        end.
+        ''';
 var
   U:    TUnit;
   Prog: TProgram;

@@ -16,6 +16,10 @@
       <option>--all</option>
       <option>--format=plain</option>
     </frameworkOptions>
+    <!-- RTL sources needed when Blaise compiles the test runner -->
+    <unitPaths>
+      <path>../rtl/src/main/pascal</path>
+    </unitPaths>
   </test>
 
   <!-- compiler does not depend on rtl at build time;

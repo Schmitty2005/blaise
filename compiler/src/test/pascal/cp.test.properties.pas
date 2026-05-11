@@ -17,7 +17,7 @@ unit cp.test.properties;
 interface
 
 uses
-  Classes, SysUtils, StrUtils, fpcunit, testregistry,
+  Classes, SysUtils, bcl.testing,
   uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
 
 type
@@ -87,141 +87,159 @@ implementation
 
 const
   SrcFieldBackedReadOnly =
-    'program P;'                           + LineEnding +
-    'type'                                 + LineEnding +
-    '  TBox = class'                       + LineEnding +
-    '    FCount: Integer;'                 + LineEnding +
-    '    property Count: Integer read FCount;' + LineEnding +
-    '  end;'                               + LineEnding +
-    'begin'                                + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox = class
+            FCount: Integer;
+            property Count: Integer read FCount;
+          end;
+        begin
+        end.
+        ''';
 
   SrcFieldBackedReadWrite =
-    'program P;'                                          + LineEnding +
-    'type'                                                + LineEnding +
-    '  TBox = class'                                      + LineEnding +
-    '    FValue: Integer;'                                + LineEnding +
-    '    property Value: Integer read FValue write FValue;' + LineEnding +
-    '  end;'                                              + LineEnding +
-    'begin'                                               + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox = class
+            FValue: Integer;
+            property Value: Integer read FValue write FValue;
+          end;
+        begin
+        end.
+        ''';
 
   SrcMethodBackedRead =
-    'program P;'                               + LineEnding +
-    'type'                                     + LineEnding +
-    '  TBox = class'                           + LineEnding +
-    '    FCount: Integer;'                     + LineEnding +
-    '    function GetCount: Integer;'          + LineEnding +
-    '    begin'                                + LineEnding +
-    '      Result := Self.FCount'              + LineEnding +
-    '    end;'                                 + LineEnding +
-    '    property Count: Integer read GetCount;' + LineEnding +
-    '  end;'                                   + LineEnding +
-    'begin'                                    + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox = class
+            FCount: Integer;
+            function GetCount: Integer;
+            begin
+              Result := Self.FCount
+            end;
+            property Count: Integer read GetCount;
+          end;
+        begin
+        end.
+        ''';
 
   SrcMethodBackedReadWrite =
-    'program P;'                                            + LineEnding +
-    'type'                                                  + LineEnding +
-    '  TBox = class'                                        + LineEnding +
-    '    FValue: Integer;'                                  + LineEnding +
-    '    function GetValue: Integer;'                       + LineEnding +
-    '    begin'                                             + LineEnding +
-    '      Result := Self.FValue'                           + LineEnding +
-    '    end;'                                              + LineEnding +
-    '    procedure SetValue(AVal: Integer);'                + LineEnding +
-    '    begin'                                             + LineEnding +
-    '      Self.FValue := AVal'                             + LineEnding +
-    '    end;'                                              + LineEnding +
-    '    property Value: Integer read GetValue write SetValue;' + LineEnding +
-    '  end;'                                                + LineEnding +
-    'begin'                                                 + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox = class
+            FValue: Integer;
+            function GetValue: Integer;
+            begin
+              Result := Self.FValue
+            end;
+            procedure SetValue(AVal: Integer);
+            begin
+              Self.FValue := AVal
+            end;
+            property Value: Integer read GetValue write SetValue;
+          end;
+        begin
+        end.
+        ''';
 
   SrcFieldBackedUsage =
-    'program P;'                                          + LineEnding +
-    'type'                                                + LineEnding +
-    '  TBox = class'                                      + LineEnding +
-    '    FValue: Integer;'                                + LineEnding +
-    '    property Value: Integer read FValue write FValue;' + LineEnding +
-    '  end;'                                              + LineEnding +
-    'var B: TBox;'                                        + LineEnding +
-    'begin'                                               + LineEnding +
-    '  B := TBox.Create;'                                 + LineEnding +
-    '  B.Value := 42;'                                    + LineEnding +
-    '  WriteLn(B.Value)'                                  + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox = class
+            FValue: Integer;
+            property Value: Integer read FValue write FValue;
+          end;
+        var B: TBox;
+        begin
+          B := TBox.Create;
+          B.Value := 42;
+          WriteLn(B.Value)
+        end.
+        ''';
 
   SrcMethodBackedReadUsage =
-    'program P;'                               + LineEnding +
-    'type'                                     + LineEnding +
-    '  TBox = class'                           + LineEnding +
-    '    FCount: Integer;'                     + LineEnding +
-    '    function GetCount: Integer;'          + LineEnding +
-    '    begin'                                + LineEnding +
-    '      Result := Self.FCount'              + LineEnding +
-    '    end;'                                 + LineEnding +
-    '    property Count: Integer read GetCount;' + LineEnding +
-    '  end;'                                   + LineEnding +
-    'var B: TBox;'                             + LineEnding +
-    'begin'                                    + LineEnding +
-    '  B := TBox.Create;'                      + LineEnding +
-    '  WriteLn(B.Count)'                       + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TBox = class
+            FCount: Integer;
+            function GetCount: Integer;
+            begin
+              Result := Self.FCount
+            end;
+            property Count: Integer read GetCount;
+          end;
+        var B: TBox;
+        begin
+          B := TBox.Create;
+          WriteLn(B.Count)
+        end.
+        ''';
 
   SrcIndexedPropDecl =
-    'program P;'                                                   + LineEnding +
-    'type'                                                         + LineEnding +
-    '  TList = class'                                              + LineEnding +
-    '    function Get(AIndex: Integer): Integer;'                  + LineEnding +
-    '    begin'                                                    + LineEnding +
-    '      Result := AIndex'                                       + LineEnding +
-    '    end;'                                                     + LineEnding +
-    '    procedure Put(AIndex: Integer; AValue: Integer);'         + LineEnding +
-    '    begin'                                                    + LineEnding +
-    '    end;'                                                     + LineEnding +
-    '    property Items[Index: Integer]: Integer read Get write Put;' + LineEnding +
-    '  end;'                                                       + LineEnding +
-    'begin'                                                        + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TList = class
+            function Get(AIndex: Integer): Integer;
+            begin
+              Result := AIndex
+            end;
+            procedure Put(AIndex: Integer; AValue: Integer);
+            begin
+            end;
+            property Items[Index: Integer]: Integer read Get write Put;
+          end;
+        begin
+        end.
+        ''';
 
   SrcIndexedPropReadUsage =
-    'program P;'                                                   + LineEnding +
-    'type'                                                         + LineEnding +
-    '  TList = class'                                              + LineEnding +
-    '    function Get(AIndex: Integer): Integer;'                  + LineEnding +
-    '    begin'                                                    + LineEnding +
-    '      Result := AIndex'                                       + LineEnding +
-    '    end;'                                                     + LineEnding +
-    '    property Items[Index: Integer]: Integer read Get;'        + LineEnding +
-    '  end;'                                                       + LineEnding +
-    'var L: TList; V: Integer;'                                    + LineEnding +
-    'begin'                                                        + LineEnding +
-    '  L := TList.Create;'                                         + LineEnding +
-    '  V := L.Items[3];'                                           + LineEnding +
-    '  WriteLn(V)'                                                 + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TList = class
+            function Get(AIndex: Integer): Integer;
+            begin
+              Result := AIndex
+            end;
+            property Items[Index: Integer]: Integer read Get;
+          end;
+        var L: TList; V: Integer;
+        begin
+          L := TList.Create;
+          V := L.Items[3];
+          WriteLn(V)
+        end.
+        ''';
 
   SrcIndexedPropWriteUsage =
-    'program P;'                                                   + LineEnding +
-    'type'                                                         + LineEnding +
-    '  TList = class'                                              + LineEnding +
-    '    FValue: Integer;'                                         + LineEnding +
-    '    function Get(AIndex: Integer): Integer;'                  + LineEnding +
-    '    begin'                                                    + LineEnding +
-    '      Result := AIndex'                                       + LineEnding +
-    '    end;'                                                     + LineEnding +
-    '    procedure Put(AIndex: Integer; AValue: Integer);'         + LineEnding +
-    '    begin'                                                    + LineEnding +
-    '      Self.FValue := AValue'                                  + LineEnding +
-    '    end;'                                                     + LineEnding +
-    '    property Items[Index: Integer]: Integer read Get write Put;' + LineEnding +
-    '  end;'                                                       + LineEnding +
-    'var L: TList;'                                                + LineEnding +
-    'begin'                                                        + LineEnding +
-    '  L := TList.Create;'                                         + LineEnding +
-    '  L.Items[2] := 42'                                           + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TList = class
+            FValue: Integer;
+            function Get(AIndex: Integer): Integer;
+            begin
+              Result := AIndex
+            end;
+            procedure Put(AIndex: Integer; AValue: Integer);
+            begin
+              Self.FValue := AValue
+            end;
+            property Items[Index: Integer]: Integer read Get write Put;
+          end;
+        var L: TList;
+        begin
+          L := TList.Create;
+          L.Items[2] := 42
+        end.
+        ''';
 
 { ------------------------------------------------------------------ }
 { Helpers                                                             }
@@ -417,13 +435,15 @@ end;
 procedure TPropertyTests.TestSemantic_Property_ReadOnly_WriteRaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                                  + LineEnding +
-    'type TBox = class'                           + LineEnding +
-    '  FCount: Integer;'                          + LineEnding +
-    '  property Count: Integer read FCount;'      + LineEnding +
-    'end;'                                        + LineEnding +
-    'var B: TBox;'                                + LineEnding +
-    'begin B := TBox.Create; B.Count := 5 end.'
+    '''
+        program P;
+        type TBox = class
+          FCount: Integer;
+          property Count: Integer read FCount;
+        end;
+        var B: TBox;
+        begin B := TBox.Create; B.Count := 5 end.
+        '''
   );
 end;
 
@@ -534,14 +554,16 @@ end;
 procedure TPropertyTests.TestSemantic_IndexedProperty_MissingIndex_RaisesError;
 begin
   AnalyseExpectError(
-    'program P;'                                              + LineEnding +
-    'type TList = class'                                      + LineEnding +
-    '  function Get(AIndex: Integer): Integer;'               + LineEnding +
-    '  begin Result := AIndex end;'                           + LineEnding +
-    '  property Items[Index: Integer]: Integer read Get;'     + LineEnding +
-    'end;'                                                    + LineEnding +
-    'var L: TList; V: Integer;'                               + LineEnding +
-    'begin L := TList.Create; V := L.Items; WriteLn(V) end.'
+    '''
+        program P;
+        type TList = class
+          function Get(AIndex: Integer): Integer;
+          begin Result := AIndex end;
+          property Items[Index: Integer]: Integer read Get;
+        end;
+        var L: TList; V: Integer;
+        begin L := TList.Create; V := L.Items; WriteLn(V) end.
+        '''
   );
 end;
 
@@ -564,27 +586,29 @@ end;
 procedure TPropertyTests.TestCodegen_IndexedProperty_ChainedBase_VarIndex_Compiles;
 const
   Src =
-    'program P;'                                                    + LineEnding +
-    'type'                                                          + LineEnding +
-    '  TItems = class'                                              + LineEnding +
-    '    function Get(AIndex: Integer): Integer;'                   + LineEnding +
-    '    begin Result := AIndex end;'                               + LineEnding +
-    '    property Strings[Index: Integer]: Integer read Get;'       + LineEnding +
-    '  end;'                                                        + LineEnding +
-    '  TOuter = class'                                              + LineEnding +
-    '    FInner: TItems;'                                           + LineEnding +
-    '    property Inner: TItems read FInner;'                       + LineEnding +
-    '  end;'                                                        + LineEnding +
-    'var'                                                           + LineEnding +
-    '  O: TOuter;'                                                  + LineEnding +
-    '  I, V: Integer;'                                              + LineEnding +
-    'begin'                                                         + LineEnding +
-    '  O := TOuter.Create;'                                         + LineEnding +
-    '  O.FInner := TItems.Create;'                                  + LineEnding +
-    '  I := 7;'                                                     + LineEnding +
-    '  V := O.Inner.Strings[I];'                                    + LineEnding +
-    '  WriteLn(V)'                                                  + LineEnding +
-    'end.';
+    '''
+        program P;
+        type
+          TItems = class
+            function Get(AIndex: Integer): Integer;
+            begin Result := AIndex end;
+            property Strings[Index: Integer]: Integer read Get;
+          end;
+          TOuter = class
+            FInner: TItems;
+            property Inner: TItems read FInner;
+          end;
+        var
+          O: TOuter;
+          I, V: Integer;
+        begin
+          O := TOuter.Create;
+          O.FInner := TItems.Create;
+          I := 7;
+          V := O.Inner.Strings[I];
+          WriteLn(V)
+        end.
+        ''';
 var
   IR: string;
 begin
