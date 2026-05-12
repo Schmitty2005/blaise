@@ -5272,7 +5272,10 @@ begin
   if AExpr is TNilLiteral then
     Result := FTable.TypeNil
   else if AExpr is TIntLiteral then
-    Result := FTable.TypeInteger
+    if (TIntLiteral(AExpr).Value < -2147483648) or (TIntLiteral(AExpr).Value > 2147483647) then
+      Result := FTable.TypeInt64
+    else
+      Result := FTable.TypeInteger
   else if AExpr is TFloatLiteral then
     Result := FTable.TypeDouble   { float literals default to Double }
   else if AExpr is TStringLiteral then
@@ -6066,10 +6069,12 @@ var
   PT: TPointerTypeDesc;
   Sym, FSym: TSymbol;
   IdentExpr: TIdentExpr;
+  FldExpr: TFieldAccessExpr;
   ProcDesc: TProceduralTypeDesc;
   ProcParam: TProcParamInfo;
   MD: TMethodDecl;
   MParam: TMethodParam;
+  BaseType: TTypeDesc;
   Idx, K: Integer;
 begin
   { @FuncName / @ProcName — if the inner is a bare identifier that
@@ -6104,6 +6109,59 @@ begin
       IdentExpr.ResolvedType := ProcDesc;
       AExpr.ResolvedType := Result;
       Exit;
+    end;
+  end;
+
+  { @Obj.MethodName — method pointer construction.  The inner expression is a
+    TFieldAccessExpr whose base is a class instance and whose field name
+    resolves to a method on that class.  Build a method-pointer type
+    (IsMethodPtr = True) that pairs the method code with the object pointer.
+    Two forms: Obj.Method (RecordName set, Base=nil) and Expr.Method (Base set). }
+  if AExpr.Expr is TFieldAccessExpr then
+  begin
+    FldExpr  := TFieldAccessExpr(AExpr.Expr);
+    { Determine base type from either RecordName or Base expression }
+    if FldExpr.Base = nil then
+    begin
+      { Simple form: @VarName.MethodName — look up VarName }
+      Sym := FTable.Lookup(FldExpr.RecordName);
+      if (Sym <> nil) and
+         (Sym.Kind in [skVariable, skParameter, skVarParameter]) and
+         (Sym.TypeDesc <> nil) and (Sym.TypeDesc.Kind = tyClass) then
+        BaseType := Sym.TypeDesc
+      else
+        BaseType := nil;
+      if BaseType <> nil then
+        FldExpr.IsGlobal := Sym.IsGlobal;
+    end
+    else
+      BaseType := AnalyseExpr(FldExpr.Base);
+    if (BaseType <> nil) and (BaseType.Kind = tyClass) then
+    begin
+      MD := FindMethodDecl(TRecordTypeDesc(BaseType).Name, FldExpr.FieldName);
+      if MD <> nil then
+      begin
+        FldExpr.IsClassAccess  := True;
+        FldExpr.IsMethodCall   := False;  { @Obj.M is not a call }
+        FldExpr.ResolvedMethod := MD;
+        ProcDesc := FTable.NewProceduralType('');
+        ProcDesc.IsMethodPtr := True;
+        for K := 0 to MD.Params.Count - 1 do
+        begin
+          MParam := TMethodParam(MD.Params.Items[K]);
+          ProcParam := TProcParamInfo.Create;
+          ProcParam.Name         := MParam.ParamName;
+          ProcParam.TypeDesc     := MParam.ResolvedType;
+          ProcParam.IsVarParam   := MParam.IsVarParam;
+          ProcParam.IsConstParam := MParam.IsConstParam;
+          ProcDesc.Params.Add(ProcParam);
+        end;
+        ProcDesc.ReturnType := MD.ResolvedReturnType;
+        FldExpr.ResolvedType := ProcDesc;
+        AExpr.ResolvedType   := ProcDesc;
+        Result               := ProcDesc;
+        Exit;
+      end;
     end;
   end;
   InnerType := AnalyseExpr(AExpr.Expr);

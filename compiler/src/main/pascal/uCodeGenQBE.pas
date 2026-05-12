@@ -3111,10 +3111,11 @@ begin
 
   if AAssign.ObjExpr <> nil then
   begin
-    { Receiver is an arbitrary expression — emit it, then offset to the field.
-      EmitExpr already returns the class instance pointer value for class-typed
-      expressions, so no extra dereference is needed here. }
-    PtrTemp := EmitExpr(AAssign.ObjExpr);
+    { Receiver is an arbitrary expression — get its storage address.
+      For class-typed bases (heap object) EmitInstancePtr loads the heap pointer.
+      For record-typed bases (inline storage) EmitInstancePtr returns the address
+      of the record in memory — EmitExpr would incorrectly load the contents. }
+    PtrTemp := EmitInstancePtr(AAssign.ObjExpr);
     if AAssign.FieldInfo.Offset > 0 then
     begin
       Ptr := AllocTemp;
@@ -3506,9 +3507,24 @@ begin
     ArgLine := ArgLine + Format(', %s %s', [QType, ArgTemp]);
   end;
 
-  { Always a direct (static) call — inherited bypasses vtable dispatch }
-  EmitLine(Format('  call $%s(%s)',
-    [MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
+  { Always a direct (static) call — inherited bypasses vtable dispatch.
+    If the parent method returns a value, store it into %_var_Result so that
+    "inherited F;" as a statement sets Result in the overriding function. }
+  if (MDecl.ResolvedReturnType <> nil) and
+     (MDecl.ResolvedReturnType.Kind <> tyVoid) then
+  begin
+    QType   := QbeTypeOf(MDecl.ResolvedReturnType);
+    ArgTemp := AllocTemp;
+    EmitLine(Format('  %s =%s call $%s(%s)',
+      [ArgTemp, QType, MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
+    if QType = 'w' then
+      EmitLine(Format('  storew %s, %%_var_Result', [ArgTemp]))
+    else
+      EmitLine(Format('  storel %s, %%_var_Result', [ArgTemp]));
+  end
+  else
+    EmitLine(Format('  call $%s(%s)',
+      [MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
 end;
 
 procedure TCodeGenQBE.EmitParamAllocs(AMethod: TMethodDecl;
@@ -5518,13 +5534,16 @@ begin
         Exit;
       end;
 
-      { Type cast TypeName(Expr) — ResolvedDecl is nil; copy/extend to target QBE type }
+      { Type cast TypeName(Expr) — ResolvedDecl is nil; copy/extend/truncate to target QBE type }
       if FC.ResolvedDecl = nil then
       begin
         ArgTemp  := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T        := AllocTemp;
         QType    := QbeTypeOf(FC.ResolvedType);
-        if QType = 'w' then
+        if FC.ResolvedType.Kind = tyByte then
+          { Byte(X): truncate to 8 bits — mask to [0..255] }
+          EmitLine(Format('  %s =w and %s, 255', [T, ArgTemp]))
+        else if QType = 'w' then
           EmitLine(Format('  %s =w copy %s', [T, ArgTemp]))
         else
         begin
@@ -5853,7 +5872,10 @@ begin
   if AExpr is TIntLiteral then
   begin
     T := AllocTemp;
-    EmitLine(Format('  %s =w copy %s', [T, IntToStr(TIntLiteral(AExpr).Value)]));
+    if (TIntLiteral(AExpr).Value < -2147483648) or (TIntLiteral(AExpr).Value > 2147483647) then
+      EmitLine(Format('  %s =l copy %s', [T, IntToStr(TIntLiteral(AExpr).Value)]))
+    else
+      EmitLine(Format('  %s =w copy %s', [T, IntToStr(TIntLiteral(AExpr).Value)]));
     Result := T;
   end
   else if AExpr is TFloatLiteral then
@@ -7492,6 +7514,11 @@ var
   StrPtr:  string;
   IdxW:    string;
   IdxL:    string;
+  MBlock:  string;
+  DataSlot: string;
+  ObjPtr:  string;
+  MD:      TMethodDecl;
+  FldExpr: TFieldAccessExpr;
   Adj:     string;
   Offset:  string;
   ElemPtr: string;
@@ -7563,6 +7590,38 @@ begin
     end;
     Result := VarRef(TIdentExpr(AExpr.Expr).Name,
                      TIdentExpr(AExpr.Expr).IsGlobal);
+    Exit;
+  end;
+  { @Obj.MethodName — method-pointer construction.  The semantic pass set
+    IsMethodPtr on the TFieldAccessExpr's ResolvedType when it detected this
+    pattern.  Allocate a 16-byte block [code_ptr, data_ptr] on the stack,
+    store the static method address and the object pointer, return the block. }
+  if (AExpr.Expr is TFieldAccessExpr) and
+     (TFieldAccessExpr(AExpr.Expr).ResolvedType <> nil) and
+     (TFieldAccessExpr(AExpr.Expr).ResolvedType.Kind = tyProcedural) and
+     TProceduralTypeDesc(TFieldAccessExpr(AExpr.Expr).ResolvedType).IsMethodPtr then
+  begin
+    FldExpr  := TFieldAccessExpr(AExpr.Expr);
+    MD       := TMethodDecl(FldExpr.ResolvedMethod);
+    MBlock   := AllocTemp;
+    EmitLine(Format('  %s =l alloc8 16', [MBlock]));
+    DataSlot := AllocTemp;
+    EmitLine(Format('  %s =l add %s, 8', [DataSlot, MBlock]));
+    { Store code pointer at offset 0 }
+    EmitLine(Format('  storel $%s, %s',
+      [MethodEmitName(MD, MD.OwnerTypeName, FldExpr.FieldName), MBlock]));
+    { Load and store the object pointer at offset 8.
+      Simple form: @VarName.Method — FldExpr.Base is nil; load via RecordName.
+      Chained form: @Expr.Method — FldExpr.Base is set; use EmitInstancePtr. }
+    if FldExpr.Base <> nil then
+      ObjPtr := EmitInstancePtr(FldExpr.Base)
+    else
+    begin
+      ObjPtr := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [ObjPtr, VarRef(FldExpr.RecordName, FldExpr.IsGlobal)]));
+    end;
+    EmitLine(Format('  storel %s, %s', [ObjPtr, DataSlot]));
+    Result := MBlock;
     Exit;
   end;
   { Fallthrough: field access, pointer deref, etc. — delegate to EmitLValueAddr

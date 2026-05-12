@@ -210,6 +210,89 @@ type
     procedure TestRun_ForIn_String_IntegerVar_PrintsBytes;
     procedure TestRun_ForIn_Array_Integer_PrintsElements;
     procedure TestRun_ForIn_ClassEnumerator_PrintsElements;
+
+    { Control flow }
+    procedure TestRun_For_Upward_PrintsRange;
+    procedure TestRun_For_Downto_PrintsRange;
+    procedure TestRun_While_PrintsRange;
+    procedure TestRun_Repeat_PrintsRange;
+    procedure TestRun_For_BreakExitsEarly;
+    procedure TestRun_For_ContinueSkipsIteration;
+    procedure TestRun_Nested_For_Loops;
+
+    { Records }
+    procedure TestRun_Record_FieldReadWrite;
+    procedure TestRun_Record_PassByValue;
+    procedure TestRun_Record_PassByVar;
+    procedure TestRun_Record_StringField_ARC;
+    procedure TestRun_Record_NestedRecord;
+
+    { Pointers }
+    procedure TestRun_Pointer_GetMem_WriteRead_FreeMem;
+    procedure TestRun_Pointer_TypedPointer_Deref;
+    procedure TestRun_Pointer_NilCheck;
+
+    { Text blocks }
+    procedure TestRun_TextBlock_BasicContent;
+    procedure TestRun_TextBlock_IndentStripped;
+
+    { Constants }
+    procedure TestRun_Const_IntegerConst;
+    procedure TestRun_Const_StringConst;
+    procedure TestRun_Const_NegativeConst;
+
+    { Sets }
+    procedure TestRun_Set_Include_Exclude;
+    procedure TestRun_Set_InOperator;
+    procedure TestRun_Set_UnionIntersect;
+
+    { Procedural types }
+    procedure TestRun_ProcType_CallViaVariable;
+    procedure TestRun_ProcType_OfObject_Dispatch;
+
+    { Default parameters }
+    procedure TestRun_DefaultParam_OmitLast;
+    procedure TestRun_DefaultParam_OmitMultiple;
+
+    { Open arrays }
+    procedure TestRun_OpenArray_Sum;
+    procedure TestRun_OpenArray_HighLow;
+
+    { var / const params }
+    procedure TestRun_VarParam_SwapIntegers;
+    procedure TestRun_VarParam_ModifyString;
+    procedure TestRun_ConstParam_CanRead;
+
+    { String operations }
+    procedure TestRun_StringSubscript_ReadByte;
+    procedure TestRun_StringConcat_TwoStrings;
+    procedure TestRun_StringConcat_WithInt;
+    procedure TestRun_StringDelete_Modifies;
+    procedure TestRun_StringSetLength_Truncates;
+
+    { Int64 }
+    procedure TestRun_Int64_ArithmeticOverInt32;
+    procedure TestRun_Int64_Comparison;
+    procedure TestRun_Int64_ForLoop;
+
+    { Type casts }
+    procedure TestRun_TypeCast_IntegerByte;
+    procedure TestRun_TypeCast_PointerInteger;
+
+    { is / as }
+    procedure TestRun_Is_CorrectSubclass_True;
+    procedure TestRun_Is_WrongClass_False;
+    procedure TestRun_As_DowncastCallsMethod;
+
+    { Inheritance and virtual dispatch }
+    procedure TestRun_Inherited_CallsParentMethod;
+    procedure TestRun_Virtual_OverrideDispatch;
+    procedure TestRun_MultiLevel_Inheritance_Chain;
+
+    { Interfaces }
+    procedure TestRun_Interface_Dispatch_CallsImpl;
+    procedure TestRun_Interface_ARC_NoLeak;
+    procedure TestRun_Interface_Is_As_Roundtrip;
   end;
 
 implementation
@@ -2929,6 +3012,1164 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcForInClassEnum, Output, RCode, []));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('range 3..5', '3' + LE + '4' + LE + '5' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Control flow e2e tests                                               }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcForUp =
+    'program P;'                        + LineEnding +
+    'var I: Integer;'                   + LineEnding +
+    'begin'                             + LineEnding +
+    '  for I := 1 to 3 do'             + LineEnding +
+    '    WriteLn(I)'                    + LineEnding +
+    'end.';
+
+  SrcForDown =
+    'program P;'                        + LineEnding +
+    'var I: Integer;'                   + LineEnding +
+    'begin'                             + LineEnding +
+    '  for I := 3 downto 1 do'         + LineEnding +
+    '    WriteLn(I)'                    + LineEnding +
+    'end.';
+
+  SrcWhile =
+    'program P;'                        + LineEnding +
+    'var I: Integer;'                   + LineEnding +
+    'begin'                             + LineEnding +
+    '  I := 1;'                         + LineEnding +
+    '  while I <= 3 do'                 + LineEnding +
+    '  begin'                           + LineEnding +
+    '    WriteLn(I);'                   + LineEnding +
+    '    I := I + 1'                    + LineEnding +
+    '  end'                             + LineEnding +
+    'end.';
+
+  SrcRepeat =
+    'program P;'                        + LineEnding +
+    'var I: Integer;'                   + LineEnding +
+    'begin'                             + LineEnding +
+    '  I := 1;'                         + LineEnding +
+    '  repeat'                          + LineEnding +
+    '    WriteLn(I);'                   + LineEnding +
+    '    I := I + 1'                    + LineEnding +
+    '  until I > 3'                     + LineEnding +
+    'end.';
+
+  SrcForBreakE2E =
+    'program P;'                        + LineEnding +
+    'var I: Integer;'                   + LineEnding +
+    'begin'                             + LineEnding +
+    '  for I := 1 to 10 do'            + LineEnding +
+    '  begin'                           + LineEnding +
+    '    if I = 4 then break;'          + LineEnding +
+    '    WriteLn(I)'                    + LineEnding +
+    '  end'                             + LineEnding +
+    'end.';
+
+  SrcForContinue =
+    'program P;'                        + LineEnding +
+    'var I: Integer;'                   + LineEnding +
+    'begin'                             + LineEnding +
+    '  for I := 1 to 5 do'             + LineEnding +
+    '  begin'                           + LineEnding +
+    '    if I = 3 then continue;'       + LineEnding +
+    '    WriteLn(I)'                    + LineEnding +
+    '  end'                             + LineEnding +
+    'end.';
+
+  SrcNestedFor =
+    'program P;'                        + LineEnding +
+    'var I, J: Integer;'                + LineEnding +
+    'begin'                             + LineEnding +
+    '  for I := 1 to 2 do'             + LineEnding +
+    '    for J := 1 to 2 do'           + LineEnding +
+    '      WriteLn(I * 10 + J)'        + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_For_Upward_PrintsRange;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcForUp, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('1 2 3', '1' + LE + '2' + LE + '3' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_For_Downto_PrintsRange;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcForDown, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('3 2 1', '3' + LE + '2' + LE + '1' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_While_PrintsRange;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcWhile, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('1 2 3', '1' + LE + '2' + LE + '3' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Repeat_PrintsRange;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcRepeat, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('1 2 3', '1' + LE + '2' + LE + '3' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_For_BreakExitsEarly;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcForBreakE2E, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('1 2 3', '1' + LE + '2' + LE + '3' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_For_ContinueSkipsIteration;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcForContinue, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('1 2 4 5', '1' + LE + '2' + LE + '4' + LE + '5' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Nested_For_Loops;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcNestedFor, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('nested 2x2', '11' + LE + '12' + LE + '21' + LE + '22' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Record e2e tests                                                     }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcRecordFieldRW =
+    'program P;'                                    + LineEnding +
+    'type TPoint = record X, Y: Integer; end;'      + LineEnding +
+    'var P1: TPoint;'                               + LineEnding +
+    'begin'                                         + LineEnding +
+    '  P1.X := 3;'                                  + LineEnding +
+    '  P1.Y := 7;'                                  + LineEnding +
+    '  WriteLn(P1.X + P1.Y)'                        + LineEnding +
+    'end.';
+
+  SrcRecordPassByValue =
+    'program P;'                                    + LineEnding +
+    'type TPoint = record X, Y: Integer; end;'      + LineEnding +
+    'procedure Print(Pt: TPoint);'                  + LineEnding +
+    'begin'                                         + LineEnding +
+    '  WriteLn(Pt.X);'                              + LineEnding +
+    '  WriteLn(Pt.Y)'                               + LineEnding +
+    'end;'                                          + LineEnding +
+    'var P1: TPoint;'                               + LineEnding +
+    'begin'                                         + LineEnding +
+    '  P1.X := 5;'                                  + LineEnding +
+    '  P1.Y := 9;'                                  + LineEnding +
+    '  Print(P1)'                                   + LineEnding +
+    'end.';
+
+  SrcRecordPassByVar =
+    'program P;'                                    + LineEnding +
+    'type TPoint = record X, Y: Integer; end;'      + LineEnding +
+    'procedure Scale(var Pt: TPoint);'              + LineEnding +
+    'begin'                                         + LineEnding +
+    '  Pt.X := Pt.X * 2;'                           + LineEnding +
+    '  Pt.Y := Pt.Y * 2'                            + LineEnding +
+    'end;'                                          + LineEnding +
+    'var P1: TPoint;'                               + LineEnding +
+    'begin'                                         + LineEnding +
+    '  P1.X := 3;'                                  + LineEnding +
+    '  P1.Y := 4;'                                  + LineEnding +
+    '  Scale(P1);'                                  + LineEnding +
+    '  WriteLn(P1.X);'                              + LineEnding +
+    '  WriteLn(P1.Y)'                               + LineEnding +
+    'end.';
+
+  SrcRecordStringField =
+    'program P;'                                    + LineEnding +
+    'type TName = record First, Last: string; end;' + LineEnding +
+    'var N: TName;'                                 + LineEnding +
+    'begin'                                         + LineEnding +
+    '  N.First := ''Ada'';'                         + LineEnding +
+    '  N.Last  := ''Lovelace'';'                    + LineEnding +
+    '  WriteLn(N.First + '' '' + N.Last)'           + LineEnding +
+    'end.';
+
+  SrcRecordNested =
+    'program P;'                                    + LineEnding +
+    'type'                                          + LineEnding +
+    '  TInner = record V: Integer; end;'            + LineEnding +
+    '  TOuter = record A, B: TInner; end;'          + LineEnding +
+    'var O: TOuter;'                                + LineEnding +
+    'begin'                                         + LineEnding +
+    '  O.A.V := 10;'                                + LineEnding +
+    '  O.B.V := 20;'                                + LineEnding +
+    '  WriteLn(O.A.V + O.B.V)'                      + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_Record_FieldReadWrite;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcRecordFieldRW, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('3 + 7 = 10', '10' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Record_PassByValue;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcRecordPassByValue, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('5 then 9', '5' + LE + '9' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Record_PassByVar;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcRecordPassByVar, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('6 then 8', '6' + LE + '8' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Record_StringField_ARC;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcRecordStringField, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('Ada Lovelace', 'Ada Lovelace' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Record_NestedRecord;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcRecordNested, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('10 + 20 = 30', '30' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Pointer e2e tests                                                    }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcGetMemWriteRead =
+    'program P;'                                    + LineEnding +
+    'var P1: ^Integer;'                             + LineEnding +
+    'begin'                                         + LineEnding +
+    '  P1 := GetMem(4);'                            + LineEnding +
+    '  P1^ := 42;'                                  + LineEnding +
+    '  WriteLn(P1^);'                               + LineEnding +
+    '  FreeMem(P1)'                                 + LineEnding +
+    'end.';
+
+  SrcTypedPointerDeref =
+    'program P;'                                    + LineEnding +
+    'var'                                           + LineEnding +
+    '  A: Integer;'                                 + LineEnding +
+    '  P1: ^Integer;'                               + LineEnding +
+    'begin'                                         + LineEnding +
+    '  A  := 99;'                                   + LineEnding +
+    '  P1 := @A;'                                   + LineEnding +
+    '  WriteLn(P1^)'                                + LineEnding +
+    'end.';
+
+  SrcPointerNilCheck =
+    'program P;'                                    + LineEnding +
+    'var P1: ^Integer;'                             + LineEnding +
+    'begin'                                         + LineEnding +
+    '  P1 := nil;'                                  + LineEnding +
+    '  if P1 = nil then'                            + LineEnding +
+    '    WriteLn(''nil'')'                          + LineEnding +
+    '  else'                                        + LineEnding +
+    '    WriteLn(''not nil'')'                      + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_Pointer_GetMem_WriteRead_FreeMem;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcGetMemWriteRead, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('42', '42' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Pointer_TypedPointer_Deref;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcTypedPointerDeref, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('99', '99' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Pointer_NilCheck;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcPointerNilCheck, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('nil', 'nil' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Text block e2e tests                                                 }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcTextBlockBasic =
+    'program P;'                                    + LineEnding +
+    'var S: string;'                                + LineEnding +
+    'begin'                                         + LineEnding +
+    '  S := '''''''                                 + LineEnding +
+    '  hello'                                       + LineEnding +
+    '  '''''';'                                     + LineEnding +
+    '  WriteLn(S)'                                  + LineEnding +
+    'end.';
+
+  SrcTextBlockIndent =
+    'program P;'                                    + LineEnding +
+    'var S: string;'                                + LineEnding +
+    'begin'                                         + LineEnding +
+    '  S := '''''''                                 + LineEnding +
+    '    line1'                                     + LineEnding +
+    '    line2'                                     + LineEnding +
+    '    '''''';'                                   + LineEnding +
+    '  WriteLn(Length(S))'                          + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_TextBlock_BasicContent;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcTextBlockBasic, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  { Text block content is 'hello' + LF (the newline before closing ''');
+    WriteLn adds a second LF, so output is hello+LF+LF. }
+  AssertEquals('hello+lf', 'hello' + LE + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_TextBlock_IndentStripped;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcTextBlockIndent, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  { 'line1' + LF + 'line2' + LF = 12 chars after indent strip }
+  AssertEquals('length 12', '12' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Constant e2e tests                                                   }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcConstInt =
+    'program P;'                    + LineEnding +
+    'const MaxVal = 100;'           + LineEnding +
+    'var X: Integer;'               + LineEnding +
+    'begin'                         + LineEnding +
+    '  X := MaxVal + 1;'            + LineEnding +
+    '  WriteLn(X)'                  + LineEnding +
+    'end.';
+
+  SrcConstStr =
+    'program P;'                          + LineEnding +
+    'const Greeting = ''Hello'';'         + LineEnding +
+    'begin'                               + LineEnding +
+    '  WriteLn(Greeting)'                 + LineEnding +
+    'end.';
+
+  SrcConstNeg =
+    'program P;'                    + LineEnding +
+    'const MinVal = -10;'           + LineEnding +
+    'var X: Integer;'               + LineEnding +
+    'begin'                         + LineEnding +
+    '  X := MinVal * 2;'            + LineEnding +
+    '  WriteLn(X)'                  + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_Const_IntegerConst;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcConstInt, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('101', '101' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Const_StringConst;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcConstStr, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('Hello', 'Hello' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Const_NegativeConst;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcConstNeg, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('-20', '-20' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Set e2e tests                                                        }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcSetIncludeExclude =
+    'program P;'                                    + LineEnding +
+    'type TColor = (Red, Green, Blue);'             + LineEnding +
+    '     TColors = set of TColor;'                 + LineEnding +
+    'var S: TColors;'                               + LineEnding +
+    'begin'                                         + LineEnding +
+    '  S := [];'                                    + LineEnding +
+    '  Include(S, Red);'                            + LineEnding +
+    '  Include(S, Blue);'                           + LineEnding +
+    '  if Red in S then WriteLn(''red'');'          + LineEnding +
+    '  if Green in S then WriteLn(''green'');'      + LineEnding +
+    '  if Blue in S then WriteLn(''blue'');'        + LineEnding +
+    '  Exclude(S, Red);'                            + LineEnding +
+    '  if Red in S then WriteLn(''red2'')'          + LineEnding +
+    'end.';
+
+  SrcSetIn =
+    'program P;'                                    + LineEnding +
+    'type TDir = (North, South, East, West);'       + LineEnding +
+    '     TDirs = set of TDir;'                     + LineEnding +
+    'var Horizontal: TDirs;'                        + LineEnding +
+    'begin'                                         + LineEnding +
+    '  Horizontal := [East, West];'                 + LineEnding +
+    '  if North in Horizontal then WriteLn(''N'');' + LineEnding +
+    '  if East  in Horizontal then WriteLn(''E'');' + LineEnding +
+    '  if West  in Horizontal then WriteLn(''W'')'  + LineEnding +
+    'end.';
+
+  SrcSetUnion =
+    'program P;'                                    + LineEnding +
+    'type TBit = (B0, B1, B2, B3);'                + LineEnding +
+    '     TBits = set of TBit;'                     + LineEnding +
+    'var A, B, C: TBits;'                           + LineEnding +
+    'begin'                                         + LineEnding +
+    '  A := [B0, B1];'                              + LineEnding +
+    '  B := [B1, B2];'                              + LineEnding +
+    '  C := A + B;'                                 + LineEnding +
+    '  if B0 in C then WriteLn(''0'');'             + LineEnding +
+    '  if B1 in C then WriteLn(''1'');'             + LineEnding +
+    '  if B2 in C then WriteLn(''2'');'             + LineEnding +
+    '  if B3 in C then WriteLn(''3'');'             + LineEnding +
+    '  C := A * B;'                                 + LineEnding +
+    '  if B1 in C then WriteLn(''inter1'')'         + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_Set_Include_Exclude;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcSetIncludeExclude, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('red blue', 'red' + LE + 'blue' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Set_InOperator;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcSetIn, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('E W', 'E' + LE + 'W' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Set_UnionIntersect;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcSetUnion, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('union 0 1 2, intersect 1',
+    '0' + LE + '1' + LE + '2' + LE + 'inter1' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Procedural type e2e tests                                            }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcProcTypeVar =
+    'program P;'                                    + LineEnding +
+    'type TFn = function(X: Integer): Integer;'     + LineEnding +
+    'function Twice(X: Integer): Integer;'          + LineEnding +
+    'begin Result := X * 2 end;'                    + LineEnding +
+    'var F: TFn;'                                   + LineEnding +
+    'begin'                                         + LineEnding +
+    '  F := @Twice;'                                + LineEnding +
+    '  WriteLn(F(7))'                               + LineEnding +
+    'end.';
+
+  SrcProcTypeOfObject =
+    'program P;'                                    + LineEnding +
+    'type'                                          + LineEnding +
+    '  TProc = procedure of object;'                + LineEnding +
+    '  TFoo = class'                                + LineEnding +
+    '    FVal: Integer;'                            + LineEnding +
+    '    procedure Print;'                          + LineEnding +
+    '  end;'                                        + LineEnding +
+    'procedure TFoo.Print;'                         + LineEnding +
+    'begin WriteLn(FVal) end;'                      + LineEnding +
+    'var'                                           + LineEnding +
+    '  Obj: TFoo;'                                  + LineEnding +
+    '  M: TProc;'                                   + LineEnding +
+    'begin'                                         + LineEnding +
+    '  Obj := TFoo.Create;'                         + LineEnding +
+    '  Obj.FVal := 55;'                             + LineEnding +
+    '  M := @Obj.Print;'                            + LineEnding +
+    '  M;'                                          + LineEnding +
+    '  Obj.Free'                                    + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_ProcType_CallViaVariable;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcProcTypeVar, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('14', '14' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_ProcType_OfObject_Dispatch;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcProcTypeOfObject, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('55', '55' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Default parameter e2e tests                                          }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcDefaultParam =
+    'program P;'                                            + LineEnding +
+    'function Add(A: Integer; B: Integer = 10): Integer;'  + LineEnding +
+    'begin Result := A + B end;'                           + LineEnding +
+    'begin'                                                + LineEnding +
+    '  WriteLn(Add(5));'                                   + LineEnding +
+    '  WriteLn(Add(5, 20))'                                + LineEnding +
+    'end.';
+
+  SrcDefaultParamMulti =
+    'program P;'                                                    + LineEnding +
+    'function Greet(Name: string; Prefix: string = ''Hello'';'      + LineEnding +
+    '               Suffix: string = ''!''): string;'               + LineEnding +
+    'begin Result := Prefix + '' '' + Name + Suffix end;'          + LineEnding +
+    'begin'                                                         + LineEnding +
+    '  WriteLn(Greet(''World''));'                                   + LineEnding +
+    '  WriteLn(Greet(''Ada'', ''Hi''))'                             + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_DefaultParam_OmitLast;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcDefaultParam, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('15 then 25', '15' + LE + '25' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_DefaultParam_OmitMultiple;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcDefaultParamMulti, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('greetings', 'Hello World!' + LE + 'Hi Ada!' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Open array e2e tests                                                 }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcOpenArraySum =
+    'program P;'                                            + LineEnding +
+    'function Sum(const A: array of Integer): Integer;'    + LineEnding +
+    'var I: Integer;'                                      + LineEnding +
+    'begin'                                                + LineEnding +
+    '  Result := 0;'                                       + LineEnding +
+    '  for I := 0 to High(A) do'                          + LineEnding +
+    '    Result := Result + A[I]'                          + LineEnding +
+    'end;'                                                 + LineEnding +
+    'begin'                                                + LineEnding +
+    '  WriteLn(Sum([1, 2, 3, 4, 5]))'                     + LineEnding +
+    'end.';
+
+  SrcOpenArrayHighLow =
+    'program P;'                                            + LineEnding +
+    'procedure PrintBounds(const A: array of Integer);'    + LineEnding +
+    'begin'                                                + LineEnding +
+    '  WriteLn(Low(A));'                                   + LineEnding +
+    '  WriteLn(High(A))'                                   + LineEnding +
+    'end;'                                                 + LineEnding +
+    'begin'                                                + LineEnding +
+    '  PrintBounds([10, 20, 30])'                          + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_OpenArray_Sum;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcOpenArraySum, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('15', '15' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_OpenArray_HighLow;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcOpenArrayHighLow, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('low=0 high=2', '0' + LE + '2' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ var/const param e2e tests                                            }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcVarParamSwap =
+    'program P;'                                    + LineEnding +
+    'procedure Swap(var A, B: Integer);'            + LineEnding +
+    'var T: Integer;'                               + LineEnding +
+    'begin'                                         + LineEnding +
+    '  T := A; A := B; B := T'                     + LineEnding +
+    'end;'                                          + LineEnding +
+    'var X, Y: Integer;'                            + LineEnding +
+    'begin'                                         + LineEnding +
+    '  X := 3; Y := 7;'                             + LineEnding +
+    '  Swap(X, Y);'                                 + LineEnding +
+    '  WriteLn(X);'                                 + LineEnding +
+    '  WriteLn(Y)'                                  + LineEnding +
+    'end.';
+
+  SrcVarParamString =
+    'program P;'                                    + LineEnding +
+    'procedure Append(var S: string; const T: string);' + LineEnding +
+    'begin'                                         + LineEnding +
+    '  S := S + T'                                  + LineEnding +
+    'end;'                                          + LineEnding +
+    'var R: string;'                                + LineEnding +
+    'begin'                                         + LineEnding +
+    '  R := ''Hello'';'                             + LineEnding +
+    '  Append(R, '' World'');'                      + LineEnding +
+    '  WriteLn(R)'                                  + LineEnding +
+    'end.';
+
+  SrcConstParam =
+    'program P;'                                    + LineEnding +
+    'function Twice(const X: Integer): Integer;'    + LineEnding +
+    'begin Result := X * 2 end;'                    + LineEnding +
+    'begin'                                         + LineEnding +
+    '  WriteLn(Twice(21))'                          + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_VarParam_SwapIntegers;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcVarParamSwap, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('7 then 3', '7' + LE + '3' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_VarParam_ModifyString;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcVarParamString, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('Hello World', 'Hello World' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_ConstParam_CanRead;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcConstParam, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('42', '42' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ String operation e2e tests                                           }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcStringSubscript =
+    'program P;'                            + LineEnding +
+    'var S: string;'                        + LineEnding +
+    'begin'                                 + LineEnding +
+    '  S := ''ABC'';'                       + LineEnding +
+    '  WriteLn(S[0]);'                      + LineEnding +
+    '  WriteLn(S[1]);'                      + LineEnding +
+    '  WriteLn(S[2])'                       + LineEnding +
+    'end.';
+
+  SrcStringConcatStr =
+    'program P;'                            + LineEnding +
+    'var A, B, C: string;'                  + LineEnding +
+    'begin'                                 + LineEnding +
+    '  A := ''foo'';'                       + LineEnding +
+    '  B := ''bar'';'                       + LineEnding +
+    '  C := A + B;'                         + LineEnding +
+    '  WriteLn(C)'                          + LineEnding +
+    'end.';
+
+  SrcStringDelete =
+    'program P;'                            + LineEnding +
+    'var S: string;'                        + LineEnding +
+    'begin'                                 + LineEnding +
+    '  S := ''Hello World'';'              + LineEnding +
+    '  Delete(S, 5, 6);'                    + LineEnding +
+    '  WriteLn(S)'                          + LineEnding +
+    'end.';
+
+  SrcStringSetLength =
+    'program P;'                            + LineEnding +
+    'var S: string;'                        + LineEnding +
+    'begin'                                 + LineEnding +
+    '  S := ''Hello'';'                     + LineEnding +
+    '  SetLength(S, 3);'                    + LineEnding +
+    '  WriteLn(S)'                          + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_StringSubscript_ReadByte;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStringSubscript, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  { 'A'=65 'B'=66 'C'=67 }
+  AssertEquals('65 66 67', '65' + LE + '66' + LE + '67' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_StringConcat_TwoStrings;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStringConcatStr, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('foobar', 'foobar' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_StringConcat_WithInt;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run',
+    CompileAndRun('program P; begin WriteLn(''x='' + IntToStr(7)) end.',
+                  Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('x=7', 'x=7' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_StringDelete_Modifies;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStringDelete, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('Hellod', 'Hello' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_StringSetLength_Truncates;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcStringSetLength, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('Hel', 'Hel' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Int64 e2e tests                                                      }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcInt64Arith =
+    'program P;'                                    + LineEnding +
+    'var A, B: Int64;'                              + LineEnding +
+    'begin'                                         + LineEnding +
+    '  A := 3000000000;'                            + LineEnding +
+    '  B := A * 2;'                                 + LineEnding +
+    '  WriteLn(B)'                                  + LineEnding +
+    'end.';
+
+  SrcInt64Compare =
+    'program P;'                                    + LineEnding +
+    'var A: Int64;'                                 + LineEnding +
+    'begin'                                         + LineEnding +
+    '  A := 5000000000;'                            + LineEnding +
+    '  if A > 4000000000 then WriteLn(''big'');'   + LineEnding +
+    '  if A < 6000000000 then WriteLn(''small'')'  + LineEnding +
+    'end.';
+
+  SrcInt64ForLoop =
+    'program P;'                                    + LineEnding +
+    'var I: Int64; S: Int64;'                       + LineEnding +
+    'begin'                                         + LineEnding +
+    '  S := 0;'                                     + LineEnding +
+    '  for I := 1 to 5 do'                          + LineEnding +
+    '    S := S + I;'                               + LineEnding +
+    '  WriteLn(S)'                                  + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_Int64_ArithmeticOverInt32;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcInt64Arith, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('6000000000', '6000000000' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Int64_Comparison;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcInt64Compare, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('big small', 'big' + LE + 'small' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Int64_ForLoop;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcInt64ForLoop, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('15', '15' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Type cast e2e tests                                                  }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcTypeCastIntByte =
+    'program P;'                                    + LineEnding +
+    'var I: Integer; B: Byte;'                      + LineEnding +
+    'begin'                                         + LineEnding +
+    '  I := 300;'                                   + LineEnding +
+    '  B := Byte(I);'                               + LineEnding +
+    '  WriteLn(B)'                                  + LineEnding +
+    'end.';
+
+  SrcTypeCastPointerInt =
+    'program P;'                                    + LineEnding +
+    'var I: Integer; P1: Pointer;'                  + LineEnding +
+    'begin'                                         + LineEnding +
+    '  I  := 42;'                                   + LineEnding +
+    '  P1 := Pointer(I);'                           + LineEnding +
+    '  WriteLn(Integer(P1))'                        + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_TypeCast_IntegerByte;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcTypeCastIntByte, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  { 300 mod 256 = 44 }
+  AssertEquals('44', '44' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_TypeCast_PointerInteger;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcTypeCastPointerInt, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('42', '42' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ is / as e2e tests                                                    }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcIsTrue =
+    'program P;'                                    + LineEnding +
+    'type'                                          + LineEnding +
+    '  TAnimal = class end;'                        + LineEnding +
+    '  TDog = class(TAnimal) end;'                  + LineEnding +
+    'var D: TAnimal;'                               + LineEnding +
+    'begin'                                         + LineEnding +
+    '  D := TDog.Create;'                           + LineEnding +
+    '  if D is TDog then WriteLn(''yes'');'         + LineEnding +
+    '  D.Free'                                      + LineEnding +
+    'end.';
+
+  SrcIsFalse =
+    'program P;'                                    + LineEnding +
+    'type'                                          + LineEnding +
+    '  TAnimal = class end;'                        + LineEnding +
+    '  TDog = class(TAnimal) end;'                  + LineEnding +
+    '  TCat = class(TAnimal) end;'                  + LineEnding +
+    'var D: TAnimal;'                               + LineEnding +
+    'begin'                                         + LineEnding +
+    '  D := TDog.Create;'                           + LineEnding +
+    '  if D is TCat then WriteLn(''yes'') else WriteLn(''no'');' + LineEnding +
+    '  D.Free'                                      + LineEnding +
+    'end.';
+
+  SrcAsDowncast =
+    'program P;'                                    + LineEnding +
+    'type'                                          + LineEnding +
+    '  TBase = class'                               + LineEnding +
+    '    function Name: string; virtual;'           + LineEnding +
+    '  end;'                                        + LineEnding +
+    '  TChild = class(TBase)'                       + LineEnding +
+    '    FVal: Integer;'                            + LineEnding +
+    '    function Name: string; override;'          + LineEnding +
+    '  end;'                                        + LineEnding +
+    'function TBase.Name: string;'                  + LineEnding +
+    'begin Result := ''base'' end;'                 + LineEnding +
+    'function TChild.Name: string;'                 + LineEnding +
+    'begin Result := ''child'' end;'                + LineEnding +
+    'var B: TBase;'                                 + LineEnding +
+    'begin'                                         + LineEnding +
+    '  B := TChild.Create;'                         + LineEnding +
+    '  WriteLn((B as TChild).Name);'                + LineEnding +
+    '  B.Free'                                      + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_Is_CorrectSubclass_True;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcIsTrue, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('yes', 'yes' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Is_WrongClass_False;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcIsFalse, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('no', 'no' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_As_DowncastCallsMethod;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcAsDowncast, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('child', 'child' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Inheritance and virtual dispatch e2e tests                           }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcInherited =
+    'program P;'                                    + LineEnding +
+    'type'                                          + LineEnding +
+    '  TBase = class'                               + LineEnding +
+    '    function Val: Integer; virtual;'           + LineEnding +
+    '  end;'                                        + LineEnding +
+    '  TChild = class(TBase)'                       + LineEnding +
+    '    function Val: Integer; override;'          + LineEnding +
+    '  end;'                                        + LineEnding +
+    'function TBase.Val: Integer;'                  + LineEnding +
+    'begin Result := 10 end;'                       + LineEnding +
+    'function TChild.Val: Integer;'                 + LineEnding +
+    'var B: Integer;'                               + LineEnding +
+    'begin'                                         + LineEnding +
+    '  inherited Val;'                              + LineEnding +
+    '  B := Result;'                                + LineEnding +
+    '  Result := B + 5'                             + LineEnding +
+    'end;'                                          + LineEnding +
+    'var C: TChild;'                                + LineEnding +
+    'begin'                                         + LineEnding +
+    '  C := TChild.Create;'                         + LineEnding +
+    '  WriteLn(C.Val);'                             + LineEnding +
+    '  C.Free'                                      + LineEnding +
+    'end.';
+
+  SrcVirtualOverride =
+    'program P;'                                    + LineEnding +
+    'type'                                          + LineEnding +
+    '  TShape = class'                              + LineEnding +
+    '    function Area: Integer; virtual;'          + LineEnding +
+    '  end;'                                        + LineEnding +
+    '  TSquare = class(TShape)'                     + LineEnding +
+    '    FSide: Integer;'                           + LineEnding +
+    '    function Area: Integer; override;'         + LineEnding +
+    '  end;'                                        + LineEnding +
+    'function TShape.Area: Integer;'                + LineEnding +
+    'begin Result := 0 end;'                        + LineEnding +
+    'function TSquare.Area: Integer;'               + LineEnding +
+    'begin Result := FSide * FSide end;'            + LineEnding +
+    'var S: TShape;'                                + LineEnding +
+    'begin'                                         + LineEnding +
+    '  S := TSquare.Create;'                        + LineEnding +
+    '  TSquare(S).FSide := 4;'                      + LineEnding +
+    '  WriteLn(S.Area);'                            + LineEnding +
+    '  S.Free'                                      + LineEnding +
+    'end.';
+
+  SrcMultiLevelChain =
+    'program P;'                                    + LineEnding +
+    'type'                                          + LineEnding +
+    '  TA = class'                                  + LineEnding +
+    '    function Lvl: Integer; virtual;'           + LineEnding +
+    '  end;'                                        + LineEnding +
+    '  TB = class(TA)'                              + LineEnding +
+    '    function Lvl: Integer; override;'          + LineEnding +
+    '  end;'                                        + LineEnding +
+    '  TC = class(TB)'                              + LineEnding +
+    '    function Lvl: Integer; override;'          + LineEnding +
+    '  end;'                                        + LineEnding +
+    'function TA.Lvl: Integer; begin Result := 1 end;' + LineEnding +
+    'function TB.Lvl: Integer; begin Result := 2 end;' + LineEnding +
+    'function TC.Lvl: Integer; begin Result := 3 end;' + LineEnding +
+    'var A: TA;'                                    + LineEnding +
+    'begin'                                         + LineEnding +
+    '  A := TC.Create;'                             + LineEnding +
+    '  WriteLn(A.Lvl);'                             + LineEnding +
+    '  A.Free'                                      + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_Inherited_CallsParentMethod;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcInherited, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('15', '15' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Virtual_OverrideDispatch;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcVirtualOverride, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('16', '16' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_MultiLevel_Inheritance_Chain;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcMultiLevelChain, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('3', '3' + LE, Output);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Interface e2e tests                                                  }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcIntfDispatch =
+    'program P;'                                            + LineEnding +
+    'type'                                                  + LineEnding +
+    '  IGreeter = interface'                                + LineEnding +
+    '    procedure Greet;'                                  + LineEnding +
+    '  end;'                                               + LineEnding +
+    '  THello = class(TObject, IGreeter)'                  + LineEnding +
+    '    procedure Greet;'                                  + LineEnding +
+    '  end;'                                               + LineEnding +
+    'procedure THello.Greet;'                              + LineEnding +
+    'begin WriteLn(''hello'') end;'                        + LineEnding +
+    'var G: IGreeter;'                                     + LineEnding +
+    '    H: THello;'                                       + LineEnding +
+    'begin'                                                + LineEnding +
+    '  H := THello.Create;'                                + LineEnding +
+    '  G := H;'                                            + LineEnding +
+    '  G.Greet;'                                           + LineEnding +
+    '  H.Free'                                             + LineEnding +
+    'end.';
+
+  SrcIntfIsAs =
+    'program P;'                                            + LineEnding +
+    'type'                                                  + LineEnding +
+    '  IPrinter = interface'                                + LineEnding +
+    '    procedure Print;'                                  + LineEnding +
+    '  end;'                                               + LineEnding +
+    '  TPrinter = class(TObject, IPrinter)'                + LineEnding +
+    '    procedure Print;'                                  + LineEnding +
+    '  end;'                                               + LineEnding +
+    'procedure TPrinter.Print;'                            + LineEnding +
+    'begin WriteLn(''printing'') end;'                     + LineEnding +
+    'var'                                                  + LineEnding +
+    '  Obj: TObject;'                                      + LineEnding +
+    '  P: IPrinter;'                                       + LineEnding +
+    'begin'                                                + LineEnding +
+    '  Obj := TPrinter.Create;'                            + LineEnding +
+    '  if Obj is IPrinter then'                            + LineEnding +
+    '  begin'                                              + LineEnding +
+    '    P := Obj as IPrinter;'                            + LineEnding +
+    '    P.Print'                                          + LineEnding +
+    '  end;'                                               + LineEnding +
+    '  Obj.Free'                                           + LineEnding +
+    'end.';
+
+procedure TE2ETests.TestRun_Interface_Dispatch_CallsImpl;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcIntfDispatch, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('hello', 'hello' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_Interface_ARC_NoLeak;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run',
+    CompileAndRun(SrcIntfDispatch, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+end;
+
+procedure TE2ETests.TestRun_Interface_Is_As_Roundtrip;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcIntfIsAs, Output, RCode, []));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('printing', 'printing' + LE, Output);
 end;
 
 initialization
