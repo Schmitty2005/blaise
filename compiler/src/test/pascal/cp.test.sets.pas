@@ -287,11 +287,11 @@ begin
     Prog.Free;
     Fail('Expected ESemanticError but none was raised');
   except
-    on E: ESemanticError do
+    on ESE: ESemanticError do
     begin
       Prog.Free;
     end;
-    on E: Exception do
+    on EEx: Exception do
     begin
       Prog.Free;
       raise;

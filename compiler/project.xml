@@ -6,6 +6,9 @@
     <packaging>application</packaging>
     <mainSource>Blaise.pas</mainSource>
     <executableName>blaise</executableName>
+    <unitPaths>
+      <path>../rtl/src/main/pascal</path>
+    </unitPaths>
   </build>
 
   <test>

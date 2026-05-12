@@ -476,8 +476,8 @@ var IR: string;
 begin
   IR := GenIR(Src);
   AssertTrue('emits call to $_ClassCreate', Pos('call $_ClassCreate(', IR) > 0);
-  AssertEquals('no constructor call emitted when class declares none',
-    0, Pos('TFoo_Create', IR));
+  AssertTrue('no constructor call emitted when class declares none',
+    Pos('TFoo_Create', IR) < 0);
 end;
 
 initialization

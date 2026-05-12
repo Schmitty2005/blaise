@@ -348,7 +348,7 @@ begin
   IR := GenIR(Src);
   AssertTrue('typeinfo methods slot is 0 when no published methods',
     Pos('$typeinfo_TFoo = { l $typeinfo_TObject, l 0, l $__cn_TFoo + 12, l 0,', IR) > 0);
-  AssertEquals('no methods table emitted', 0, Pos('$methods_TFoo', IR));
+  AssertTrue('no methods table emitted', Pos('$methods_TFoo', IR) < 0);
 end;
 
 procedure TPublishedRTTITests.TestCodegen_PublishedMethods_TableEmitted;

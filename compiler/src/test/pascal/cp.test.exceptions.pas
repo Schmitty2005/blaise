@@ -614,11 +614,11 @@ begin
   { finally body (copy 2) must appear on both the normal and exception paths }
   IR  := GenIR(SrcTryFinally);
   N   := 0;
-  Idx := 1;
+  Idx := 0;    { 0-based start }
   while True do
   begin
     Idx := PosEx('copy 2', IR, Idx);
-    if Idx = 0 then Break;
+    if Idx < 0 then Break;   { Blaise PosEx returns -1 when not found }
     Inc(N);
     Inc(Idx);
   end;
@@ -958,11 +958,11 @@ procedure TExceptionTests.TestCodegen_TypedExcept_TwoHandlers_TwoIsInstanceCalls
 var IR: string; N: Integer; Idx: Integer;
 begin
   IR := GenIR(SrcTypedExceptTwo);
-  N := 0; Idx := 1;
+  N := 0; Idx := 0;    { 0-based start }
   while True do
   begin
     Idx := PosEx('$_IsInstance', IR, Idx);
-    if Idx = 0 then Break;
+    if Idx < 0 then Break;   { Blaise PosEx returns -1 when not found }
     Inc(N); Inc(Idx);
   end;
   AssertTrue('two _IsInstance calls for two handlers', N >= 2);

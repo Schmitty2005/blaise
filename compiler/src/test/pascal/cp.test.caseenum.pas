@@ -458,8 +458,8 @@ var
 begin
   IR := GenIR(SrcCaseSimple);
   AssertTrue('integer case still emits ceqw', Pos('ceqw', IR) > 0);
-  AssertEquals('integer case does NOT emit _StringEquals',
-    0, Pos('_StringEquals', IR));
+  AssertTrue('integer case does NOT emit _StringEquals',
+    Pos('_StringEquals', IR) < 0);
 end;
 
 initialization

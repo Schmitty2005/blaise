@@ -428,7 +428,7 @@ var IR: string;
 begin
   IR := GenIR(SrcAddrOf);
   { @Buf[0] takes address only — no loadub should appear }
-  AssertTrue('no loadub emitted', Pos('loadub', IR) = 0);
+  AssertTrue('no loadub emitted', Pos('loadub', IR) < 0);
 end;
 
 procedure TStaticArrayTests.TestCodegen_AddrOf_AddressArithmetic;

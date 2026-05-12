@@ -66,10 +66,10 @@ function TMultiWriteTests.CountOccurrences(
 var Pos, I: Integer;
 begin
   Result := 0;
-  I      := 1;
+  I      := 0;    { 0-based start: Blaise strings are 0-indexed }
   repeat
     Pos := PosEx(ANeedle, AHaystack, I);
-    if Pos = 0 then Break;
+    if Pos < 0 then Break;   { Blaise PosEx returns -1 when not found }
     Inc(Result);
     I := Pos + Length(ANeedle);
   until False;

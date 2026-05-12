@@ -485,7 +485,7 @@ begin
     _ClassAddRef tied to the weak slot. }
   After := Copy(IR, FirstAssignEnd, 200);
   AssertTrue('no _ClassAddRef adjacent to the weak store',
-    Pos('_ClassAddRef', After) = 0);
+    Pos('_ClassAddRef', After) < 0);
 end;
 
 initialization

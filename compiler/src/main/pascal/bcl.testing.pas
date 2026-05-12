@@ -394,11 +394,11 @@ begin
       try
         Self.RunTest;
       except
-        on E: EAssertionFailed do
-          AResult.AddFailure(Self.FName, E.ToString);
-        on E: EIgnoredTest do
-          AResult.AddIgnored(Self.FName, E.FMessage);
-        on E: TObject do
+        on EAF: EAssertionFailed do
+          AResult.AddFailure(Self.FName, EAF.ToString);
+        on EIT: EIgnoredTest do
+          AResult.AddIgnored(Self.FName, EIT.FMessage);
+        on ETO: TObject do
           AResult.AddError(Self.FName, 'Unhandled exception');
       end;
     finally

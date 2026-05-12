@@ -150,7 +150,7 @@ begin
   begin
     name := TokenKindName(k);
     AssertTrue('TokenKindName returned <unknown(...)> for ordinal ' + IntToStr(Ord(k)),
-      Pos('<unknown(', name) = 0);
+      Pos('<unknown(', name) < 0);
   end;
 end;
 

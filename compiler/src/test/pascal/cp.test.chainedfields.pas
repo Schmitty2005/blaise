@@ -201,7 +201,7 @@ var IR: string;
 begin
   IR := GenIR(Src);
   AssertTrue('does not emit phantom %_var_FInner',
-    Pos('%_var_FInner', IR) = 0);
+    Pos('%_var_FInner', IR) < 0);
   AssertTrue('loads through %_var_Self',
     Pos('loadl %_var_Self', IR) > 0);
 end;

@@ -170,18 +170,16 @@ begin
         var a, b: string;
         begin end.
         ''');
-  { Two string vars → two release calls at exit }
-  Pos1 := Pos('call $_StringRelease', IR);
-  AssertTrue('at least one release', Pos1 > 0);
-  { 3-arg Pos not supported; emulate via Copy to skip past first match }
-  Pos2 := Pos('call $_StringRelease', Copy(IR, Pos1 + 1, MaxInt));
-  AssertTrue('second release', Pos2 > 0);
+  { Two string vars → two release calls at exit.
+    Use PosEx to count all occurrences (0-based index; -1 = not found). }
   Count := 0;
-  Pos1 := 1;
+  Pos1  := 0;
   repeat
-    Pos1 := Pos('call $_StringRelease', Copy(IR, Pos1, MaxInt));
-    if Pos1 > 0 then begin Inc(Count); Inc(Pos1); end;
-  until Pos1 = 0;
+    Pos1 := PosEx('call $_StringRelease', IR, Pos1);
+    if Pos1 < 0 then Break;
+    Inc(Count);
+    Inc(Pos1);
+  until False;
   AssertTrue('at least 2 releases', Count >= 2);
 end;
 

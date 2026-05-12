@@ -14,10 +14,14 @@
   against a single TTestResult, and prints PASS / FAIL output plus a
   summary line.
 
-  No '--suite' / '--test' filtering yet; that is a small follow-up
-  once 11f rewrites cp.test.* unit imports.  No XML / JUnit reporters;
-  ConsoleTestRunner's INI-driven format selection is intentionally
-  not ported (see fpcunit audit in unit-testing.txt).
+  CLI filtering (Step 15):
+    --suite ClassName              run all tests in ClassName
+    --suite ClassName.MethodName   run one specific test method
+
+  When invoked by 'pasbuild test' no arguments are passed, so all
+  registered tests run.  Manual invocation can narrow the run:
+    ./TestRunner --suite TClassTests
+    ./TestRunner --suite TClassTests.TestParse_ClassSection_Exists
 
   ARC: TTestCase instances created via ClassCreate are released at
   loop-iteration end via the standard scope-based _ClassRelease the
@@ -43,6 +47,7 @@ function RunRegisteredTests: TTestResult;
 procedure PrintSummary(AResult: TTestResult);
 
 { Convenience: run, print, return 0 on all-green and 1 otherwise.
+  Respects --suite / --suite Class.Method command-line filtering.
   Programs can do 'Halt(RunAll)' as the last statement. }
 function RunAll: Integer;
 
@@ -127,35 +132,102 @@ begin
   end;
 end;
 
+{ Return the class name of a TTestCaseClass by reading typeinfo[2]
+  (offset 16) — the immortal Blaise string emitted by EmitClassNameRef.
+  Same read pattern as PublishedMethodName uses for method name entries. }
+function TestClassName(ATestClass: TTestCaseClass): string;
+var
+  TInfo:    Pointer;
+  NameSlot: ^Pointer;
+begin
+  TInfo    := Pointer(ATestClass);
+  NameSlot := TInfo + 16;           { typeinfo[2] = class name string ptr }
+  Result   := string(PChar(NameSlot^));
+end;
+
+{ -----------------------------------------------------------------------
+  CLI argument parsing
+  ----------------------------------------------------------------------- }
+
+{ Parse --suite [ClassName[.MethodName]] from the process command line.
+  ASuite is set to the class name filter ('' = no filter).
+  AMethod is set to the method name filter ('' = all methods in the class).
+  Returns True if --suite was found, False otherwise. }
+function ParseSuiteArg(out ASuite: string; out AMethod: string): Boolean;
+var
+  I:      Integer;
+  Arg:    string;
+  Filter: string;
+  Dot:    Integer;
+begin
+  Result  := False;
+  ASuite  := '';
+  AMethod := '';
+  I := 1;
+  while I <= ParamCount do
+  begin
+    Arg := ParamStr(I);
+    if (Arg = '--suite') and (I < ParamCount) then
+    begin
+      I      := I + 1;
+      Filter := ParamStr(I);
+      Dot    := Pos('.', Filter);
+      if Dot >= 0 then
+      begin
+        { Pos is 0-based in Blaise; Copy(s, start, count) where start is
+          also 0-based.  Dot is the 0-based index of '.'. }
+        ASuite  := Copy(Filter, 0, Dot);
+        AMethod := Copy(Filter, Dot + 1, Length(Filter));
+      end
+      else
+        ASuite := Filter;
+      Result := True;
+      Exit;
+    end;
+    I := I + 1;
+  end;
+end;
+
 { -----------------------------------------------------------------------
   Test execution
   ----------------------------------------------------------------------- }
 
-function RunRegisteredTests: TTestResult;
+{ Run tests with optional class/method filtering.
+  Pass '' for both ASuite and AMethod to run all registered tests. }
+function RunFilteredTests(const ASuite: string;
+  const AMethod: string): TTestResult;
 var
-  ClsIdx:    Integer;
-  Cls:       TTestCaseClass;
-  MethCnt:   Integer;
-  MethIdx:   Integer;
-  MethName:  string;
-  Inst:      TTestCase;
+  ClsIdx:   Integer;
+  Cls:      TTestCaseClass;
+  CName:    string;
+  MethCnt:  Integer;
+  MethIdx:  Integer;
+  MethName: string;
+  Inst:     TTestCase;
 begin
   Result := TTestResult.Create;
   for ClsIdx := 0 to GetRegisteredTestCount - 1 do
   begin
-    Cls     := GetRegisteredTest(ClsIdx);
+    Cls   := GetRegisteredTest(ClsIdx);
+    CName := TestClassName(Cls);
+    if (ASuite <> '') and (CName <> ASuite) then
+      Continue;
     MethCnt := PublishedMethodCount(Cls);
     for MethIdx := 0 to MethCnt - 1 do
     begin
       MethName := PublishedMethodName(Cls, MethIdx);
       if MethName = '' then Continue;
+      if (AMethod <> '') and (MethName <> AMethod) then
+        Continue;
       Inst := ClassCreate(Cls, MethName);
       Inst.Run(Result);
-      { ARC drops the reference at the next assignment to Inst (and at
-        scope end), so no explicit Free is needed.  Each iteration
-        instantiates a fresh TTestCase; releasing happens implicitly. }
     end;
   end;
+end;
+
+function RunRegisteredTests: TTestResult;
+begin
+  Result := RunFilteredTests('', '');
 end;
 
 { -----------------------------------------------------------------------
@@ -200,9 +272,14 @@ end;
 
 function RunAll: Integer;
 var
-  R: TTestResult;
+  R:      TTestResult;
+  Suite:  string;
+  Method: string;
 begin
-  R := RunRegisteredTests;
+  if ParseSuiteArg(Suite, Method) then
+    R := RunFilteredTests(Suite, Method)
+  else
+    R := RunRegisteredTests;
   PrintSummary(R);
   if (R.NumberOfFailures = 0) and (R.NumberOfErrors = 0) then
     Result := 0

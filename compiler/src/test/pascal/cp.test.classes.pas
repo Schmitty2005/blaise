@@ -600,7 +600,7 @@ begin
         end.
         ''');
   AssertTrue('calls _ClassAlloc', Pos('call $_ClassAlloc', IR) > 0);
-  AssertTrue('does not call calloc directly', Pos('call $calloc', IR) = 0);
+  AssertTrue('does not call calloc directly', Pos('call $calloc', IR) < 0);
   AssertTrue('stores pointer', Pos('storel', IR) > 0);
 end;
 
@@ -751,7 +751,7 @@ begin
   IR := GenIR(SrcFree);
   AssertTrue('calls _ClassRelease',     Pos('call $_ClassRelease', IR) > 0);
   AssertTrue('nil-outs slot after Free', (Pos('storel 0, %_var_', IR) > 0) or (Pos('storel 0, $', IR) > 0));
-  AssertTrue('does not call C free() directly', Pos('call $free(', IR) = 0);
+  AssertTrue('does not call C free() directly', Pos('call $free(', IR) < 0);
 end;
 
 { ------------------------------------------------------------------ }
