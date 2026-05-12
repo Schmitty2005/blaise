@@ -16,7 +16,7 @@ complexity — five language modes, five string types, and thousands of include 
 This compiler takes a different approach:
 
 * *One language mode.* No `{$mode}` switches; no legacy dialect support.
-* *One string type.* UTF-8 reference-counted string. `RawBytes` for binary data.
+* *One string type.* UTF-8 reference-counted string and 0-based indexing. `RawBytes` for binary data.
 * *One memory model.* Automatic reference counting applies uniformly to
   strings, classes, and interfaces. No manual/auto split between `TObject`
   and `TInterfacedObject`; `[Weak]` breaks cycles. `Free` is retained as a
@@ -37,9 +37,9 @@ https://github.com/graemeg/opdebugger[OPDF] debug format support.
 
 == 🚀 Project Status
 
-* **Self-Hosting:** Yes. Blaise currently bootstraps and recompiles itself with byte-for-byte exact matches.
-* **Testing:** 1200+ tests and growing (Test-Driven Development from day one).
-* **Backends:** Currently utilizing a QBE backend, with an LLVM backend in active development.
+* **Self-Hosting:** Yes. Blaise bootstraps and recompiles itself with byte-for-byte fixpoint. FPC is no longer required — the entire toolchain runs on Blaise alone.
+* **Testing:** 1268 tests and growing (Test-Driven Development from day one). The test suite itself compiles under Blaise.
+* **Backends:** Currently utilising a QBE backend, with an LLVM backend in active development.
 
 
 [cols="1,3,1", options="header"]
@@ -124,13 +124,13 @@ project.xml                       Root aggregator (packaging=pom)
 │   ├── project.xml
 │   └── src/
 │       ├── main/pascal/          uLexer, uParser, uAST, uCodeGenQBE, ...
-│       └── test/pascal/          FPTest test suite for compiler units
+│       └── test/pascal/          Test suite (bcl.testing, compiled by Blaise)
 │
 ├── rtl/                          Runtime library (packaging=library)
 │   ├── project.xml
 │   └── src/
 │       ├── main/pascal/          System.pas, SysUtils.pas, Classes.pas, ...
-│       └── test/pascal/          FPTest test suite for RTL units
+│       └── test/pascal/          RTL test suite (punit, compiled by Blaise)
 │
 ├── tools/
 │   └── migration-analyser/       FPC/Delphi migration report tool (packaging=application)
@@ -150,42 +150,61 @@ never committed to the repository.
 
 === Prerequisites
 
-* Free Pascal Compiler 3.2.2 or later (stable; 3.3.x development snapshots are not required)
+* A previously released Blaise binary (see `releases/`)
 * https://github.com/graemeg/pasbuild[PasBuild]
-* A C compiler (`gcc` or `clang`) for building the vendored QBE backend
-* GNU `ld` or `lld` (Linux); `ld` (macOS)
+* A C compiler (`gcc` or `clang`) for building the vendored QBE backend and linking
+* GNU `make` for the RTL build
 
-=== Build all modules
+NOTE: FPC is *not* required. Blaise is fully self-hosting — each release binary
+compiles the next version. The bootstrap chain starts from the binary in
+`releases/`.
 
-[source,shell]
-----
-pasbuild compile
-----
-
-PasBuild resolves the module dependency order automatically and compiles
-`rtl` → `compiler` → `tools/migration-analyser`.
-
-=== Build with a profile
+=== Bootstrap from a release
 
 [source,shell]
 ----
-pasbuild compile -p debug      # includes -g -gl -Criot -gh
-pasbuild compile -p release    # includes -O2 -CX -XX -Xs
+# 1. Build the RTL (C static library)
+cd rtl && make && make install && cd ..
+
+# 2. Compile the compiler using the latest release binary
+releases/v0.7.0/blaise \
+  --source compiler/src/main/pascal/Blaise.pas \
+  --unit-path compiler/src/main/pascal \
+  --unit-path rtl/src/main/pascal \
+  --emit-ir > /tmp/blaise.ssa
+
+# 3. Assemble and link
+vendor/qbe/qbe -o /tmp/blaise.s /tmp/blaise.ssa
+gcc -o compiler/target/blaise /tmp/blaise.s compiler/target/blaise_rtl.a
+----
+
+=== Build via PasBuild
+
+PasBuild can drive the full compile and test cycle using a Blaise binary:
+
+[source,shell]
+----
+pasbuild compile -m blaise-compiler --compiler compiler/target/blaise
+pasbuild test -m blaise-compiler --compiler compiler/target/blaise
 ----
 
 === Run tests
 
 [source,shell]
 ----
-pasbuild test
+pasbuild test -m blaise-compiler --compiler compiler/target/blaise
 ----
 
-=== Build a single module
+=== Verify self-hosting fixpoint
+
+After any compiler change, verify that the compiler reproduces itself:
 
 [source,shell]
 ----
-pasbuild compile -m blaise-compiler
+./scripts/fixpoint.sh
 ----
+
+This generates stage-2 and stage-3 IR and confirms they are identical.
 
 === Running the compiler
 
@@ -193,13 +212,17 @@ Once built, the compiler binary is at `compiler/target/blaise`.
 
 [source,shell]
 ----
-# Compile a single file
-compiler/target/blaise --source Hello.pas --output Hello
+# Compile a single-file program
+compiler/target/blaise --source Hello.pas --emit-ir > Hello.ssa
+vendor/qbe/qbe -o Hello.s Hello.ssa
+gcc -o Hello Hello.s compiler/target/blaise_rtl.a
 
-# Compile via project.xml
-compiler/target/blaise --project project.xml --config debug --output myapp
+# Compile with unit search paths
+compiler/target/blaise --source MyApp.pas \
+  --unit-path src/units \
+  --emit-ir > MyApp.ssa
 
-# Emit QBE IR (useful for debugging the compiler itself)
+# Emit QBE IR only (useful for debugging the compiler itself)
 compiler/target/blaise --source Hello.pas --emit-ir
 ----
 
