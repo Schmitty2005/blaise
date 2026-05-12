@@ -718,3 +718,40 @@ only misbehave on edge cases.
 pattern-matching rules, plus testing against a representative FPC
 codebase.
 
+=== Suggest `for B in S` as the idiomatic replacement for index-based string loops
+
+*What.*  When the migration analyser detects the pattern
+`for I := 1 to Length(S) do ... S[I]` (or the 0-based equivalent
+`for I := 0 to Length(S) - 1 do ... S[I]`), and the loop body only
+accesses the character via `S[I]` without using `I` for any other
+purpose, offer `for B in S do` as the preferred rewrite rather than a
+mechanical index adjustment.
+
+*Why it matters.*  The index-based loop is a common FPC/Delphi idiom
+that ports verbatim but reads less clearly than the enhanced for form.
+Blaise supports `for B in S do` with `B: Byte` or `B: Integer`, which
+eliminates the index entirely and makes the intent — "process every byte
+of the string" — explicit.  Recommending this form during migration
+encourages idiomatic Blaise code rather than a literal transcription of
+the original pattern.
+
+*Suggested output.*
+
+----
+test.pas:12: for I := 1 to Length(S) do
+  note: consider replacing with: for B in S do
+  (only applicable if I is not used other than for S[I])
+----
+
+*Implementation notes.*
+
+. The pattern check runs after the index-adjustment rewrite: if `I` is
+  used exclusively as `S[I]` within the loop body, upgrade the
+  suggestion from "rewrite index" to "use for-in".
+. The analyser must confirm that the loop variable does not appear in any
+  expression other than `S[VarName]` inside the body.  A conservative
+  check (any other use of `I` suppresses the suggestion) is acceptable
+  for the initial version.
+
+*Effort.*  Small — a follow-on pattern in the same analysis pass.
+

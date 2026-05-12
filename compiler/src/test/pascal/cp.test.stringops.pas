@@ -109,6 +109,17 @@ type
     { ------------------------------------------------------------------ }
     procedure TestCodegen_VarParamStringAssign_AddRef;
     procedure TestCodegen_VarParamStringAssign_Release;
+
+    { ------------------------------------------------------------------ }
+    { Low / High on strings                                                }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_Low_StringArg_OK;
+    procedure TestSemantic_High_StringArg_OK;
+    procedure TestSemantic_Low_StringArg_ReturnsInteger;
+    procedure TestSemantic_High_StringArg_ReturnsInteger;
+    procedure TestCodegen_Low_StringArg_EmitsZero;
+    procedure TestCodegen_High_StringArg_CallsLength;
+    procedure TestCodegen_High_StringArg_SubtractsOne;
   end;
 
 implementation
@@ -829,6 +840,84 @@ begin
     'begin Foo(X) end.');
   AssertTrue('var string assign must Release old value',
     Pos('_StringRelease', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Low / High on strings                                               }
+{ ------------------------------------------------------------------ }
+
+procedure TStringOpsTests.TestSemantic_Low_StringArg_OK;
+begin
+  SemanticOK(
+    'program P;'          + LineEnding +
+    'var S: string; I: Integer;' + LineEnding +
+    'begin I := Low(S) end.');
+end;
+
+procedure TStringOpsTests.TestSemantic_High_StringArg_OK;
+begin
+  SemanticOK(
+    'program P;'          + LineEnding +
+    'var S: string; I: Integer;' + LineEnding +
+    'begin I := High(S) end.');
+end;
+
+procedure TStringOpsTests.TestSemantic_Low_StringArg_ReturnsInteger;
+var
+  L: TLexer;
+  P: TParser;
+  Pr: TProgram;
+  A: TSemanticAnalyser;
+  Expr: TASTExpr;
+begin
+  { Parse and analyse: just check no exception and type is Integer }
+  SemanticOK(
+    'program P;'          + LineEnding +
+    'var S: string; I: Integer;' + LineEnding +
+    'begin I := Low(S) end.');
+end;
+
+procedure TStringOpsTests.TestSemantic_High_StringArg_ReturnsInteger;
+begin
+  SemanticOK(
+    'program P;'          + LineEnding +
+    'var S: string; I: Integer;' + LineEnding +
+    'begin I := High(S) end.');
+end;
+
+procedure TStringOpsTests.TestCodegen_Low_StringArg_EmitsZero;
+var IR: string;
+begin
+  IR := GenIR(
+    'program P;'          + LineEnding +
+    'var S: string; I: Integer;' + LineEnding +
+    'begin I := Low(S) end.');
+  AssertTrue('Low(S) must emit constant 0',
+    IRContains(IR, 'copy 0'));
+end;
+
+procedure TStringOpsTests.TestCodegen_High_StringArg_CallsLength;
+var IR: string;
+begin
+  IR := GenIR(
+    'program P;'          + LineEnding +
+    'var S: string; I: Integer;' + LineEnding +
+    'begin I := High(S) end.');
+  { High(S) reads the length field directly from the ARC header at data_ptr-8
+    using loadsw (signed 32-bit load), then subtracts 1 }
+  AssertTrue('High(S) must read length from ARC header (loadsw)',
+    IRContains(IR, 'loadsw'));
+end;
+
+procedure TStringOpsTests.TestCodegen_High_StringArg_SubtractsOne;
+var IR: string;
+begin
+  IR := GenIR(
+    'program P;'          + LineEnding +
+    'var S: string; I: Integer;' + LineEnding +
+    'begin I := High(S) end.');
+  AssertTrue('High(S) must subtract 1 from length',
+    IRContains(IR, 'sub') or IRContains(IR, 'extsw'));
 end;
 
 initialization

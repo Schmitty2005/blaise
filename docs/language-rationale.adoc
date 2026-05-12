@@ -177,7 +177,7 @@ See <<_string_subscript_s_n>> and <<_char_literal_coercion>>.
 
 ==== Decision
 
-`S[N]` returns the Nth byte of the string (1-based), as `Byte` (stored
+`S[N]` returns the Nth byte of the string (0-based), as `Byte` (stored
 as `Integer` in the current implementation). Indexing is into raw UTF-8
 bytes, not into Unicode codepoints.
 
@@ -264,6 +264,106 @@ FPC code that manually accesses the `AnsiString` header via pointer arithmetic
 which are correct in Blaise too.  Code that used the old Blaise header-pointer
 form (positive offsets from a header pointer) is a porting error that the
 Migration Analyser should flag.
+
+---
+
+=== `Low` and `High` on Strings
+
+==== Decision
+
+`Low(S)` always returns the constant `0`.  `High(S)` returns
+`Length(S) - 1`, i.e. the index of the last valid byte.  Both return
+`Integer`.  For an empty string, `High(S)` returns `-1`; a standard
+`for I := Low(S) to High(S)` loop executes zero iterations, which is the
+correct behaviour.
+
+==== Rationale
+
+Blaise strings are 0-based.  `Low` and `High` exist on arrays to make
+`for I := Low(A) to High(A)` idiomatic regardless of whether the array
+is zero-based or non-zero-based.  Extending the same intrinsics to strings
+means that developers do not need to remember a different idiom when
+iterating a string by index:
+
+[source,pascal]
+----
+for I := Low(S) to High(S) do
+  Process(S[I]);
+----
+
+`Low(S)` is a compile-time constant `0` — no runtime overhead.
+`High(S)` loads the length field from the ARC header (`data_ptr - 8`) and
+subtracts one, identical to `Length(S) - 1`.
+
+==== Preferred idiom
+
+For simple byte iteration, prefer `for B in S do` (see
+<<_for_in_loop_class_based_enumerators>>), which avoids index arithmetic
+entirely and reads the intent clearly.  `Low`/`High` are intended for
+cases where the index itself is needed (e.g. comparisons, slice
+computations, or passing the position to another function).
+
+==== Alternatives rejected
+
+* *`Low(S)` returning `1`* — rejected.  Blaise is 0-based; returning `1`
+  would be a lie that silently reintroduces the 1-based confusion the
+  0-based design was adopted to eliminate.
+* *Not supporting `Low`/`High` on strings at all* — rejected.  The
+  intrinsics already exist for arrays; omitting them for strings would
+  create an arbitrary inconsistency that forces developers to write
+  `0` and `Length(S) - 1` as magic constants.
+
+---
+
+=== `for B in S` — String Byte Iteration
+
+==== Decision
+
+`for B in S do` iterates the raw UTF-8 bytes of string `S`.  The loop
+variable `B` must be an ordinal type (`Byte` or `Integer`); each
+iteration yields one byte via an unsigned byte load.  There is no `Char`
+type in Blaise — both `S[N]` and `for B in S do` expose bytes, not
+codepoints.
+
+==== Rationale
+
+Since Blaise has no `Char` type (see <<_no_char_type>>), the natural
+element type for string iteration is `Byte` (or any ordinal wide enough
+to hold a byte value).  This is consistent with `S[N]` returning `Byte`,
+and with the design principle that the string API operates on UTF-8 bytes
+for systems and compiler code.
+
+The compiler desugars `for B in S do Body` as:
+
+[source,pascal]
+----
+__idx := 0;
+while __idx < Length(S) do
+begin
+  B := S[__idx];
+  Body;
+  Inc(__idx);
+end;
+----
+
+The synthetic `__idx` variable is injected into the enclosing function's
+local variable scope.  No heap allocation is required; iteration is a
+simple index-and-load loop.
+
+==== What is not supported
+
+Codepoint iteration — stepping over full UTF-8 encoded codepoints — is
+not supported via this syntax.  It is deferred to a future `Runes(S)`
+iterator that would yield `Integer` codepoint values.
+
+==== Alternatives rejected
+
+* *Loop variable typed as `Char`* — rejected.  Blaise has no `Char` type.
+  See <<_no_char_type>> for the full rationale.
+* *Yielding codepoints rather than bytes* — rejected for now.  O(N)
+  codepoint decoding on every subscript would surprise developers working
+  with ASCII-range data, where byte and codepoint coincide.  The `Runes`
+  iterator is the future home for codepoint-level work.
 
 ---
 

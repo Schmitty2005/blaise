@@ -4815,17 +4815,30 @@ begin
       if SameText(FC.Name,'High') then
       begin
         T := AllocTemp;
-        if TASTExpr(FC.Args.Items[0]).ResolvedType.Kind = tyStaticArray then
-          EmitLine(Format('  %s =w copy %d', [T,
-            TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).HighBound]))
+        case TASTExpr(FC.Args.Items[0]).ResolvedType.Kind of
+          tyStaticArray:
+            EmitLine(Format('  %s =w copy %d', [T,
+              TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).HighBound]));
+          tyString:
+          begin
+            { High(S) = Length(S) - 1; load length from ARC header at data_ptr-8 }
+            L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+            R := AllocTemp;
+            EmitLine(Format('  %s =l sub %s, 8', [R, L]));
+            EmitLine(Format('  %s =w loadsw %s', [T, R]));
+            R := AllocTemp;
+            EmitLine(Format('  %s =w sub %s, 1', [R, T]));
+            T := R;
+          end;
         else
-        begin
-          { Open-array: load the high-index slot and truncate to Integer (w).
-            QBE has no truncl; assigning an l value to a w temp implicitly truncates. }
-          L := TIdentExpr(FC.Args.Items[0]).Name;
-          R := AllocTemp;
-          EmitLine(Format('  %s =l loadl %%_var_%s_high', [R, L]));
-          EmitLine(Format('  %s =w copy %s', [T, R]));
+          begin
+            { Open-array: load the high-index slot and truncate to Integer (w).
+              QBE has no truncl; assigning an l value to a w temp implicitly truncates. }
+            L := TIdentExpr(FC.Args.Items[0]).Name;
+            R := AllocTemp;
+            EmitLine(Format('  %s =l loadl %%_var_%s_high', [R, L]));
+            EmitLine(Format('  %s =w copy %s', [T, R]));
+          end;
         end;
         Result := T;
         Exit;
@@ -4834,11 +4847,15 @@ begin
       if SameText(FC.Name,'Low') then
       begin
         T := AllocTemp;
-        if TASTExpr(FC.Args.Items[0]).ResolvedType.Kind = tyStaticArray then
-          EmitLine(Format('  %s =w copy %d', [T,
-            TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).LowBound]))
+        case TASTExpr(FC.Args.Items[0]).ResolvedType.Kind of
+          tyStaticArray:
+            EmitLine(Format('  %s =w copy %d', [T,
+              TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).LowBound]));
+          tyString:
+            EmitLine(Format('  %s =w copy 0', [T]));
         else
           EmitLine(Format('  %s =w copy 0', [T]));
+        end;
         Result := T;
         Exit;
       end;

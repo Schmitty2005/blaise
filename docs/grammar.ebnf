@@ -516,6 +516,15 @@ ForStmt
     | FOR IDENT IN Expr DO Stmt
     ;
 
+(* FOR IDENT IN Expr is an enhanced for loop.  The element type depends on
+ * the collection expression:
+ *   - Static array (array[L..H] of T):  IDENT must be compatible with T.
+ *   - Class with GetEnumerator protocol: IDENT must be compatible with
+ *     the Current property type of the enumerator.
+ *   - String: IDENT must be an ordinal type (Byte or Integer); each
+ *     iteration yields one raw UTF-8 byte.  There is no Char type in
+ *     Blaise — string subscript and for-in both expose bytes. *)
+
 TryFinallyStmt
     = TRY StmtList FINALLY StmtList END
     ;
@@ -662,6 +671,11 @@ ArrayLiteral
  *                                value; lowers to _ClassCreate(Cls)
  *                                followed by a static call to the
  *                                resolved constructor on Cls.BaseClass.
+ *   Low  ( Array | String ) : Integer  — 0 for open/dynamic arrays and strings;
+ *                                        LowBound for static arrays
+ *   High ( Array | String ) : Integer  — HighBound for static arrays;
+ *                                        high-index slot for open arrays;
+ *                                        Length(S)-1 for strings (runtime)
  *
  * Built-in types (pre-populated in the symbol table):
  *
