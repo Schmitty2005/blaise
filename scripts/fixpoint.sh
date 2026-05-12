@@ -1,41 +1,44 @@
 #!/bin/bash
 # Fixpoint test for the Blaise self-hosting check.
 #
-# Steps:
-#   1. Clean rebuild compiler (removes stale .ppu/.o files).
-#   2. Rebuild + install RTL (cheap when nothing changed).
-#   3. stage1 -> stage2 IR (FPC-built binary compiles current source).
-#   4. Assemble + link stage-2 binary via QBE + gcc.
-#   5. stage2 -> stage3 IR (self-compiled binary compiles same source).
-#   6. diff stage-2.ssa stage-3.ssa  => empty = clean fixpoint.
+# Uses the most recent release binary as stage-1 (no FPC dependency).
 #
-# A 5-minute timeout is wrapped around the stage-2 invocation so a hung
-# self-compiled binary doesn't lock the whole bisect loop.
+# Steps:
+#   1. Find stage-1 binary (latest release or explicit $STAGE1).
+#   2. Rebuild + install RTL (cheap when nothing changed).
+#   3. stage-1 -> stage-2 IR.
+#   4. Assemble + link stage-2 binary via QBE + gcc.
+#   5. stage-2 -> stage-3 IR (5-minute timeout).
+#   6. diff stage-2.ssa stage-3.ssa  => empty = clean fixpoint.
 
 set -e
 
-# Must be run from the project root (where pasbuild.xml lives).
 if [ ! -f "compiler/src/main/pascal/Blaise.pas" ]; then
   echo "Run this script from the project root: ./scripts/fixpoint.sh" >&2
   exit 1
 fi
 
-echo "[1/6] clean + rebuild compiler"
-pasbuild clean > /tmp/fp_clean.log 2>&1
-pasbuild compile -m blaise-compiler > /tmp/fp_compile.log 2>&1
-if [ ! -x compiler/target/blaise ]; then
-  echo "COMPILE_FAIL"
-  tail -10 /tmp/fp_compile.log
-  exit 10
+# Stage-1 binary: honour $STAGE1, otherwise pick the latest release.
+if [ -n "$STAGE1" ]; then
+  STAGE1_BIN="$STAGE1"
+elif [ -d releases ]; then
+  LATEST=$(ls -d releases/v* 2>/dev/null | sort -V | tail -1)
+  STAGE1_BIN="$LATEST/blaise"
 fi
 
-echo "[2/6] rebuild + install RTL"
+if [ ! -x "$STAGE1_BIN" ]; then
+  echo "No stage-1 binary found. Set STAGE1=/path/to/blaise or add a release." >&2
+  exit 10
+fi
+echo "stage-1: $STAGE1_BIN"
+
+echo "[1/5] rebuild + install RTL"
 ( cd rtl && make > /tmp/fp_rtl.log 2>&1 && make install >> /tmp/fp_rtl.log 2>&1 ) || {
   echo "RTL_FAIL"; tail -5 /tmp/fp_rtl.log; exit 11;
 }
 
-echo "[3/6] stage1 -> stage2 IR"
-compiler/target/blaise --source compiler/src/main/pascal/Blaise.pas \
+echo "[2/5] stage-1 -> stage-2 IR"
+"$STAGE1_BIN" --source compiler/src/main/pascal/Blaise.pas \
   --unit-path compiler/src/main/pascal --unit-path rtl/src/main/pascal \
   --emit-ir > /tmp/fp_stage2.ssa 2>/tmp/fp_stage2.err
 if [ ! -s /tmp/fp_stage2.ssa ] || head -1 /tmp/fp_stage2.ssa | grep -qi 'error\|exception'; then
@@ -44,9 +47,9 @@ if [ ! -s /tmp/fp_stage2.ssa ] || head -1 /tmp/fp_stage2.ssa | grep -qi 'error\|
   head -3 /tmp/fp_stage2.err
   exit 1
 fi
-echo "      stage2 IR: $(wc -l < /tmp/fp_stage2.ssa) lines"
+echo "      stage-2 IR: $(wc -l < /tmp/fp_stage2.ssa) lines"
 
-echo "[4/6] assemble + link stage-2 binary"
+echo "[3/5] assemble + link stage-2 binary"
 vendor/qbe/qbe -o /tmp/fp_stage2.s /tmp/fp_stage2.ssa 2>/tmp/fp_qbe.err || {
   echo "QBE_FAIL"; cat /tmp/fp_qbe.err; exit 2;
 }
@@ -54,7 +57,7 @@ gcc -o /tmp/fp_blaise2 /tmp/fp_stage2.s compiler/target/blaise_rtl.a 2>/tmp/fp_g
   echo "GCC_FAIL"; cat /tmp/fp_gcc.err; exit 3;
 }
 
-echo "[5/6] stage2 -> stage3 IR (5min timeout)"
+echo "[4/5] stage-2 -> stage-3 IR (5min timeout)"
 timeout 300 /tmp/fp_blaise2 --source compiler/src/main/pascal/Blaise.pas \
   --unit-path compiler/src/main/pascal --unit-path rtl/src/main/pascal \
   --emit-ir > /tmp/fp_stage3.ssa 2>/tmp/fp_stage3.err
@@ -70,9 +73,9 @@ elif [ $RC -ne 0 ]; then
   head -3 /tmp/fp_stage3.err
   exit 5
 fi
-echo "      stage3 IR: $(wc -l < /tmp/fp_stage3.ssa) lines"
+echo "      stage-3 IR: $(wc -l < /tmp/fp_stage3.ssa) lines"
 
-echo "[6/6] compare"
+echo "[5/5] compare"
 DIFFLINES=$(diff /tmp/fp_stage2.ssa /tmp/fp_stage3.ssa | wc -l)
 if [ $DIFFLINES -eq 0 ]; then
   echo "FIXPOINT_OK"
