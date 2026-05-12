@@ -167,6 +167,18 @@ will require mechanical substitution of `Char` with `Byte`. This is
 intentional friction: it forces the porting author to reason about whether
 byte access is actually what is intended.
 
+==== `Ord()` is not needed for strings
+
+In FPC and Delphi, `for C: Char in S do` yields a `Char` value, so
+developers must call `Ord(C)` to obtain the numeric byte value.  In
+Blaise, `for B in S do` already yields a `Byte` (or any compatible
+ordinal), and `S[N]` already returns `Byte` — the numeric value is
+available directly.  There is nothing to convert.
+
+`Ord()` remains meaningful in Blaise for enumerations (obtaining the
+underlying integer of an enumeration value), but it has no role in
+string processing.
+
 ==== Related
 
 See <<_string_subscript_s_n>> and <<_char_literal_coercion>>.
