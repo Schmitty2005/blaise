@@ -10,6 +10,10 @@
 #   4. Assemble + link stage-2 binary via QBE + gcc.
 #   5. stage-2 -> stage-3 IR (5-minute timeout).
 #   6. diff stage-2.ssa stage-3.ssa  => empty = clean fixpoint.
+#
+# If stage-2 != stage-3 (expected when stage-1 has older codegen),
+# the script automatically builds stage-3, generates stage-4 IR,
+# and checks stage-3 == stage-4 as the true fixpoint.
 
 set -e
 
@@ -75,13 +79,49 @@ elif [ $RC -ne 0 ]; then
 fi
 echo "      stage-3 IR: $(wc -l < /tmp/fp_stage3.ssa) lines"
 
-echo "[5/5] compare"
+echo "[5/5] compare stage-2 vs stage-3"
 DIFFLINES=$(diff /tmp/fp_stage2.ssa /tmp/fp_stage3.ssa | wc -l)
 if [ $DIFFLINES -eq 0 ]; then
   echo "FIXPOINT_OK"
   exit 0
+fi
+
+echo "stage-2 != stage-3 ($DIFFLINES diff lines) — bootstrap gap from older stage-1"
+echo "      extending to stage-4 for true fixpoint check..."
+
+echo "[+1] assemble + link stage-3 binary"
+vendor/qbe/qbe -o /tmp/fp_stage3.s /tmp/fp_stage3.ssa 2>/tmp/fp_qbe3.err || {
+  echo "QBE3_FAIL"; cat /tmp/fp_qbe3.err; exit 2;
+}
+gcc -o /tmp/fp_blaise3 /tmp/fp_stage3.s compiler/target/blaise_rtl.a 2>/tmp/fp_gcc3.err || {
+  echo "GCC3_FAIL"; cat /tmp/fp_gcc3.err; exit 3;
+}
+
+echo "[+2] stage-3 -> stage-4 IR (5min timeout)"
+timeout 300 /tmp/fp_blaise3 --source compiler/src/main/pascal/Blaise.pas \
+  --unit-path compiler/src/main/pascal --unit-path rtl/src/main/pascal \
+  --emit-ir > /tmp/fp_stage4.ssa 2>/tmp/fp_stage4.err
+RC=$?
+if [ $RC -eq 124 ]; then
+  echo "STAGE4_TIMEOUT"
+  exit 4
+elif [ $RC -eq 139 ]; then
+  echo "STAGE4_SEGFAULT"
+  exit 4
+elif [ $RC -ne 0 ]; then
+  echo "STAGE4_FAIL rc=$RC"
+  head -3 /tmp/fp_stage4.err
+  exit 5
+fi
+echo "      stage-4 IR: $(wc -l < /tmp/fp_stage4.ssa) lines"
+
+echo "[+3] compare stage-3 vs stage-4"
+DIFFLINES=$(diff /tmp/fp_stage3.ssa /tmp/fp_stage4.ssa | wc -l)
+if [ $DIFFLINES -eq 0 ]; then
+  echo "FIXPOINT_OK (achieved at stage-3/stage-4)"
+  exit 0
 else
   echo "FIXPOINT_DIFF lines=$DIFFLINES"
-  diff /tmp/fp_stage2.ssa /tmp/fp_stage3.ssa | head -20
+  diff /tmp/fp_stage3.ssa /tmp/fp_stage4.ssa | head -20
   exit 6
 fi
