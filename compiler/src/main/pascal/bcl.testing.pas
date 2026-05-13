@@ -31,8 +31,6 @@
 
 unit bcl.testing;
 
-{$mode objfpc}{$H+}
-
 interface
 
 uses
@@ -390,13 +388,13 @@ end;
 
 procedure TAssert.AssertContains(AMsg: string; const ASubstring, AHaystack: string);
 begin
-  if Pos(ASubstring, AHaystack) = 0 then
+  if Pos(ASubstring, AHaystack) < 0 then
     Self.Fail(AMsg + ' Expected "' + ASubstring + '" to appear in: "' + AHaystack + '"');
 end;
 
 procedure TAssert.AssertContains(const ASubstring, AHaystack: string);
 begin
-  if Pos(ASubstring, AHaystack) = 0 then
+  if Pos(ASubstring, AHaystack) < 0 then
     Self.Fail('Expected "' + ASubstring + '" to appear in: "' + AHaystack + '"');
 end;
 

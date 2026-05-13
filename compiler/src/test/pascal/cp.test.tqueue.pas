@@ -1,0 +1,315 @@
+{
+  Blaise - An Object Pascal Compiler
+  Copyright (c) 2026 Graeme Geldenhuys
+  SPDX-License-Identifier: Apache-2.0 WITH Swift-exception
+  Licensed under the Apache License v2.0 with Runtime Library Exception.
+  See LICENSE file in the project root for full license terms.
+}
+
+unit cp.test.tqueue;
+
+{$mode objfpc}{$H+}
+
+{ IR unit tests for TQueue<T>: Enqueue/Dequeue/Peek/Clear/Destroy and Grow.
+  Uses Integer as the type parameter throughout. }
+
+interface
+
+uses
+  Classes, SysUtils, bcl.testing,
+  uLexer, uParser, uAST, uSymbolTable, uSemantic, uCodeGenQBE;
+
+type
+  TTQueueTests = class(TTestCase)
+  private
+    function AnalyseSrc(const ASrc: string): TProgram;
+    function GenIR(const ASrc: string): string;
+  published
+    procedure TestSemantic_TQueue_Instantiates;
+    procedure TestSemantic_TQueue_Enqueue_Compiles;
+    procedure TestSemantic_TQueue_Dequeue_Compiles;
+    procedure TestSemantic_TQueue_Peek_Compiles;
+    procedure TestCodegen_TQueue_TypeInfoEmitted;
+    procedure TestCodegen_TQueue_EnqueueEmitsStore;
+    procedure TestCodegen_TQueue_DequeueEmitsLoad;
+    procedure TestCodegen_TQueue_PeekEmitsLoad;
+    procedure TestCodegen_TQueue_GrowEmitsGetMem;
+  end;
+
+implementation
+
+const
+  QueueDecl =
+    '''
+        type
+          TQueue<T> = class
+            FData:     ^T;
+            FCount:    Integer;
+            FCapacity: Integer;
+            FHead:     Integer;
+            FTail:     Integer;
+            procedure Grow;
+            procedure Enqueue(Value: T);
+            function  Dequeue: T;
+            function  Peek: T;
+            procedure Clear;
+            procedure Destroy;
+            property Count: Integer read FCount;
+          end;
+        ''';
+
+  QueueImpls =
+    '''
+        procedure TQueue<T>.Grow;
+        var
+          NewCap:  Integer;
+          OldCap:  Integer;
+          NewData: ^T;
+          I:       Integer;
+          Src:     ^T;
+          Dst:     ^T;
+        begin
+          OldCap  := Self.FCapacity;
+          if OldCap = 0 then
+            NewCap := 4
+          else
+            NewCap := OldCap * 2;
+          NewData := GetMem(NewCap * SizeOf(T));
+          ZeroMem(NewData, NewCap * SizeOf(T));
+          I := 0;
+          while I < Self.FCount do
+          begin
+            Src  := Self.FData + ((Self.FHead + I) mod OldCap) * SizeOf(T);
+            Dst  := NewData + I * SizeOf(T);
+            Dst^ := Src^;
+            I    := I + 1
+          end;
+          FreeMem(Self.FData);
+          Self.FData     := NewData;
+          Self.FHead     := 0;
+          Self.FTail     := Self.FCount;
+          Self.FCapacity := NewCap
+        end;
+        procedure TQueue<T>.Enqueue(Value: T);
+        var
+          Dest: ^T;
+        begin
+          if Self.FCount = Self.FCapacity then
+            Self.Grow;
+          Dest        := Self.FData + Self.FTail * SizeOf(T);
+          Dest^       := Value;
+          Self.FTail  := (Self.FTail + 1) mod Self.FCapacity;
+          Self.FCount := Self.FCount + 1
+        end;
+        function TQueue<T>.Dequeue: T;
+        var
+          Src: ^T;
+        begin
+          Src         := Self.FData + Self.FHead * SizeOf(T);
+          Result      := Src^;
+          Self.FHead  := (Self.FHead + 1) mod Self.FCapacity;
+          Self.FCount := Self.FCount - 1
+        end;
+        function TQueue<T>.Peek: T;
+        var
+          Src: ^T;
+        begin
+          Src    := Self.FData + Self.FHead * SizeOf(T);
+          Result := Src^
+        end;
+        procedure TQueue<T>.Clear;
+        begin
+          Self.FCount := 0;
+          Self.FHead  := 0;
+          Self.FTail  := 0
+        end;
+        procedure TQueue<T>.Destroy;
+        begin
+          FreeMem(Self.FData);
+          Self.FData     := nil;
+          Self.FCount    := 0;
+          Self.FCapacity := 0;
+          Self.FHead     := 0;
+          Self.FTail     := 0
+        end;
+        ''';
+
+  SrcCreate =
+    'program P;' + #10 +
+    QueueDecl +
+    QueueImpls +
+    '''
+        var Q: TQueue<Integer>;
+        begin
+          Q := TQueue<Integer>.Create
+        end.
+        ''';
+
+  SrcEnqueue =
+    'program P;' + #10 +
+    QueueDecl +
+    QueueImpls +
+    '''
+        var Q: TQueue<Integer>;
+        begin
+          Q := TQueue<Integer>.Create;
+          Q.Enqueue(1);
+          Q.Enqueue(2);
+          Q.Enqueue(3)
+        end.
+        ''';
+
+  SrcDequeue =
+    'program P;' + #10 +
+    QueueDecl +
+    QueueImpls +
+    '''
+        var
+          Q: TQueue<Integer>;
+          V: Integer;
+        begin
+          Q := TQueue<Integer>.Create;
+          Q.Enqueue(10);
+          V := Q.Dequeue
+        end.
+        ''';
+
+  SrcPeek =
+    'program P;' + #10 +
+    QueueDecl +
+    QueueImpls +
+    '''
+        var
+          Q: TQueue<Integer>;
+          V: Integer;
+        begin
+          Q := TQueue<Integer>.Create;
+          Q.Enqueue(99);
+          V := Q.Peek
+        end.
+        ''';
+
+function TTQueueTests.AnalyseSrc(const ASrc: string): TProgram;
+var
+  Lex: TLexer;
+  Par: TParser;
+  SA:  TSemanticAnalyser;
+begin
+  Lex    := TLexer.Create(ASrc);
+  Par    := TParser.Create(Lex);
+  Result := Par.Parse;
+  Par.Free;
+  Lex.Free;
+  SA := TSemanticAnalyser.Create;
+  try
+    SA.Analyse(Result);
+  finally
+    SA.Free;
+  end;
+end;
+
+function TTQueueTests.GenIR(const ASrc: string): string;
+var
+  Prog: TProgram;
+  CG:   TCodeGenQBE;
+begin
+  Prog := AnalyseSrc(ASrc);
+  CG   := TCodeGenQBE.Create;
+  try
+    CG.Generate(Prog);
+    Result := CG.GetOutput;
+  finally
+    CG.Free;
+    Prog.Free;
+  end;
+end;
+
+procedure TTQueueTests.TestSemantic_TQueue_Instantiates;
+var
+  Prog: TProgram;
+begin
+  Prog := AnalyseSrc(SrcCreate);
+  Prog.Free;
+end;
+
+procedure TTQueueTests.TestSemantic_TQueue_Enqueue_Compiles;
+var
+  Prog: TProgram;
+begin
+  Prog := AnalyseSrc(SrcEnqueue);
+  Prog.Free;
+end;
+
+procedure TTQueueTests.TestSemantic_TQueue_Dequeue_Compiles;
+var
+  Prog: TProgram;
+begin
+  Prog := AnalyseSrc(SrcDequeue);
+  Prog.Free;
+end;
+
+procedure TTQueueTests.TestSemantic_TQueue_Peek_Compiles;
+var
+  Prog: TProgram;
+begin
+  Prog := AnalyseSrc(SrcPeek);
+  Prog.Free;
+end;
+
+procedure TTQueueTests.TestCodegen_TQueue_TypeInfoEmitted;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcCreate);
+  AssertTrue('TQueue typeinfo emitted',
+    Pos('typeinfo_TQueue_Integer', IR) >= 0);
+end;
+
+procedure TTQueueTests.TestCodegen_TQueue_EnqueueEmitsStore;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcEnqueue);
+  AssertTrue('Enqueue method body emitted',
+    Pos('$TQueue_Integer_Enqueue', IR) >= 0);
+  AssertTrue('Enqueue emits storew for Integer element',
+    Pos('storew', IR) >= 0);
+end;
+
+procedure TTQueueTests.TestCodegen_TQueue_DequeueEmitsLoad;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcDequeue);
+  AssertTrue('Dequeue method body emitted',
+    Pos('$TQueue_Integer_Dequeue', IR) >= 0);
+  AssertTrue('Dequeue emits loadw for Integer element',
+    Pos('loadw', IR) >= 0);
+end;
+
+procedure TTQueueTests.TestCodegen_TQueue_PeekEmitsLoad;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcPeek);
+  AssertTrue('Peek method body emitted',
+    Pos('$TQueue_Integer_Peek', IR) >= 0);
+  AssertTrue('Peek emits loadw for Integer element',
+    Pos('loadw', IR) >= 0);
+end;
+
+procedure TTQueueTests.TestCodegen_TQueue_GrowEmitsGetMem;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcEnqueue);
+  { Grow allocates a fresh buffer via GetMem rather than realloc,
+    because it must copy in insertion order from the circular buffer }
+  AssertTrue('Grow emits malloc/GetMem call',
+    Pos('call $malloc', IR) >= 0);
+end;
+
+initialization
+  RegisterTest(TTQueueTests);
+
+end.

@@ -30,8 +30,6 @@
 
 unit bcl.testing.runner.text;
 
-{$mode objfpc}{$H+}
-
 interface
 
 uses

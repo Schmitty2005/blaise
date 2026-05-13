@@ -2490,7 +2490,7 @@ begin
   begin
     IntfDesc := TInterfaceTypeDesc(AAssign.ResolvedLhsType);
     ClassRT  := TRecordTypeDesc(AAssign.Expr.ResolvedType);
-    ItabName := '$itab_' + ClassRT.Name + '_' + IntfDesc.Name;
+    ItabName := '$itab_' + QBEMangle(ClassRT.Name) + '_' + QBEMangle(IntfDesc.Name);
     ValTemp  := EmitExpr(AAssign.Expr);
     if AAssign.IsWeakLhs then
       EmitLine(Format('  call $_WeakAssign(l %s_obj, l %s)',
@@ -3388,7 +3388,22 @@ begin
       EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
       EmitLine(Format('  %s =l loadl %s',   [FPtrTemp, ArgTemp]));
     end;
-    EmitLine(Format('  call %s(l %s)', [FPtrTemp, SelfTemp]));
+    { Emit args: no concrete param info at interface-dispatch site, so use
+      the resolved type of each argument expression to pick the QBE type.
+      Pointer-typed args (var params written as TAddrOfExpr or already resolved
+      as pointer/class) use 'l'; all other scalar args use 'w'. }
+    ArgLine := Format('l %s', [SelfTemp]);
+    for I := 0 to ACall.Args.Count - 1 do
+    begin
+      ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+      if (TASTExpr(ACall.Args.Items[I]).ResolvedType <> nil) and
+         (TASTExpr(ACall.Args.Items[I]).ResolvedType.Kind in
+           [tyPointer, tyClass, tyInterface, tyPChar, tyString]) then
+        ArgLine := ArgLine + Format(', l %s', [ArgTemp])
+      else
+        ArgLine := ArgLine + Format(', w %s', [ArgTemp]);
+    end;
+    EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
     Exit;
   end;
 
@@ -3967,7 +3982,10 @@ begin
       ParentStr := '$typeinfo_' + QBEMangle(RT.Parent.Name)
     else
       ParentStr := '0';
-    ImplStr := '0';
+    if RT.ImplementsCount > 0 then
+      ImplStr := '$impllist_' + MName
+    else
+      ImplStr := '0';
     EmitLine('data $typeinfo_' + MName + ' = { l ' + ParentStr + ', l ' + ImplStr +
              ', l ' + EmitClassNameRef(GI.TypeName) + ', l 0' +
              ', l ' + IntToStr(RT.TotalSize) +
@@ -4058,6 +4076,8 @@ var
   MethName:    string;
   IntfMangle:  string;
   GII:         TGenericInterfaceInstance;
+  GI:          TGenericInstance;
+  MName:       string;
 begin
   { Typeinfo blocks for every plain interface }
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
@@ -4118,6 +4138,50 @@ begin
     ImplLine := ImplLine + ', l 0 }';
     EmitLine(ImplLine);
   end;
+
+  { Itab and impllist for generic class instances that implement interfaces }
+  for I := 0 to AProg.GenericInstances.Count - 1 do
+  begin
+    GI      := TGenericInstance(AProg.GenericInstances.Items[I]);
+    ClassRT := TRecordTypeDesc(GI.TypeDesc);
+    if ClassRT.ImplementsCount = 0 then Continue;
+    MName := QBEMangle(GI.TypeName);
+
+    { One itab per interface }
+    for J := 0 to ClassRT.ImplementsCount - 1 do
+    begin
+      IntfDesc   := ClassRT.ImplementsIntfAt(J);
+      IntfMangle := QBEMangle(IntfDesc.Name);
+      ItabLine   := 'data $itab_' + MName + '_' + IntfMangle + ' = {';
+      for K := 0 to IntfDesc.MethodCount - 1 do
+      begin
+        MethName := IntfDesc.MethodName(K);
+        if K = 0 then
+          ItabLine := ItabLine + ' l $' + MName + '_' + MethName
+        else
+          ItabLine := ItabLine + ', l $' + MName + '_' + MethName;
+      end;
+      ItabLine := ItabLine + ' }';
+      EmitLine(ItabLine);
+    end;
+
+    { One impllist per generic class instance }
+    ImplLine := 'data $impllist_' + MName + ' = {';
+    for J := 0 to ClassRT.ImplementsCount - 1 do
+    begin
+      IntfDesc   := ClassRT.ImplementsIntfAt(J);
+      IntfMangle := QBEMangle(IntfDesc.Name);
+      if J = 0 then
+        ImplLine := ImplLine + ' l $typeinfo_' + IntfMangle +
+                               ', l $itab_' + MName + '_' + IntfMangle
+      else
+        ImplLine := ImplLine + ', l $typeinfo_' + IntfMangle +
+                               ', l $itab_' + MName + '_' + IntfMangle;
+    end;
+    ImplLine := ImplLine + ', l 0 }';
+    EmitLine(ImplLine);
+  end;
+
   EmitLine('');
 end;
 
@@ -5854,15 +5918,28 @@ begin
         EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
         EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
       end;
-      { Evaluate arguments before the call }
+      { Evaluate arguments: use var-param flags stored on the interface desc }
       ArgLine := Format('l %s', [SelfTemp]);
       for I := 0 to MCallExpr.Args.Count - 1 do
       begin
-        ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
-        ArgLine := ArgLine + Format(', w %s', [ArgTemp]);
+        if IntfDesc.MethodParamIsVar(IntfDesc.MethodIndex(MCallExpr.Name), I) then
+          ArgLine := ArgLine + Format(', l %s',
+            [EmitLValueAddr(TASTExpr(MCallExpr.Args.Items[I]))])
+        else
+        begin
+          ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
+          if (TASTExpr(MCallExpr.Args.Items[I]).ResolvedType <> nil) and
+             (TASTExpr(MCallExpr.Args.Items[I]).ResolvedType.Kind in
+               [tyPointer, tyClass, tyInterface, tyPChar, tyString]) then
+            ArgLine := ArgLine + Format(', l %s', [ArgTemp])
+          else
+            ArgLine := ArgLine + Format(', w %s', [ArgTemp]);
+        end;
       end;
+      QType := QbeTypeOf(MCallExpr.ResolvedType);
+      if QType = '' then QType := 'w';
       T := AllocTemp;
-      EmitLine(Format('  %s =w call %s(%s)', [T, FPtrTemp, ArgLine]));
+      EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FPtrTemp, ArgLine]));
       Result := T;
       Exit;
     end;
@@ -6385,6 +6462,31 @@ begin
             [T, QType, MDecl.OwnerTypeName, FldAccess.FieldName, L]));
         Result := T;
       end;
+    end
+    else if FldAccess.IsInterfaceCall then
+    begin
+      { Zero-arg method call through interface itab: M.GetCount where M: IFoo }
+      IntfDesc := TInterfaceTypeDesc(FldAccess.ResolvedClassType);
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s_obj',
+        [SelfTemp, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+      VTblTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s_itab',
+        [VTblTemp, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+      SlotOff  := IntfDesc.MethodIndex(FldAccess.FieldName) * 8;
+      FPtrTemp := AllocTemp;
+      if SlotOff = 0 then
+        EmitLine(Format('  %s =l loadl %s', [FPtrTemp, VTblTemp]))
+      else
+      begin
+        ArgTemp := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
+        EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
+      end;
+      QType := QbeTypeOf(FldAccess.ResolvedType);
+      T := AllocTemp;
+      EmitLine(Format('  %s =%s call %s(l %s)', [T, QType, FPtrTemp, SelfTemp]));
+      Result := T;
     end
     else if FldAccess.IsConstant then
     begin

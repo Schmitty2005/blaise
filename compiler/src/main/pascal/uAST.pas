@@ -102,6 +102,8 @@ type
     ImplicitBaseInfo:  TFieldInfo;    { non-owned — the field of Self holding the record/class }
     IsMethodCall:        Boolean;     { set by uSemantic — FieldName is a zero-arg method }
     ResolvedMethod:      TObject;     { TMethodDecl — not owned; set when IsMethodCall }
+    IsInterfaceCall:     Boolean;     { set by uSemantic — zero-arg method call through interface itab }
+    ResolvedClassType:   TTypeDesc;  { not owned; set when IsInterfaceCall — the interface descriptor }
     IsGlobal:            Boolean;     { set by uSemantic — RecordName is a program-level global }
     IsClassNameAccess:   Boolean;     { set by uSemantic — .ClassName built-in on a class instance }
     IsClassTypeAccess:   Boolean;     { set by uSemantic — .ClassType built-in: returns metaclass (typeinfo ptr) }

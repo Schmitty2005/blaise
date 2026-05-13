@@ -188,16 +188,20 @@ type
   private
     FMethods:     TStringList;  { method names, case-insensitive }
     FReturnTypes: TStringList;  { parallel: return type name, '' = procedure }
+    FParamIsVar:  TStringList;  { parallel: comma-separated '1'/'0' per param; '1' = var param }
     FParent:      TInterfaceTypeDesc;  { not owned; nil if no parent }
   public
     constructor Create(const AName: string);
     destructor Destroy; override;
-    procedure AddMethod(const AName: string; const AReturnTypeName: string);
+    procedure AddMethod(const AName: string; const AReturnTypeName: string;
+                        const AParamIsVar: string = '');
     function  HasMethod(const AName: string): Boolean;
     function  MethodCount: Integer;
     function  MethodName(AIndex: Integer): string;
     function  MethodReturnTypeName(AIndex: Integer): string;
     function  MethodIndex(const AName: string): Integer;
+    function  MethodParamIsVar(AMethodIndex: Integer; AParamIndex: Integer): Boolean;
+    function  MethodParamVarFlagsStr(AMethodIndex: Integer): string;
     property  Parent: TInterfaceTypeDesc read FParent write FParent;
   end;
 
@@ -705,21 +709,24 @@ begin
   FMethods     := TStringList.Create;
   FMethods.CaseSensitive := False;
   FReturnTypes := TStringList.Create;
+  FParamIsVar  := TStringList.Create;
   FParent      := nil;
 end;
 
 destructor TInterfaceTypeDesc.Destroy;
 begin
+  FParamIsVar.Free;
   FReturnTypes.Free;
   FMethods.Free;
   inherited Destroy;
 end;
 
 procedure TInterfaceTypeDesc.AddMethod(const AName: string;
-  const AReturnTypeName: string);
+  const AReturnTypeName: string; const AParamIsVar: string);
 begin
   FMethods.Add(AName);
   FReturnTypes.Add(AReturnTypeName);
+  FParamIsVar.Add(AParamIsVar);
 end;
 
 function TInterfaceTypeDesc.HasMethod(const AName: string): Boolean;
@@ -745,6 +752,41 @@ end;
 function TInterfaceTypeDesc.MethodIndex(const AName: string): Integer;
 begin
   Result := FMethods.IndexOf(AName);
+end;
+
+function TInterfaceTypeDesc.MethodParamIsVar(AMethodIndex: Integer;
+  AParamIndex: Integer): Boolean;
+var
+  Flags:  string;
+  Idx:    Integer;
+  CurPar: Integer;
+begin
+  Result := False;
+  if (AMethodIndex < 0) or (AMethodIndex >= FParamIsVar.Count) then Exit;
+  Flags := FParamIsVar.Strings[AMethodIndex];
+  if Flags = '' then Exit;
+  { Walk through comma-separated '0'/'1' flags to find AParamIndex }
+  CurPar := 0;
+  Idx    := 1;
+  while Idx <= Length(Flags) do
+  begin
+    if Flags[Idx] = ',' then
+      CurPar := CurPar + 1
+    else if CurPar = AParamIndex then
+    begin
+      Result := Flags[Idx] = '1';
+      Exit;
+    end;
+    Idx := Idx + 1;
+  end;
+end;
+
+function TInterfaceTypeDesc.MethodParamVarFlagsStr(AMethodIndex: Integer): string;
+begin
+  if (AMethodIndex >= 0) and (AMethodIndex < FParamIsVar.Count) then
+    Result := FParamIsVar.Strings[AMethodIndex]
+  else
+    Result := '';
 end;
 
 { ------------------------------------------------------------------ }

@@ -1261,6 +1261,7 @@ var
   GI:        TGenericInstance;
   Subst:     string;
   ConcrType: TTypeDesc;
+  IntfDesc:  TInterfaceTypeDesc;
 begin
   Result := nil;
 
@@ -1307,10 +1308,23 @@ begin
     FTable.DefineGlobal(Sym);
 
     { Build substituted clone of the class definition }
-    ClonedCD             := TClassTypeDef.Create;
-    ClonedCD.ParentName  := Templ.ClassDef.ParentName;
+    ClonedCD            := TClassTypeDef.Create;
+    ClonedCD.ParentName := SubstTypeParam(Templ.ClassDef.ParentName, Templ.ParamNames, Args);
+    { If the substituted parent name looks like a generic interface (contains '<'),
+      try to resolve it. If it resolves to an interface, move it to ImplementsNames
+      so the implements-wiring pass can call AddImplements on RT. }
+    if StrPos('<', ClonedCD.ParentName) >= 0 then
+    begin
+      FldType := FindTypeOrInstantiate(ClonedCD.ParentName);
+      if (FldType <> nil) and (FldType.Kind = tyInterface) then
+      begin
+        ClonedCD.ImplementsNames.Insert(0, ClonedCD.ParentName);
+        ClonedCD.ParentName := '';
+      end;
+    end;
     for I := 0 to Templ.ClassDef.ImplementsNames.Count - 1 do
-      ClonedCD.ImplementsNames.Add(Templ.ClassDef.ImplementsNames.Strings[I]);
+      ClonedCD.ImplementsNames.Add(
+        SubstTypeParam(Templ.ClassDef.ImplementsNames.Strings[I], Templ.ParamNames, Args));
 
     { Clone fields with type-param substitution (handles ^T → ^Integer etc.) }
     for I := 0 to Templ.ClassDef.Fields.Count - 1 do
@@ -1487,6 +1501,17 @@ begin
       FTable.PopScope;
     end;
 
+    { Wire up implements: for each interface name in the cloned definition,
+      find or instantiate the interface and call AddImplements on RT so that
+      type-compatibility checks (class → interface assignment) work. }
+    for J := 0 to ClonedCD.ImplementsNames.Count - 1 do
+    begin
+      Key      := ClonedCD.ImplementsNames.Strings[J];
+      IntfDesc := TInterfaceTypeDesc(FindTypeOrInstantiate(Key));
+      if IntfDesc <> nil then
+        RT.AddImplements(IntfDesc);
+    end;
+
     { Register the instantiation for codegen }
     GI          := TGenericInstance.Create;
     GI.TypeName := ATypeName;
@@ -1508,11 +1533,13 @@ var
   Args:        TStringList;
   Templ:       TGenericInterfaceDef;
   TemplObj:    TObject;
-  I:           Integer;
+  I, K:        Integer;
   MDecl:       TMethodDecl;
+  Par:         TMethodParam;
   Sym:         TSymbol;
   GII:         TGenericInterfaceInstance;
   MangledName: string;
+  VarFlags:    string;
 begin
   Result := nil;
 
@@ -1567,12 +1594,21 @@ begin
     Sym    := TSymbol.Create(ATypeName, skType, Result);
     FTable.DefineGlobal(Sym);
 
-    { Register interface method names with substituted return types }
+    { Register interface method names with substituted return types + var-param flags }
     for I := 0 to Templ.IntfDef.Methods.Count - 1 do
     begin
-      MDecl := TMethodDecl(Templ.IntfDef.Methods.Items[I]);
+      MDecl    := TMethodDecl(Templ.IntfDef.Methods.Items[I]);
+      VarFlags := '';
+      for K := 0 to MDecl.Params.Count - 1 do
+      begin
+        Par := TMethodParam(MDecl.Params.Items[K]);
+        if K > 0 then VarFlags := VarFlags + ',';
+        if Par.IsVarParam then VarFlags := VarFlags + '1'
+                          else VarFlags := VarFlags + '0';
+      end;
       Result.AddMethod(MDecl.Name,
-        SubstTypeParam(MDecl.ReturnTypeName, Templ.ParamNames, Args));
+        SubstTypeParam(MDecl.ReturnTypeName, Templ.ParamNames, Args),
+        VarFlags);
     end;
 
     { Register the instantiation for codegen }
@@ -1826,6 +1862,7 @@ var
   BaseName:   string;
   BaseType:   TTypeDesc;
   MangledKey: string;
+  VarFlags:   string;
 begin
   { Pass 1 — register all type symbols with empty descriptors.
     This allows self-referential field types to resolve in pass 2. }
@@ -2015,14 +2052,25 @@ begin
               [ITD.ParentName, TD.Name]),
             TD.Line, TD.Col);
         IntfDesc.Parent := TInterfaceTypeDesc(Sym.TypeDesc);
-        { Inherit parent methods }
+        { Inherit parent methods (propagate var-param flags too) }
         for J := 0 to IntfDesc.Parent.MethodCount - 1 do
           IntfDesc.AddMethod(IntfDesc.Parent.MethodName(J),
-            IntfDesc.Parent.MethodReturnTypeName(J));
+            IntfDesc.Parent.MethodReturnTypeName(J),
+            IntfDesc.Parent.MethodParamVarFlagsStr(J));
       end;
       for J := 0 to ITD.Methods.Count - 1 do
-        IntfDesc.AddMethod(TMethodDecl(ITD.Methods.Items[J]).Name,
-          TMethodDecl(ITD.Methods.Items[J]).ReturnTypeName);
+      begin
+        MDecl    := TMethodDecl(ITD.Methods.Items[J]);
+        VarFlags := '';
+        for K := 0 to MDecl.Params.Count - 1 do
+        begin
+          Par := TMethodParam(MDecl.Params.Items[K]);
+          if K > 0 then VarFlags := VarFlags + ',';
+          if Par.IsVarParam then VarFlags := VarFlags + '1'
+                            else VarFlags := VarFlags + '0';
+        end;
+        IntfDesc.AddMethod(MDecl.Name, MDecl.ReturnTypeName, VarFlags);
+      end;
       Continue;
     end;
 
@@ -5264,6 +5312,7 @@ begin
       IntfDesc.MethodReturnTypeName(IntfDesc.MethodIndex(AExpr.Name)));
     if Result = nil then
       Result := FTable.TypeInteger;  { fallback for void/unknown }
+    AExpr.ResolvedType := Result;
     Exit;
   end;
 
@@ -5484,6 +5533,7 @@ var
   FldInfo:  TFieldInfo;
   PropInfo: TPropertyInfo;
   BaseType: TTypeDesc;
+  IntfDesc: TInterfaceTypeDesc;
 begin
   { Chained access: A.B.C — base is another expression whose type must be
     a record or class.  Leaf lookup uses Base.ResolvedType; RecordName path
@@ -5735,6 +5785,27 @@ begin
     SemanticError(
       Format('''%s'' is not a variable or type', [AAccess.RecordName]),
       AAccess.Line, AAccess.Col);
+
+  { Interface variable: method call through itab (expression context) }
+  if RecSym.TypeDesc.Kind = tyInterface then
+  begin
+    IntfDesc := TInterfaceTypeDesc(RecSym.TypeDesc);
+    if not IntfDesc.HasMethod(AAccess.FieldName) then
+      SemanticError(
+        Format('Interface ''%s'' has no method ''%s''',
+          [IntfDesc.Name, AAccess.FieldName]),
+        AAccess.Line, AAccess.Col);
+    AAccess.IsInterfaceCall  := True;
+    AAccess.ResolvedClassType := IntfDesc;
+    AAccess.IsGlobal         := RecSym.IsGlobal;
+    AAccess.IsVarParam       := (RecSym.Kind = skVarParameter);
+    Result := FindTypeOrInstantiate(
+      IntfDesc.MethodReturnTypeName(IntfDesc.MethodIndex(AAccess.FieldName)));
+    if Result = nil then
+      Result := FTable.TypeInteger;
+    AAccess.ResolvedType := Result;
+    Exit;
+  end;
 
   if not (RecSym.TypeDesc.Kind in [tyRecord, tyClass]) then
     SemanticError(
