@@ -71,6 +71,7 @@ uses
   cp.test.e2e.tordereddictionary,
   cp.test.e2e.imap,
   cp.test.e2e.tstringlist,
+  cp.test.e2e.openarray,
   cp.test.multifile,
   cp.test.constants,
   cp.test.external,

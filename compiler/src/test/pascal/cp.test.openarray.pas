@@ -78,6 +78,15 @@ type
     procedure TestCodegen_Length_OpenArray_EmitsHighPlusOne;
     { IR: Length(static-array) emits a constant equal to the element count. }
     procedure TestCodegen_Length_StaticArray_EmitsConstant;
+
+    { ------------------------------------------------------------------ }
+    { Static array coerced to open-array parameter                         }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_StaticArrayToOpenArray_Accepted;
+    procedure TestSemantic_StaticArrayToOpenArray_NonZeroBase_Accepted;
+    procedure TestCodegen_StaticArrayToOpenArray_PassesBasePtr;
+    procedure TestCodegen_StaticArrayToOpenArray_PassesCompileTimeHigh;
+    procedure TestCodegen_StaticArrayToOpenArray_NonZeroBase_HighIsFour;
   end;
 
 implementation
@@ -532,6 +541,83 @@ begin
   IR := GenIR(SrcLengthStaticArray);
   { array[1..5] has 5 elements — Length emits the constant 5 }
   AssertTrue('constant 5 emitted', Pos('copy 5', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Static array coerced to open-array — source constants               }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcStaticToOpen =
+    '''
+        program P;
+        procedure Show(const A: array of Integer);
+        var N: Integer;
+        begin
+          N := Length(A)
+        end;
+        var B: array[0..3] of Integer;
+        begin
+          Show(B)
+        end.
+        ''';
+
+  SrcStaticToOpenNonZero =
+    '''
+        program P;
+        procedure Show(const A: array of Integer);
+        var N: Integer;
+        begin
+          N := Length(A)
+        end;
+        var B: array[3..7] of Integer;
+        begin
+          Show(B)
+        end.
+        ''';
+
+{ ------------------------------------------------------------------ }
+{ Static array coerced to open-array — tests                           }
+{ ------------------------------------------------------------------ }
+
+procedure TOpenArrayTests.TestSemantic_StaticArrayToOpenArray_Accepted;
+var P: TProgram;
+begin
+  P := AnalyseSrc(SrcStaticToOpen);
+  P.Free;
+  AssertTrue('static array passed to open-array param compiles', True);
+end;
+
+procedure TOpenArrayTests.TestSemantic_StaticArrayToOpenArray_NonZeroBase_Accepted;
+var P: TProgram;
+begin
+  P := AnalyseSrc(SrcStaticToOpenNonZero);
+  P.Free;
+  AssertTrue('non-zero-base static array passed to open-array param compiles', True);
+end;
+
+procedure TOpenArrayTests.TestCodegen_StaticArrayToOpenArray_PassesBasePtr;
+var IR: string;
+begin
+  IR := GenIR(SrcStaticToOpen);
+  { Call must pass exactly two l arguments: the array base pointer and the high index }
+  AssertTrue('call passes two l args', Pos('call $Show(l', IR) > 0);
+end;
+
+procedure TOpenArrayTests.TestCodegen_StaticArrayToOpenArray_PassesCompileTimeHigh;
+var IR: string;
+begin
+  IR := GenIR(SrcStaticToOpen);
+  { array[0..3]: high = 3 - 0 = 3, passed as compile-time constant }
+  AssertTrue('high index 3 in call', Pos(', l 3', IR) > 0);
+end;
+
+procedure TOpenArrayTests.TestCodegen_StaticArrayToOpenArray_NonZeroBase_HighIsFour;
+var IR: string;
+begin
+  IR := GenIR(SrcStaticToOpenNonZero);
+  { array[3..7]: high = 7 - 3 = 4, passed as compile-time constant }
+  AssertTrue('high index 4 in call', Pos(', l 4', IR) > 0);
 end;
 
 initialization

@@ -254,11 +254,6 @@ type
     procedure TestRun_DefaultParam_OmitLast;
     procedure TestRun_DefaultParam_OmitMultiple;
 
-    { Open arrays }
-    procedure TestRun_OpenArray_Sum;
-    procedure TestRun_OpenArray_HighLow;
-    procedure TestRun_OpenArray_Length;
-
     { var / const params }
     procedure TestRun_VarParam_SwapIntegers;
     procedure TestRun_VarParam_ModifyString;
@@ -3657,73 +3652,6 @@ begin
 end;
 
 { ------------------------------------------------------------------ }
-{ Open array e2e tests                                                 }
-{ ------------------------------------------------------------------ }
-
-const
-  SrcOpenArraySum =
-    'program P;'                                            + #10 +
-    'function Sum(const A: array of Integer): Integer;'    + #10 +
-    'var I: Integer;'                                      + #10 +
-    'begin'                                                + #10 +
-    '  Result := 0;'                                       + #10 +
-    '  for I := 0 to High(A) do'                          + #10 +
-    '    Result := Result + A[I]'                          + #10 +
-    'end;'                                                 + #10 +
-    'begin'                                                + #10 +
-    '  WriteLn(Sum([1, 2, 3, 4, 5]))'                     + #10 +
-    'end.';
-
-  SrcOpenArrayHighLow =
-    'program P;'                                            + #10 +
-    'procedure PrintBounds(const A: array of Integer);'    + #10 +
-    'begin'                                                + #10 +
-    '  WriteLn(Low(A));'                                   + #10 +
-    '  WriteLn(High(A))'                                   + #10 +
-    'end;'                                                 + #10 +
-    'begin'                                                + #10 +
-    '  PrintBounds([10, 20, 30])'                          + #10 +
-    'end.';
-
-  SrcOpenArrayLength =
-    '''
-        program P;
-        function Count(const A: array of Integer): Integer;
-        begin
-          Result := Length(A)
-        end;
-        begin
-          WriteLn(Count([10, 20, 30]))
-        end.
-        ''';
-
-procedure TE2ETests.TestRun_OpenArray_Sum;
-var Output: string; RCode: Integer;
-begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcOpenArraySum, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('15', '15' + LE, Output);
-end;
-
-procedure TE2ETests.TestRun_OpenArray_HighLow;
-var Output: string; RCode: Integer;
-begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcOpenArrayHighLow, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('low=0 high=2', '0' + LE + '2' + LE, Output);
-end;
-
-procedure TE2ETests.TestRun_OpenArray_Length;
-var Output: string; RCode: Integer;
-begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcOpenArrayLength, Output, RCode));
-  AssertEquals('exit code 0', 0, RCode);
-  AssertEquals('Length([10,20,30]) = 3', '3' + LE, Output);
-end;
-
 { ------------------------------------------------------------------ }
 { var/const param e2e tests                                            }
 { ------------------------------------------------------------------ }

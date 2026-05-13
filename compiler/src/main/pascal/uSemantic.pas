@@ -415,6 +415,13 @@ begin
        TOpenArrayTypeDesc(AActual).ElementType then
       Exit;
   end;
+  { Static array coerced to open-array: element types must match }
+  if (AExpected.Kind = tyOpenArray) and (AActual.Kind = tyStaticArray) then
+  begin
+    if TOpenArrayTypeDesc(AExpected).ElementType =
+       TStaticArrayTypeDesc(AActual).ElementType then
+      Exit;
+  end;
   { Procedural-type assignability: signatures must match (return type,
     parameter count, parameter types, parameter modes). }
   if (AExpected.Kind = tyProcedural) and (AActual.Kind = tyProcedural) then
@@ -4004,6 +4011,14 @@ begin
       TOpenArrayTypeDesc(AArg).ElementType) then
   begin
     Result := 2;
+    Exit;
+  end;
+  { Static array coerced to open-array: widening match (score 1) }
+  if (AParam.Kind = tyOpenArray) and (AArg.Kind = tyStaticArray) and
+     (TOpenArrayTypeDesc(AParam).ElementType =
+      TStaticArrayTypeDesc(AArg).ElementType) then
+  begin
+    Result := 1;
     Exit;
   end;
   { Same numeric kind = exact match (same kind, just possibly different

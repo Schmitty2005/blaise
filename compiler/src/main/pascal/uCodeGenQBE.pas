@@ -4613,6 +4613,14 @@ begin
             ArgLine := ArgLine + Format(', l %s, l %d',
               [ArgTemp, TArrayLiteralExpr(TASTExpr(ACall.Args.Items[I])).Elements.Count - 1]);
           end
+          else if TASTExpr(ACall.Args.Items[I]).ResolvedType.Kind = tyStaticArray then
+          begin
+            { Static array coerced to open-array: pass base ptr + compile-time high }
+            ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+            ArgLine := ArgLine + Format(', l %s, l %d', [ArgTemp,
+              TStaticArrayTypeDesc(TASTExpr(ACall.Args.Items[I]).ResolvedType).HighBound -
+              TStaticArrayTypeDesc(TASTExpr(ACall.Args.Items[I]).ResolvedType).LowBound]);
+          end
           else
           begin
             ArgTemp  := EmitExpr(TASTExpr(ACall.Args.Items[I]));
@@ -4649,6 +4657,14 @@ begin
           ArgTemp := EmitArrayLiteralExpr(TArrayLiteralExpr(TASTExpr(ACall.Args.Items[I])));
           ArgLine := ArgLine + Format('l %s, l %d',
             [ArgTemp, TArrayLiteralExpr(TASTExpr(ACall.Args.Items[I])).Elements.Count - 1]);
+        end
+        else if TASTExpr(ACall.Args.Items[I]).ResolvedType.Kind = tyStaticArray then
+        begin
+          { Static array coerced to open-array: pass base ptr + compile-time high }
+          ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+          ArgLine := ArgLine + Format('l %s, l %d', [ArgTemp,
+            TStaticArrayTypeDesc(TASTExpr(ACall.Args.Items[I]).ResolvedType).HighBound -
+            TStaticArrayTypeDesc(TASTExpr(ACall.Args.Items[I]).ResolvedType).LowBound]);
         end
         else
         begin
@@ -5829,6 +5845,14 @@ begin
               ArgLine := ArgLine + Format(', l %s, l %d',
                 [ArgTemp, TArrayLiteralExpr(TASTExpr(FC.Args.Items[I])).Elements.Count - 1]);
             end
+            else if TASTExpr(FC.Args.Items[I]).ResolvedType.Kind = tyStaticArray then
+            begin
+              { Static array coerced to open-array: pass base ptr + compile-time high }
+              ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
+              ArgLine := ArgLine + Format(', l %s, l %d', [ArgTemp,
+                TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[I]).ResolvedType).HighBound -
+                TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[I]).ResolvedType).LowBound]);
+            end
             else
             begin
               ArgTemp  := EmitExpr(TASTExpr(FC.Args.Items[I]));
@@ -5872,6 +5896,14 @@ begin
             ArgTemp := EmitArrayLiteralExpr(TArrayLiteralExpr(TASTExpr(FC.Args.Items[I])));
             ArgLine := ArgLine + Format('l %s, l %d',
               [ArgTemp, TArrayLiteralExpr(TASTExpr(FC.Args.Items[I])).Elements.Count - 1]);
+          end
+          else if TASTExpr(FC.Args.Items[I]).ResolvedType.Kind = tyStaticArray then
+          begin
+            { Static array coerced to open-array: pass base ptr + compile-time high }
+            ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
+            ArgLine := ArgLine + Format('l %s, l %d', [ArgTemp,
+              TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[I]).ResolvedType).HighBound -
+              TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[I]).ResolvedType).LowBound]);
           end
           else
           begin
