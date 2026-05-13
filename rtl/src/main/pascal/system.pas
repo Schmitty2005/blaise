@@ -83,6 +83,24 @@ type
   { nil is the zero value for all pointer and string types. }
 
 { ------------------------------------------------------------------ }
+{  Platform constants                                                 }
+{ ------------------------------------------------------------------ }
+
+const
+  { Line ending for the current platform. POSIX = #10, Windows = #13#10.
+    Blaise currently targets POSIX only. }
+  LineEnding = #10;
+
+  { Delphi compatibility alias for LineEnding. }
+  sLineBreak = LineEnding;
+
+  { Directory separator character. }
+  DirectorySeparator = '/';
+
+  { PATH environment variable separator. }
+  PathSeparator = ':';
+
+{ ------------------------------------------------------------------ }
 {  Built-in I/O procedures                                            }
 { ------------------------------------------------------------------ }
 

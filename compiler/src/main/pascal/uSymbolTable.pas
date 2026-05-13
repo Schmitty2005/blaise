@@ -1159,6 +1159,21 @@ begin
   Sym.ConstValue := 2147483647;
   Define(Sym);
 
+  { System string/path constants — defined in system.pas; pre-seeded here
+    so they resolve even before system.pas is loaded as a unit. }
+  Sym := TSymbol.Create('LineEnding', skConstant, FTypeString);
+  Sym.ConstString := #10;
+  Define(Sym);
+  Sym := TSymbol.Create('sLineBreak', skConstant, FTypeString);
+  Sym.ConstString := #10;
+  Define(Sym);
+  Sym := TSymbol.Create('DirectorySeparator', skConstant, FTypeString);
+  Sym.ConstString := '/';
+  Define(Sym);
+  Sym := TSymbol.Create('PathSeparator', skConstant, FTypeString);
+  Sym.ConstString := ':';
+  Define(Sym);
+
   { Built-in I/O procedures }
   Sym := TSymbol.Create('Write',   skProcedure, nil);
   Define(Sym);
