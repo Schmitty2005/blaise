@@ -211,6 +211,7 @@ type
     procedure TestRun_ForIn_String_IntegerVar_PrintsBytes;
     procedure TestRun_ForIn_Array_Integer_PrintsElements;
     procedure TestRun_ForIn_ClassEnumerator_PrintsElements;
+    procedure TestRun_ForIn_Set_PrintsMembers;
 
     { Control flow }
     procedure TestRun_For_Upward_PrintsRange;
@@ -3152,6 +3153,20 @@ const
     '  R.Free;'                                                   + #10 +
     'end.';
 
+  SrcForInSet =
+    'program P;'                                          + #10 +
+    'type'                                                + #10 +
+    '  TColor = (Red, Green, Blue);'                      + #10 +
+    '  TColorSet = set of TColor;'                        + #10 +
+    'var'                                                 + #10 +
+    '  S: TColorSet;'                                     + #10 +
+    '  C: TColor;'                                        + #10 +
+    'begin'                                               + #10 +
+    '  S := [Red, Blue];'                                 + #10 +
+    '  for C in S do'                                     + #10 +
+    '    WriteLn(Ord(C));'                                + #10 +
+    'end.';
+
 procedure TE2ETests.TestRun_ForIn_String_ByteVar_PrintsBytes;
 var Output: string; RCode: Integer;
 begin
@@ -3188,6 +3203,16 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcForInClassEnum, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('range 3..5', '3' + LE + '4' + LE + '5' + LE, Output);
+end;
+
+procedure TE2ETests.TestRun_ForIn_Set_PrintsMembers;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcForInSet, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  { S = [Red, Blue] — Red=0, Blue=2; iteration order is ordinal ascending }
+  AssertEquals('Red=0 Blue=2', '0' + LE + '2' + LE, Output);
 end;
 
 { ------------------------------------------------------------------ }

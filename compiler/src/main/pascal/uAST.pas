@@ -238,6 +238,10 @@ type
     ArrayHigh:            Integer;    { compile-time upper bound }
     { String byte-iteration path (IsStringIter = True) }
     IsStringIter:         Boolean;
+    { Set iteration path (IsSetIter = True) }
+    IsSetIter:            Boolean;
+    SetBitCount:          Integer;   { number of bits in the set (= enum member count) }
+    SetMaskVarName:       string;    { synthetic slot holding the evaluated set mask }
     destructor Destroy; override;
   end;
 

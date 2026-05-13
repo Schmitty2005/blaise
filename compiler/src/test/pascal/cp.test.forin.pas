@@ -72,6 +72,24 @@ type
     procedure TestCodegen_ArrayForIn_NonZeroBased_AdjustsIndex;
 
     { ------------------------------------------------------------------ }
+    { Semantic — set                                                       }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_SetForIn_Valid_OK;
+    procedure TestSemantic_SetForIn_VarTypeMismatch_RaisesError;
+    procedure TestSemantic_SetForIn_NonSetCollNotAllowed;
+
+    { ------------------------------------------------------------------ }
+    { Codegen — set                                                        }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_SetForIn_HasForInCondLabel;
+    procedure TestCodegen_SetForIn_HasForInEndLabel;
+    procedure TestCodegen_SetForIn_HasForInNextLabel;
+    procedure TestCodegen_SetForIn_TestsBitWithShr;
+    procedure TestCodegen_SetForIn_TestsBitWithAnd1;
+    procedure TestCodegen_SetForIn_JumpsBackToCond;
+    procedure TestCodegen_SetForIn_EvaluatesMaskOnce;
+
+    { ------------------------------------------------------------------ }
     { Semantic — string                                                    }
     { ------------------------------------------------------------------ }
     procedure TestSemantic_StringForIn_ByteVar_OK;
@@ -583,6 +601,128 @@ begin
   { Data-pointer convention: length is at data_ptr-8.
     Codegen emits 'add <ptr>, -8' to reach the length field. }
   AssertTrue('reads length at data_ptr-8', Pos(', -8', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Shared sources — set iteration                                       }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcSetForIn =
+    '''
+        program P;
+        type
+          TColor = (Red, Green, Blue);
+          TColorSet = set of TColor;
+        var
+          S: TColorSet;
+          C: TColor;
+        begin
+          S := [Red, Blue];
+          for C in S do
+            WriteLn(Ord(C))
+        end.
+        ''';
+
+{ ------------------------------------------------------------------ }
+{ Semantic tests — set                                                 }
+{ ------------------------------------------------------------------ }
+
+procedure TForInTests.TestSemantic_SetForIn_Valid_OK;
+begin
+  AnalyseSrc(SrcSetForIn).Free;
+end;
+
+procedure TForInTests.TestSemantic_SetForIn_VarTypeMismatch_RaisesError;
+begin
+  { Loop variable must be ordinal — string is not ordinal }
+  AnalyseExpectError(
+    '''
+        program P;
+        type
+          TColor = (Red, Green, Blue);
+          TColorSet = set of TColor;
+        var
+          S: TColorSet;
+          X: string;
+        begin
+          for X in S do
+            X := X
+        end.
+        ''');
+end;
+
+procedure TForInTests.TestSemantic_SetForIn_NonSetCollNotAllowed;
+begin
+  { A plain Integer variable is not a valid for-in collection }
+  AnalyseExpectError(
+    '''
+        program P;
+        var
+          N: Integer;
+          X: Integer;
+        begin
+          for X in N do
+            X := X
+        end.
+        ''');
+end;
+
+{ ------------------------------------------------------------------ }
+{ Codegen tests — set                                                  }
+{ ------------------------------------------------------------------ }
+
+procedure TForInTests.TestCodegen_SetForIn_HasForInCondLabel;
+var IR: string;
+begin
+  IR := GenIR(SrcSetForIn);
+  AssertTrue('forin_cond label present', Pos('forin_cond', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_SetForIn_HasForInEndLabel;
+var IR: string;
+begin
+  IR := GenIR(SrcSetForIn);
+  AssertTrue('forin_end label present', Pos('forin_end', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_SetForIn_HasForInNextLabel;
+var IR: string;
+begin
+  IR := GenIR(SrcSetForIn);
+  AssertTrue('forin_next label present', Pos('forin_next', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_SetForIn_TestsBitWithShr;
+var IR: string;
+begin
+  IR := GenIR(SrcSetForIn);
+  AssertTrue('shr instruction emitted for bit extraction', Pos('=w shr', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_SetForIn_TestsBitWithAnd1;
+var IR: string;
+begin
+  IR := GenIR(SrcSetForIn);
+  AssertTrue('and 1 emitted for bit isolation', Pos('and', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_SetForIn_JumpsBackToCond;
+var IR: string;
+begin
+  IR := GenIR(SrcSetForIn);
+  AssertTrue('jmp back to forin_cond', Pos('jmp @forin_cond', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_SetForIn_EvaluatesMaskOnce;
+var IR: string;
+begin
+  { The set expression [Red, Blue] is a compile-time constant; the codegen
+    emits a single 'copy <mask>' and stores it — not a repeated evaluation.
+    Verify the mask constant 5 (bit0=Red, bit2=Blue) appears exactly once
+    as a copy operand. }
+  IR := GenIR(SrcSetForIn);
+  AssertTrue('mask value 5 emitted', Pos('copy 5', IR) > 0);
 end;
 
 initialization

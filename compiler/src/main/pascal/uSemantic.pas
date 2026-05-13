@@ -3078,9 +3078,56 @@ begin
         FCurrentLocalBlock.Decls.Add(SynthDecl);
       end;
     end
+    else if CollType.Kind = tySet then
+    begin
+      { ---- Set iteration path ---- }
+      VarSym := FTable.Lookup(ForInS.VarName);
+      if VarSym = nil then
+        SemanticError(
+          Format('Undeclared loop variable ''%s''', [ForInS.VarName]),
+          ForInS.Line, ForInS.Col);
+      if VarSym.Kind <> skVariable then
+        SemanticError(
+          Format('''%s'' is not a variable', [ForInS.VarName]),
+          ForInS.Line, ForInS.Col);
+      ElemType := TSetTypeDesc(CollType).BaseType;
+      { Loop variable must be the same enum type as the set's base type,
+        or any numeric type (ordinal compatibility). Reject non-ordinal types. }
+      if not VarSym.TypeDesc.IsOrdinal then
+        SemanticError(
+          Format('for-in over set: loop variable ''%s'' must be an ordinal type',
+            [ForInS.VarName]),
+          ForInS.Line, ForInS.Col);
+      ForInS.VarIsGlobal    := VarSym.IsGlobal;
+      ForInS.IsSetIter      := True;
+      ForInS.ResolvedVarType := ElemType;
+      ForInS.SetBitCount    := TSetTypeDesc(CollType).BitCount;
+
+      { Inject synthetic mask slot (Integer) for the evaluated set value }
+      ForInS.SetMaskVarName := '__setmask_' + IntToStr(FForInCounter);
+      { Inject synthetic index slot (Integer) for the bit position }
+      ForInS.IdxVarName := '__idx_' + IntToStr(FForInCounter);
+      Inc(FForInCounter);
+      if FCurrentLocalBlock <> nil then
+      begin
+        SynthDecl := TVarDecl.Create;
+        SynthDecl.Names.Add(ForInS.SetMaskVarName);
+        SynthDecl.TypeName    := 'Integer';
+        SynthDecl.ResolvedType := FTable.TypeInteger;
+        SynthDecl.IsGlobal    := False;
+        FCurrentLocalBlock.Decls.Add(SynthDecl);
+
+        SynthDecl := TVarDecl.Create;
+        SynthDecl.Names.Add(ForInS.IdxVarName);
+        SynthDecl.TypeName    := 'Integer';
+        SynthDecl.ResolvedType := FTable.TypeInteger;
+        SynthDecl.IsGlobal    := False;
+        FCurrentLocalBlock.Decls.Add(SynthDecl);
+      end;
+    end
     else
       SemanticError(
-        'for-in collection must be a class instance, static array, or string',
+        'for-in collection must be a class instance, static array, string, or set',
         ForInS.Line, ForInS.Col);
 
     Inc(FLoopDepth);

@@ -523,7 +523,10 @@ ForStmt
  *     the Current property type of the enumerator.
  *   - String: IDENT must be an ordinal type (Byte or Integer); each
  *     iteration yields one raw UTF-8 byte.  There is no Char type in
- *     Blaise — string subscript and for-in both expose bytes. *)
+ *     Blaise — string subscript and for-in both expose bytes.
+ *   - Set (set of TEnum): IDENT must be an ordinal type; each iteration
+ *     yields one enum member whose bit is set, in ascending ordinal order.
+ *     The set expression is evaluated once before iteration begins. *)
 
 TryFinallyStmt
     = TRY StmtList FINALLY StmtList END

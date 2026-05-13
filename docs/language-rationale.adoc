@@ -1204,13 +1204,48 @@ releases the enumerator automatically.
   in Blaise — `S[N]` and `for B in S do` both expose bytes, not codepoints.
   This is consistent with the language-rationale decision documented under
   _No Char Type_.
+* Generic collection iteration (Step 9b): `for X in List do` where `List` is
+  a generic class instantiation (e.g. `TList<Integer>`) — requires
+  `GetEnumerator` / `MoveNext` / `Current` property on the instantiated type.
+  Property cloning in `InstantiateGeneric` is implemented; works for any
+  generic class that exposes the enumerator protocol.
+* Set iteration (Step 7d): `for X in S do` where `S` is a `set of TEnum`
+  value — iterates the members of the set in ascending ordinal order.  The set
+  expression is evaluated once before the loop begins.  The loop variable must
+  be an ordinal type compatible with the set's base enum.
 
 ==== What is not yet supported
 
-* Iterating over sets (`for X in [a, b, c] do`) — deferred.
-* Generic collection iteration (`for X in List do` where `List: TList<T>`) —
-  requires Step 9b: property handling in `InstantiateGeneric` plus enumerator
-  additions to `generics.collections.pas`.
+All known for..in collection kinds are now implemented.
+
+==== Set iteration desugaring
+
+`for X in S do Body` where `S: set of TEnum` desugars to a bit-scan loop:
+
+[source,pascal]
+----
+{ for X in S do Body }
+__setmask := S;          { evaluate S exactly once }
+__idx := 0;
+while __idx < BitCount do
+begin
+  if (__setmask shr __idx) and 1 <> 0 then
+  begin
+    X := TEnum(__idx);
+    Body
+  end;
+  __idx := __idx + 1
+end;
+----
+
+The set expression is evaluated into a synthetic `__setmask` slot before the
+loop so that side effects (if any) occur once, matching Delphi semantics.
+Iteration is always in ascending ordinal order (bit 0 first), regardless of
+the order in which members were added to the set literal.
+
+The loop variable must be an ordinal type; using a non-ordinal variable (e.g.
+`string`) is a semantic error.  Assigning to an `Integer` variable is
+permitted (enum/integer ordinal compatibility applies, as elsewhere in Blaise).
 
 ==== Alternatives rejected
 

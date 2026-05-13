@@ -1815,6 +1815,12 @@ var
   ElemPtr:    string;
   QLoad:      string;
   NxtW:       string;
+  { Set iteration locals }
+  MaskSlot:   string;
+  MaskT:      string;
+  BitT:       string;
+  OrdT:       string;
+  LblNext:    string;
 begin
   if AStmt.IsArrayIter then
   begin
@@ -2012,6 +2018,121 @@ begin
     EmitLine(Format('  %s =w add %s, 1', [NxtW, IdxW]));
     if IsPromoted(AStmt.IdxVarName) then
       EmitLine(Format('  %s =w copy %s', [IdxSlot, NxtW]))
+    else
+      EmitLine(Format('  storew %s, %s', [NxtW, IdxSlot]));
+    EmitLine(Format('  jmp @%s', [LblCond]));
+
+    EmitLine('@' + LblEnd);
+    Exit;
+  end;
+
+  if AStmt.IsSetIter then
+  begin
+    { ---- Set iteration ----
+      Evaluates the set expression once into a mask slot, then iterates
+      bit positions 0..BitCount-1.  For each set bit, assigns the
+      corresponding enum ordinal to the loop variable and runs the body.
+
+      Desugaring:
+        __setmask := <SetExpr>
+        __idx := 0
+        @forin_cond:
+          if __idx >= BitCount then goto forin_end
+        @forin_body:
+          bit := (__setmask shr __idx) and 1
+          if bit = 0 then goto forin_next
+          LoopVar := TEnum(__idx)
+          Body
+        @forin_next:
+          __idx := __idx + 1
+          goto forin_cond
+        @forin_end: }
+    MaskSlot := '%_var_' + AStmt.SetMaskVarName;
+    IdxSlot  := '%_var_' + AStmt.IdxVarName;
+    LblCond  := AllocLabel('forin_cond');
+    LblBody  := AllocLabel('forin_body');
+    LblNext  := AllocLabel('forin_next');
+    LblEnd   := AllocLabel('forin_end');
+
+    { Evaluate the set expression once and store in mask slot }
+    MaskT := EmitExpr(AStmt.CollExpr);
+    if IsPromoted(AStmt.SetMaskVarName) then
+      EmitLine(Format('  %%_var_%s =w copy %s', [AStmt.SetMaskVarName, MaskT]))
+    else
+      EmitLine(Format('  storew %s, %s', [MaskT, MaskSlot]));
+
+    { Initialise index to 0 }
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %%_var_%s =w copy 0', [AStmt.IdxVarName]))
+    else
+      EmitLine(Format('  storew 0, %s', [IdxSlot]));
+    EmitLine(Format('  jmp @%s', [LblCond]));
+
+    { Condition: idx < BitCount }
+    EmitLine('@' + LblCond);
+    IdxW := AllocTemp;
+    CmpT := AllocTemp;
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
+    else
+      EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+    EmitLine(Format('  %s =w csltw %s, %d', [CmpT, IdxW, AStmt.SetBitCount]));
+    EmitLine(Format('  jnz %s, @%s, @%s', [CmpT, LblBody, LblEnd]));
+
+    { Body block: test bit, skip if clear }
+    EmitLine('@' + LblBody);
+    MaskT := AllocTemp;
+    BitT  := AllocTemp;
+    if IsPromoted(AStmt.SetMaskVarName) then
+      EmitLine(Format('  %s =w copy %%_var_%s', [MaskT, AStmt.SetMaskVarName]))
+    else
+      EmitLine(Format('  %s =w loadw %s', [MaskT, MaskSlot]));
+    IdxW := AllocTemp;
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
+    else
+      EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+    EmitLine(Format('  %s =w shr %s, %s', [BitT, MaskT, IdxW]));
+    CmpT := AllocTemp;
+    EmitLine(Format('  %s =w and %s, 1', [CmpT, BitT]));
+    { If bit is 0 skip body, go directly to forin_next }
+    EmitLine(Format('  jnz %s, @%s_yes, @%s', [CmpT, LblBody, LblNext]));
+    EmitLine('@' + LblBody + '_yes');
+
+    FBreakLabels.AddObject(LblEnd, TObject(PtrUInt(FExcDepth)));
+    FContinueLabels.AddObject(LblNext, TObject(PtrUInt(FExcDepth)));
+    try
+      { Assign ordinal (idx) to loop variable as enum }
+      OrdT := AllocTemp;
+      IdxW := AllocTemp;
+      if IsPromoted(AStmt.IdxVarName) then
+        EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
+      else
+        EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+      EmitLine(Format('  %s =w copy %s', [OrdT, IdxW]));
+      if not AStmt.VarIsGlobal and IsPromoted(AStmt.VarName) then
+        EmitLine(Format('  %%_var_%s =w copy %s', [AStmt.VarName, OrdT]))
+      else
+        EmitLine(Format('  storew %s, %s',
+          [OrdT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+
+      EmitStmt(AStmt.Body);
+    finally
+      FBreakLabels.Delete(FBreakLabels.Count - 1);
+      FContinueLabels.Delete(FContinueLabels.Count - 1);
+    end;
+
+    { Increment index }
+    EmitLine('@' + LblNext);
+    IdxW := AllocTemp;
+    NxtW := AllocTemp;
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
+    else
+      EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+    EmitLine(Format('  %s =w add %s, 1', [NxtW, IdxW]));
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %%_var_%s =w copy %s', [AStmt.IdxVarName, NxtW]))
     else
       EmitLine(Format('  storew %s, %s', [NxtW, IdxSlot]));
     EmitLine(Format('  jmp @%s', [LblCond]));
