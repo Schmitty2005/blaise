@@ -1931,6 +1931,100 @@ as a bare identifier (output variable name).
 * *Explicit `QueryInterface` method* — Requires the programmer to manage typeinfo
   pointers manually; the intrinsic is safer and more ergonomic.
 
+== Generic Interfaces and the Collections Framework
+
+=== Decision
+
+Blaise supports generic interfaces — interface types with type parameters —
+using the same `<K, V>` syntax as generic classes:
+
+[source,pascal]
+----
+type
+  IMap<K, V> = interface
+    procedure Add(Key: K; Value: V);
+    function  TryGetValue(Key: K; var Value: V): Boolean;
+    function  ContainsKey(Key: K): Boolean;
+    procedure Remove(Key: K);
+    function  GetCount: Integer;
+  end;
+----
+
+A generic class implements a generic interface by listing the instantiated
+interface name in its parent clause:
+
+[source,pascal]
+----
+TDictionary<K, V> = class(IMap<K, V>)
+  ...
+end;
+----
+
+The RTL (`rtl/src/main/pascal/generics.collections.pas`) provides the
+canonical collection types.  New code — tests, compiler passes, and RTL
+units — must use these types rather than writing inline collection logic:
+
+[cols="1,2", options="header"]
+|===
+| Type | Purpose
+| `TList<T>` | Ordered, growable list
+| `TStack<T>` | LIFO stack
+| `TQueue<T>` | FIFO queue
+| `TSet<T>` | Unordered membership set
+| `TDictionary<K,V>` | Key→value map (unordered)
+| `TOrderedDictionary<K,V>` | Key→value map (insertion-ordered)
+| `IMap<K,V>` | Map interface abstracting both dictionary types
+|===
+
+=== Rationale
+
+* *Interface abstraction over concrete types* — `IMap<K,V>` lets callers
+  accept either `TDictionary` or `TOrderedDictionary` without caring which
+  implementation is behind the variable.  This is the primary use-case for
+  interfaces in a generics-era codebase.
+
+* *No `var` parameter type inference gap* — Interface method signatures
+  carry var-param flags in `TInterfaceTypeDesc.FParamIsVar` (a per-method
+  comma-separated `0`/`1` string built during semantic analysis).  The
+  codegen uses these flags to pass var params as addresses (`l`) rather than
+  values (`w`) at interface dispatch sites, where no concrete `TMethodDecl`
+  is available.
+
+* *Reuse over reinvention* — Inline collection logic written for one test
+  or compiler pass is never tested beyond that narrow context.  Routing all
+  collection use through the RTL types means every new feature exercises the
+  same code paths and bugs surface early.
+
+* *Structural interface identity* — As with plain interfaces, generic
+  interface identity is based on the `typeinfo_*` symbol emitted at
+  instantiation time, not on GUIDs.  `IMap<Integer,Integer>` and
+  `IMap<String,Integer>` are distinct types with distinct typeinfo pointers.
+
+=== Implementation notes
+
+When the semantic analyser instantiates a generic class that lists a generic
+interface in its parent clause (e.g. `TDictionary<K,V> = class(IMap<K,V>)`),
+`InstantiateGeneric` detects that the substituted `ParentName` resolves to
+`tyInterface`, moves it to `ImplementsNames`, and calls `AddImplements` on
+the concrete `TRecordTypeDesc`.  This wires the type-compatibility check that
+allows `M: IMap<Integer,Integer> := TDictionary<Integer,Integer>.Create`.
+
+The codegen emits itab and impllist data for generic class instances in
+`EmitInterfaceDefs`, parallel to the existing path for non-generic classes.
+Both class and interface names in itab symbols are passed through `QBEMangle`
+to produce valid QBE identifiers (e.g. `$itab_TDictionary_Integer_Integer_IMap_Integer_Integer`).
+
+=== Alternatives Rejected
+
+* *Structural duck-typing without interfaces* — Blaise already uses
+  structural protocols for `for..in` (GetEnumerator/MoveNext/Current).
+  Extending that pattern to maps would mean callers cannot name the
+  abstraction or store it in a typed variable.  An explicit interface is
+  clearer and more composable.
+
+* *Non-generic `IMap` with `TObject` keys and values* — Pre-generics
+  workaround; loses type safety and requires casts at every use site.
+
 == Open Language Questions
 
 These items are under active consideration but not yet decided.
