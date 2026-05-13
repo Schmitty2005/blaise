@@ -161,10 +161,15 @@ compiles the next version. The bootstrap chain starts from the binary in
 
 === Bootstrap from a release
 
+The RTL build compiles its Pascal units (`blaise_str.pas`, `blaise_arc.pas`,
+`blaise_sys.pas`) using the Blaise binary at `compiler/target/blaise`. On a
+clean checkout that binary does not exist yet, so the release binary must be
+passed explicitly via the `BLAISE` make variable.
+
 [source,shell]
 ----
-# 1. Build the RTL (C static library)
-cd rtl && make && make install && cd ..
+# 1. Build the RTL using the release binary (BLAISE= avoids chicken-and-egg)
+cd rtl && make BLAISE=../releases/v0.7.0/blaise && make install && cd ..
 
 # 2. Compile the compiler using the latest release binary
 releases/v0.7.0/blaise \
@@ -177,6 +182,9 @@ releases/v0.7.0/blaise \
 vendor/qbe/qbe -o /tmp/blaise.s /tmp/blaise.ssa
 gcc -o compiler/target/blaise /tmp/blaise.s compiler/target/blaise_rtl.a
 ----
+
+Once `compiler/target/blaise` exists, subsequent RTL rebuilds (`make && make install`)
+work without the override.
 
 === Build via PasBuild
 
