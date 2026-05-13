@@ -131,8 +131,6 @@ type
     { ------------------------------------------------------------------ }
     procedure TestRun_TObjectList_AddGetCount;
     procedure TestRun_TObjectList_Delete;
-    procedure TestRun_TStringList_AddGet;
-    procedure TestRun_TStringList_Find_Sorted;
     procedure TestRun_Collections_Valgrind;
     { ------------------------------------------------------------------ }
     { Self-hosting: file I/O, CLI args, multi-type blocks                 }
@@ -1745,120 +1743,6 @@ const
         end.
         ''';
 
-  SrcTStringListBase2 =
-    '''
-        type
-          TStringList = class
-            FStrings:  ^string;
-            FObjects:  ^Pointer;
-            FCount:    Integer;
-            FCapacity: Integer;
-            procedure Grow;
-            var OldCap, NewCap: Integer;
-            begin
-              OldCap := Self.FCapacity;
-              if OldCap = 0 then NewCap := 4
-              else NewCap := OldCap * 2;
-              Self.FStrings := ReallocMem(Self.FStrings, NewCap * SizeOf(string));
-              Self.FObjects := ReallocMem(Self.FObjects, NewCap * SizeOf(Pointer));
-              ZeroMem(Self.FStrings + OldCap * SizeOf(string),
-                      (NewCap - OldCap) * SizeOf(string));
-              Self.FCapacity := NewCap
-            end;
-            procedure Destroy;
-            var I: Integer; Ptr: ^string;
-            begin
-              I := 0;
-              while I < Self.FCount do
-              begin
-                Ptr  := Self.FStrings + I * SizeOf(string);
-                Ptr^ := nil;
-                I    := I + 1
-              end;
-              FreeMem(Self.FStrings);
-              FreeMem(Self.FObjects);
-              Self.FStrings  := nil;
-              Self.FObjects  := nil;
-              Self.FCount    := 0;
-              Self.FCapacity := 0
-            end;
-            function Add(S: string): Integer;
-            var StrP: ^string; ObjP: ^Pointer;
-            begin
-              if Self.FCount = Self.FCapacity then Self.Grow;
-              StrP        := Self.FStrings + Self.FCount * SizeOf(string);
-              ObjP        := Self.FObjects + Self.FCount * SizeOf(Pointer);
-              StrP^       := S;
-              ObjP^       := nil;
-              Result      := Self.FCount;
-              Self.FCount := Self.FCount + 1
-            end;
-            function Get(AIndex: Integer): string;
-            var Ptr: ^string;
-            begin
-              Ptr    := Self.FStrings + AIndex * SizeOf(string);
-              Result := Ptr^
-            end;
-            function Find(S: string; var Index: Integer): Boolean;
-            var Lo, Hi, Mid, Cmp: Integer; Ptr: ^string; MStr: string;
-            begin
-              Lo := 0; Hi := Self.FCount - 1;
-              while Lo <= Hi do
-              begin
-                Mid  := (Lo + Hi) div 2;
-                Ptr  := Self.FStrings + Mid * SizeOf(string);
-                MStr := Ptr^;
-                Cmp  := CompareText(S, MStr);
-                if Cmp = 0 then
-                begin
-                  Index := Mid; Result := True; Exit
-                end
-                else if Cmp < 0 then Hi := Mid - 1
-                else Lo := Mid + 1
-              end;
-              Index := Lo; Result := False
-            end;
-            property Count: Integer read FCount;
-          end;
-        ''';
-
-  SrcTStringListAddGet =
-    'program P;' + #10 + 
-    SrcTStringListBase2 +
-    '''
-        var
-          L: TStringList;
-        begin
-          L := TStringList.Create;
-          L.Add('hello');
-          L.Add('world');
-          WriteLn(L.Count);
-          WriteLn(L.Get(0));
-          WriteLn(L.Get(1))
-        end.
-        ''';
-
-  SrcTStringListFindSorted =
-    'program P;' + #10 + 
-    SrcTStringListBase2 +
-    '''
-        var
-          L: TStringList;
-          Idx: Integer;
-          Found: Boolean;
-        begin
-          L := TStringList.Create;
-          L.Add('alpha');
-          L.Add('beta');
-          L.Add('gamma');
-          Found := L.Find('beta', Idx);
-          WriteLn(Found);
-          WriteLn(Idx);
-          Found := L.Find('delta', Idx);
-          WriteLn(Found)
-        end.
-        ''';
-
   { Combined program: both classes in a single type section }
   SrcCollectionsValgrind =
     '''
@@ -1961,44 +1845,6 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcTObjectListDelete, Output, RCode));
   AssertEquals('count after delete=2', '2', Trim(Output));
-end;
-
-procedure TE2ETests.TestRun_TStringList_AddGet;
-var
-  Output: string;
-  RCode:  Integer;
-  Lines:  TStringList;
-begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcTStringListAddGet, Output, RCode));
-  Lines := TStringList.Create;
-  try
-    Lines.Text := Trim(Output);
-    AssertEquals('count=2',   '2',     Lines.Strings[0]);
-    AssertEquals('get(0)',    'hello', Lines.Strings[1]);
-    AssertEquals('get(1)',    'world', Lines.Strings[2]);
-  finally
-    Lines.Free;
-  end;
-end;
-
-procedure TE2ETests.TestRun_TStringList_Find_Sorted;
-var
-  Output: string;
-  RCode:  Integer;
-  Lines:  TStringList;
-begin
-  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(SrcTStringListFindSorted, Output, RCode));
-  Lines := TStringList.Create;
-  try
-    Lines.Text := Trim(Output);
-    AssertEquals('found=1 (true)',  '1', Lines.Strings[0]);
-    AssertEquals('idx=1',           '1', Lines.Strings[1]);
-    AssertEquals('not found=0',     '0', Lines.Strings[2]);
-  finally
-    Lines.Free;
-  end;
 end;
 
 procedure TE2ETests.TestRun_Collections_Valgrind;

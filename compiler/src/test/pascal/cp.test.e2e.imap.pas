@@ -15,22 +15,12 @@ unit cp.test.e2e.imap;
 interface
 
 uses
-  classes, sysutils, process, bcl.testing,
-  uLexer, uParser, uAST, uSemantic, uCodeGenQBE;
+  bcl.testing, cp.test.e2e.base;
 
 type
-  TE2EIMapTests = class(TTestCase)
-  private
-    FQBE:     string;
-    FRTL:     string;
-    FScratch: string;
-    FCounter: Integer;
-    function  ProjectRoot: string;
-    function  ToolchainAvailable: Boolean;
-    function  CompileAndRun(const ASrc: string; out AStdout: string; out AExitCode: Integer): Boolean;
+  TE2EIMapTests = class(TE2ETestCase)
   protected
     procedure SetUp; override;
-    procedure TearDown; override;
   published
     procedure TestRun_IMap_TDictionary_AddAndContainsKey;
     procedure TestRun_IMap_TDictionary_TryGetValue;
@@ -329,143 +319,13 @@ const
     ''';
 
 { ------------------------------------------------------------------ }
-{ Infrastructure                                                        }
+{ Setup                                                                }
 { ------------------------------------------------------------------ }
 
-function TE2EIMapTests.ProjectRoot: string;
-var
-  Dir, Parent: string;
-  Steps: Integer;
-begin
-  Result := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
-  if Result <> '' then begin Result := IncludeTrailingPathDelimiter(Result); Exit end;
-  Dir := GetCurrentDir;
-  for Steps := 0 to 5 do
-  begin
-    if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
-       DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'rtl') then
-    begin
-      Result := IncludeTrailingPathDelimiter(Dir);
-      Exit
-    end;
-    Parent := ExtractFileDir(Dir);
-    if (Parent = '') or (Parent = Dir) then Break;
-    Dir := Parent
-  end;
-  Result := IncludeTrailingPathDelimiter(GetCurrentDir)
-end;
-
-function TE2EIMapTests.ToolchainAvailable: Boolean;
-begin
-  Result := FileExists(FQBE) and FileExists(FRTL)
-end;
-
 procedure TE2EIMapTests.SetUp;
-var Root: string;
 begin
-  Root := ProjectRoot;
-  FQBE := GetEnvironmentVariable('BLAISE_QBE');
-  if FQBE = '' then FQBE := Root + 'vendor/qbe/qbe';
-  FRTL := GetEnvironmentVariable('BLAISE_RTL');
-  if FRTL = '' then FRTL := Root + 'rtl/target/blaise_rtl.a';
-  FScratch := Root + 'compiler/target/test-e2e-imap';
-  ForceDirectories(FScratch);
-  FCounter := 0
-end;
-
-procedure TE2EIMapTests.TearDown;
-begin
-end;
-
-function RunProc_IM(const AExe: string; const AArgs: array of string;
-                    out AStdout: string): Integer;
-var
-  Proc:  TProcess;
-  I:     Integer;
-  Chunk: string;
-begin
-  Proc := TProcess.Create(nil);
-  try
-    Proc.Executable := AExe;
-    for I := 0 to High(AArgs) do
-      Proc.Parameters.Add(AArgs[I]);
-    Proc.Execute;
-    AStdout := '';
-    repeat
-      Chunk := Proc.ReadOutput;
-      AStdout := AStdout + Chunk
-    until (Chunk = '') and not Proc.Running;
-    Proc.WaitOnExit;
-    Result := Proc.ExitCode
-  finally
-    Proc.Free
-  end
-end;
-
-function RunProcNoArgs_IM(const AExe: string; out AStdout: string): Integer;
-var
-  Proc:  TProcess;
-  Chunk: string;
-begin
-  Proc := TProcess.Create(nil);
-  try
-    Proc.Executable := AExe;
-    Proc.Execute;
-    AStdout := '';
-    repeat
-      Chunk := Proc.ReadOutput;
-      AStdout := AStdout + Chunk
-    until (Chunk = '') and not Proc.Running;
-    Proc.WaitOnExit;
-    Result := Proc.ExitCode
-  finally
-    Proc.Free
-  end
-end;
-
-function TE2EIMapTests.CompileAndRun(const ASrc: string;
-                                     out AStdout: string;
-                                     out AExitCode: Integer): Boolean;
-var
-  Lexer:    TLexer;
-  Parser:   TParser;
-  Prog:     TProgram;
-  Semantic: TSemanticAnalyser;
-  CG:       TCodeGenQBE;
-  IR:       string;
-  IRFile:   string;
-  AsmFile:  string;
-  BinFile:  string;
-  ToolOut:  string;
-  Rc:       Integer;
-begin
-  Result := False;
-  Inc(FCounter);
-  IRFile  := FScratch + '/t' + IntToStr(FCounter) + '.ssa';
-  AsmFile := FScratch + '/t' + IntToStr(FCounter) + '.s';
-  BinFile := FScratch + '/t' + IntToStr(FCounter);
-
-  Lexer := nil; Parser := nil; Prog := nil; Semantic := nil; CG := nil;
-  try
-    Lexer    := TLexer.Create(ASrc);
-    Parser   := TParser.Create(Lexer);
-    Prog     := Parser.Parse;
-    Semantic := TSemanticAnalyser.Create;
-    Semantic.Analyse(Prog);
-    CG       := TCodeGenQBE.Create;
-    CG.Generate(Prog);
-    IR       := CG.GetOutput
-  finally
-    CG.Free; Semantic.Free; Prog.Free; Parser.Free; Lexer.Free
-  end;
-
-  WriteFile(IRFile, IR);
-  Rc := RunProc_IM(FQBE, ['-o', AsmFile, IRFile], ToolOut);
-  if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end;
-  Rc := RunProc_IM('cc', ['-o', BinFile, AsmFile, FRTL], ToolOut);
-  if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
-  AExitCode := RunProcNoArgs_IM(BinFile, AStdout);
-  Result := True
+  inherited SetUp;
+  SetUpScratch('compiler/target/test-e2e-imap')
 end;
 
 { ------------------------------------------------------------------ }
@@ -494,7 +354,6 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcDictTryGet, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  { TryGetValue(42)->true(1), value=99, TryGetValue(7)->false(0) }
   AssertTrue('found -> 1',  Pos('1',  Output) >= 0);
   AssertTrue('value=99',    Pos('99', Output) >= 0);
   AssertTrue('missing -> 0', Pos('0', Output) >= 0);
@@ -508,10 +367,9 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcDictRemove, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  { Count=2, ContainsKey(2)->false(0), ContainsKey(1)->true(1) }
-  AssertTrue('count=2',         Pos('2', Output) >= 0);
+  AssertTrue('count=2',          Pos('2', Output) >= 0);
   AssertTrue('removed key gone', Pos('0', Output) >= 0);
-  AssertTrue('other key stays', Pos('1', Output) >= 0);
+  AssertTrue('other key stays',  Pos('1', Output) >= 0);
 end;
 
 procedure TE2EIMapTests.TestRun_IMap_TOrderedDictionary_AddAndContainsKey;
@@ -522,7 +380,6 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcOrdDictAddContains, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  { Same expected output as TDict — dispatch routes to TOrdDict at runtime }
   AssertTrue('contains 10 -> 1', Pos('1', Output) >= 0);
   AssertTrue('contains 99 -> 0', Pos('0', Output) >= 0);
   AssertTrue('count=2',          Pos('2', Output) >= 0);
@@ -549,7 +406,6 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcSwapImpl, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  { Both ContainsKey calls return true (1) — one via TDict, one via TOrdDict }
   AssertTrue('TDict dispatch correct',    Pos('1', Output) >= 0);
   AssertTrue('TOrdDict dispatch correct', Pos('1', Output) >= 0);
 end;

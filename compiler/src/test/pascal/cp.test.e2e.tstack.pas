@@ -15,22 +15,12 @@ unit cp.test.e2e.tstack;
 interface
 
 uses
-  classes, sysutils, process, bcl.testing,
-  uLexer, uParser, uAST, uSemantic, uCodeGenQBE;
+  bcl.testing, cp.test.e2e.base;
 
 type
-  TE2EStackTests = class(TTestCase)
-  private
-    FQBE:     string;
-    FRTL:     string;
-    FScratch: string;
-    FCounter: Integer;
-    function  ProjectRoot: string;
-    function  ToolchainAvailable: Boolean;
-    function  CompileAndRun(const ASrc: string; out AStdout: string; out AExitCode: Integer): Boolean;
+  TE2EStackTests = class(TE2ETestCase)
   protected
     procedure SetUp; override;
-    procedure TearDown; override;
   published
     procedure TestRun_TStack_PushPopLIFO;
     procedure TestRun_TStack_PeekDoesNotRemove;
@@ -41,237 +31,115 @@ type
 implementation
 
 const
-  LE = #10;
-
   StackSrc =
-    'program P;'                                                          + LE +
-    'type'                                                                + LE +
-    '  TStack = class'                                                    + LE +
-    '    FData:     ^Integer;'                                            + LE +
-    '    FCount:    Integer;'                                             + LE +
-    '    FCapacity: Integer;'                                             + LE +
-    '    procedure Grow;'                                                 + LE +
-    '    var NewCap, OldCap: Integer;'                                    + LE +
-    '    begin'                                                           + LE +
-    '      OldCap := Self.FCapacity;'                                     + LE +
-    '      if OldCap = 0 then NewCap := 4'                               + LE +
-    '      else NewCap := OldCap * 2;'                                    + LE +
-    '      Self.FData     := ReallocMem(Self.FData, NewCap * SizeOf(Integer));' + LE +
-    '      ZeroMem(Self.FData + OldCap * SizeOf(Integer), (NewCap - OldCap) * SizeOf(Integer));' + LE +
-    '      Self.FCapacity := NewCap'                                      + LE +
-    '    end;'                                                            + LE +
-    '    procedure Push(Value: Integer);'                                 + LE +
-    '    var Dest: ^Integer;'                                             + LE +
-    '    begin'                                                           + LE +
-    '      if Self.FCount = Self.FCapacity then Self.Grow;'              + LE +
-    '      Dest        := Self.FData + Self.FCount * SizeOf(Integer);'   + LE +
-    '      Dest^       := Value;'                                         + LE +
-    '      Self.FCount := Self.FCount + 1'                               + LE +
-    '    end;'                                                            + LE +
-    '    function Pop: Integer;'                                          + LE +
-    '    var Src: ^Integer;'                                              + LE +
-    '    begin'                                                           + LE +
-    '      Self.FCount := Self.FCount - 1;'                              + LE +
-    '      Src         := Self.FData + Self.FCount * SizeOf(Integer);'   + LE +
-    '      Result      := Src^'                                           + LE +
-    '    end;'                                                            + LE +
-    '    function Peek: Integer;'                                         + LE +
-    '    var Src: ^Integer;'                                              + LE +
-    '    begin'                                                           + LE +
-    '      Src    := Self.FData + (Self.FCount - 1) * SizeOf(Integer);'  + LE +
-    '      Result := Src^'                                                + LE +
-    '    end;'                                                            + LE +
-    '    property Count: Integer read FCount;'                           + LE +
-    '  end;'                                                              + LE;
+    '''
+    program P;
+    type
+      TStack = class
+        FData:     ^Integer;
+        FCount:    Integer;
+        FCapacity: Integer;
+        procedure Grow;
+        var NewCap, OldCap: Integer;
+        begin
+          OldCap := Self.FCapacity;
+          if OldCap = 0 then NewCap := 4
+          else NewCap := OldCap * 2;
+          Self.FData     := ReallocMem(Self.FData, NewCap * SizeOf(Integer));
+          ZeroMem(Self.FData + OldCap * SizeOf(Integer), (NewCap - OldCap) * SizeOf(Integer));
+          Self.FCapacity := NewCap
+        end;
+        procedure Push(Value: Integer);
+        var Dest: ^Integer;
+        begin
+          if Self.FCount = Self.FCapacity then Self.Grow;
+          Dest        := Self.FData + Self.FCount * SizeOf(Integer);
+          Dest^       := Value;
+          Self.FCount := Self.FCount + 1
+        end;
+        function Pop: Integer;
+        var Src: ^Integer;
+        begin
+          Self.FCount := Self.FCount - 1;
+          Src         := Self.FData + Self.FCount * SizeOf(Integer);
+          Result      := Src^
+        end;
+        function Peek: Integer;
+        var Src: ^Integer;
+        begin
+          Src    := Self.FData + (Self.FCount - 1) * SizeOf(Integer);
+          Result := Src^
+        end;
+        property Count: Integer read FCount;
+      end;
+    ''';
 
   SrcPushPopLIFO =
     StackSrc +
-    'var S: TStack;'                                                      + LE +
-    'begin'                                                               + LE +
-    '  S := TStack.Create;'                                               + LE +
-    '  S.Push(1);'                                                        + LE +
-    '  S.Push(2);'                                                        + LE +
-    '  S.Push(3);'                                                        + LE +
-    '  WriteLn(S.Pop);'                                                   + LE +
-    '  WriteLn(S.Pop);'                                                   + LE +
-    '  WriteLn(S.Pop)'                                                    + LE +
-    'end.'                                                                + LE;
+    '''
+    var S: TStack;
+    begin
+      S := TStack.Create;
+      S.Push(1);
+      S.Push(2);
+      S.Push(3);
+      WriteLn(S.Pop);
+      WriteLn(S.Pop);
+      WriteLn(S.Pop)
+    end.
+    ''';
 
   SrcPeekNoRemove =
     StackSrc +
-    'var S: TStack;'                                                      + LE +
-    'begin'                                                               + LE +
-    '  S := TStack.Create;'                                               + LE +
-    '  S.Push(42);'                                                       + LE +
-    '  WriteLn(S.Peek);'                                                  + LE +
-    '  WriteLn(S.Peek);'                                                  + LE +
-    '  WriteLn(S.Count)'                                                  + LE +
-    'end.'                                                                + LE;
+    '''
+    var S: TStack;
+    begin
+      S := TStack.Create;
+      S.Push(42);
+      WriteLn(S.Peek);
+      WriteLn(S.Peek);
+      WriteLn(S.Count)
+    end.
+    ''';
 
   SrcCountTracking =
     StackSrc +
-    'var S: TStack;'                                                      + LE +
-    'begin'                                                               + LE +
-    '  S := TStack.Create;'                                               + LE +
-    '  WriteLn(S.Count);'                                                 + LE +
-    '  S.Push(10);'                                                       + LE +
-    '  WriteLn(S.Count);'                                                 + LE +
-    '  S.Push(20);'                                                       + LE +
-    '  WriteLn(S.Count);'                                                 + LE +
-    '  S.Pop;'                                                            + LE +
-    '  WriteLn(S.Count)'                                                  + LE +
-    'end.'                                                                + LE;
+    '''
+    var S: TStack;
+    begin
+      S := TStack.Create;
+      WriteLn(S.Count);
+      S.Push(10);
+      WriteLn(S.Count);
+      S.Push(20);
+      WriteLn(S.Count);
+      S.Pop;
+      WriteLn(S.Count)
+    end.
+    ''';
 
   SrcGrowBeyond =
     StackSrc +
-    'var S: TStack; I: Integer;'                                          + LE +
-    'begin'                                                               + LE +
-    '  S := TStack.Create;'                                               + LE +
-    '  I := 1;'                                                           + LE +
-    '  while I <= 8 do begin S.Push(I); I := I + 1 end;'                 + LE +
-    '  WriteLn(S.Count);'                                                 + LE +
-    '  WriteLn(S.Pop);'                                                   + LE +
-    '  WriteLn(S.Pop)'                                                    + LE +
-    'end.'                                                                + LE;
-
-{ ------------------------------------------------------------------ }
-{ Infrastructure                                                        }
-{ ------------------------------------------------------------------ }
-
-function TE2EStackTests.ProjectRoot: string;
-var
-  Dir, Parent: string;
-  Steps: Integer;
-begin
-  Result := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
-  if Result <> '' then begin Result := IncludeTrailingPathDelimiter(Result); Exit end;
-  Dir := GetCurrentDir;
-  for Steps := 0 to 5 do
-  begin
-    if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
-       DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'rtl') then
+    '''
+    var S: TStack; I: Integer;
     begin
-      Result := IncludeTrailingPathDelimiter(Dir);
-      Exit
-    end;
-    Parent := ExtractFileDir(Dir);
-    if (Parent = '') or (Parent = Dir) then Break;
-    Dir := Parent
-  end;
-  Result := IncludeTrailingPathDelimiter(GetCurrentDir)
-end;
+      S := TStack.Create;
+      I := 1;
+      while I <= 8 do begin S.Push(I); I := I + 1 end;
+      WriteLn(S.Count);
+      WriteLn(S.Pop);
+      WriteLn(S.Pop)
+    end.
+    ''';
 
-function TE2EStackTests.ToolchainAvailable: Boolean;
-begin
-  Result := FileExists(FQBE) and FileExists(FRTL)
-end;
+{ ------------------------------------------------------------------ }
+{ Setup                                                                }
+{ ------------------------------------------------------------------ }
 
 procedure TE2EStackTests.SetUp;
-var Root: string;
 begin
-  Root := ProjectRoot;
-  FQBE := GetEnvironmentVariable('BLAISE_QBE');
-  if FQBE = '' then FQBE := Root + 'vendor/qbe/qbe';
-  FRTL := GetEnvironmentVariable('BLAISE_RTL');
-  if FRTL = '' then FRTL := Root + 'rtl/target/blaise_rtl.a';
-  FScratch := Root + 'compiler/target/test-e2e-tstack';
-  ForceDirectories(FScratch);
-  FCounter := 0
-end;
-
-procedure TE2EStackTests.TearDown;
-begin
-end;
-
-function RunProc_ST(const AExe: string; const AArgs: array of string;
-                    out AStdout: string): Integer;
-var
-  Proc:  TProcess;
-  I:     Integer;
-  Chunk: string;
-begin
-  Proc := TProcess.Create(nil);
-  try
-    Proc.Executable := AExe;
-    for I := 0 to High(AArgs) do
-      Proc.Parameters.Add(AArgs[I]);
-    Proc.Execute;
-    AStdout := '';
-    repeat
-      Chunk := Proc.ReadOutput;
-      AStdout := AStdout + Chunk
-    until (Chunk = '') and not Proc.Running;
-    Proc.WaitOnExit;
-    Result := Proc.ExitCode
-  finally
-    Proc.Free
-  end
-end;
-
-function RunProcNoArgs_ST(const AExe: string; out AStdout: string): Integer;
-var
-  Proc:  TProcess;
-  Chunk: string;
-begin
-  Proc := TProcess.Create(nil);
-  try
-    Proc.Executable := AExe;
-    Proc.Execute;
-    AStdout := '';
-    repeat
-      Chunk := Proc.ReadOutput;
-      AStdout := AStdout + Chunk
-    until (Chunk = '') and not Proc.Running;
-    Proc.WaitOnExit;
-    Result := Proc.ExitCode
-  finally
-    Proc.Free
-  end
-end;
-
-function TE2EStackTests.CompileAndRun(const ASrc: string;
-                                      out AStdout: string;
-                                      out AExitCode: Integer): Boolean;
-var
-  Lexer:    TLexer;
-  Parser:   TParser;
-  Prog:     TProgram;
-  Semantic: TSemanticAnalyser;
-  CG:       TCodeGenQBE;
-  IR:       string;
-  IRFile:   string;
-  AsmFile:  string;
-  BinFile:  string;
-  ToolOut:  string;
-  Rc:       Integer;
-begin
-  Result := False;
-  Inc(FCounter);
-  IRFile  := FScratch + '/t' + IntToStr(FCounter) + '.ssa';
-  AsmFile := FScratch + '/t' + IntToStr(FCounter) + '.s';
-  BinFile := FScratch + '/t' + IntToStr(FCounter);
-
-  Lexer    := nil; Parser := nil; Prog := nil; Semantic := nil; CG := nil;
-  try
-    Lexer    := TLexer.Create(ASrc);
-    Parser   := TParser.Create(Lexer);
-    Prog     := Parser.Parse;
-    Semantic := TSemanticAnalyser.Create;
-    Semantic.Analyse(Prog);
-    CG       := TCodeGenQBE.Create;
-    CG.Generate(Prog);
-    IR       := CG.GetOutput
-  finally
-    CG.Free; Semantic.Free; Prog.Free; Parser.Free; Lexer.Free
-  end;
-
-  WriteFile(IRFile, IR);
-  Rc := RunProc_ST(FQBE, ['-o', AsmFile, IRFile], ToolOut);
-  if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end;
-  Rc := RunProc_ST('cc', ['-o', BinFile, AsmFile, FRTL], ToolOut);
-  if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
-  AExitCode := RunProcNoArgs_ST(BinFile, AStdout);
-  Result := True
+  inherited SetUp;
+  SetUpScratch('compiler/target/test-e2e-tstack')
 end;
 
 { ------------------------------------------------------------------ }
@@ -311,7 +179,6 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcCountTracking, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  { Expected output: 0, 1, 2, 1 }
   AssertTrue('count starts at 0', Pos('0', Output) >= 0);
   AssertTrue('count after 2 pushes contains 2', Pos('2', Output) >= 0);
 end;
@@ -324,7 +191,6 @@ begin
   if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
   AssertTrue('compile+run', CompileAndRun(SrcGrowBeyond, Output, RCode));
   AssertEquals('exit 0', 0, RCode);
-  { 8 items pushed, Count=8, Pop returns 8 then 7 }
   AssertTrue('count=8 after 8 pushes', Pos('8', Output) >= 0);
   AssertTrue('last pop returns 8', Pos('8', Output) >= 0);
 end;
