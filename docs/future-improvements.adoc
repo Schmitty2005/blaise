@@ -637,6 +637,45 @@ The recommended path for Blaise:
 
 == Migration Analyser
 
+=== Flag `TObjectList` usage and recommend `TList<TObject>`
+
+*What.*  The migration analyser must detect uses of `TObjectList` from the
+FPC/Delphi `contnrs` unit and recommend the generic `TList<TObject>` from
+`Generics.Collections` as the idiomatic Blaise replacement.
+
+*Why it matters.*  `TObjectList` is a pre-generics workaround — a pointer
+list that stores `TObject` references without type safety.  In the generics
+era, `TList<TObject>` provides the same capability with full type checking.
+In modern languages (Go, Swift, Kotlin, C#) the untyped container pattern
+is considered obsolete; Blaise should steer new code toward the typed form.
+
+*Patterns to detect.*
+
+[cols="1,2", options="header"]
+|===
+| Pattern | Recommended replacement
+
+| `uses Contnrs; ... TObjectList`
+| `uses Generics.Collections; ... TList<TObject>`
+
+| `TObjectList.Create(True)` (owned)
+| `TList<TObject>.Create` (ARC handles ownership automatically)
+
+| `TObjectList.Create(False)` (unowned)
+| `TList<TObject>.Create` (same — ARC does not double-free)
+|===
+
+*Implementation notes.*
+
+. Detect `TObjectList` type references in variable declarations, field
+  declarations, and `Create` calls.
+. Report each occurrence with the source location and the suggested rewrite.
+. Note that the ownership flag (`AOwnsObjects`) has no equivalent in
+  `TList<TObject>` — ARC manages object lifetimes automatically, so the
+  flag is meaningless in Blaise.  The migration note should explain this.
+
+*Effort.*  Small — one pattern rule in the type-reference checker.
+
 === Detect 1-based string indexing patterns from FPC/Delphi code
 
 *What.*  The migration analyser (`tools/migration-analyser`) must detect
