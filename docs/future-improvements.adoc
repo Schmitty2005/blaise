@@ -794,3 +794,443 @@ test.pas:12: for I := 1 to Length(S) do
 
 *Effort.*  Small — a follow-on pattern in the same analysis pass.
 
+== Enhanced Enumerations
+
+Blaise currently supports simple positional enumerations (`type TDir = (dNorth, dSouth, dEast, dWest)`)
+and explicit ordinal assignment (`type TStatus = (Idle=10, Running=20, Done=30)`).
+This section documents richer enum models drawn from other languages, for
+consideration in a future language revision.
+
+The reference examples below are included as design inspiration, not as a
+commitment to any particular syntax.  Any enhancement must preserve
+`case`/`set` compatibility with simple integer ordinals unless a new,
+distinct type form is introduced.
+
+=== Reference: Java enum classes
+
+Java enums are named singleton classes with a fixed set of instances.
+Each variant carries typed fields initialised through a constructor.
+Methods can be defined on the enum type and called on any variant.
+
+.Java — definition
+[source,java]
+----
+public enum Planet {
+    MERCURY(3.303e+23, 2.4397e6),
+    VENUS  (4.869e+24, 6.0518e6),
+    EARTH  (5.976e+24, 6.37814e6),
+    MARS   (6.421e+23, 3.3895e6);
+
+    private static final double G = 6.67300E-11;
+    private final double mass;    // kg
+    private final double radius;  // metres
+
+    Planet(double mass, double radius) {
+        this.mass   = mass;
+        this.radius = radius;
+    }
+
+    double surfaceGravity() {
+        return G * mass / (radius * radius);
+    }
+
+    double surfaceWeight(double otherMass) {
+        return otherMass * surfaceGravity();
+    }
+}
+----
+
+.Java — application usage
+[source,java]
+----
+public class WeightOnPlanets {
+    public static void main(String[] args) {
+        double earthWeight = 75.0;
+        double mass = earthWeight / Planet.EARTH.surfaceGravity();
+
+        for (Planet p : Planet.values()) {
+            System.out.printf("Weight on %s is %6.2f%n",
+                              p, p.surfaceWeight(mass));
+        }
+        // Weight on MERCURY is  28.33
+        // Weight on VENUS   is  67.89
+        // Weight on EARTH   is  75.00
+        // Weight on MARS    is  28.46
+    }
+}
+----
+
+*Key traits.* Each variant is a singleton object; the type is a class
+hierarchy.  Methods have access to per-variant state.  `values()` returns
+an ordered array of all variants.  Pattern matching (Java 21+) allows
+exhaustive `switch` over variants.
+
+=== Reference: Swift associated values
+
+Swift enums are value types that support per-variant associated data of
+heterogeneous types.  There is no shared constructor — each variant
+carries its own payload, extracted via pattern matching.
+
+.Swift — definition
+[source,swift]
+----
+enum HTTPResponse {
+    case ok(body: String)
+    case redirect(location: String, permanent: Bool)
+    case error(code: Int, message: String)
+}
+
+enum Direction {
+    case north, south, east, west
+
+    var opposite: Direction {
+        switch self {
+        case .north: return .south
+        case .south: return .north
+        case .east:  return .west
+        case .west:  return .east
+        }
+    }
+}
+----
+
+.Swift — application usage
+[source,swift]
+----
+func handle(_ response: HTTPResponse) {
+    switch response {
+    case .ok(let body):
+        print("Success: \(body)")
+    case .redirect(let url, let permanent):
+        let kind = permanent ? "301" : "302"
+        print("\(kind) → \(url)")
+    case .error(let code, let msg):
+        print("Error \(code): \(msg)")
+    }
+}
+
+let r = HTTPResponse.error(code: 404, message: "Not Found")
+handle(r)   // Error 404: Not Found
+----
+
+*Key traits.* Associated values are extracted only at the call site via
+`switch`/`if case`.  Different variants can carry different types and
+arities.  The enum itself remains a value type (stack-allocated).
+
+=== Reference: Go typed constants (iota)
+
+Go has no dedicated `enum` keyword.  Enumerations are typed integer
+constants, often using `iota` for automatic sequencing.  Methods are
+attached via receiver functions outside the type declaration.
+
+.Go — definition
+[source,go]
+----
+type Weekday int
+
+const (
+    Sunday Weekday = iota  // 0
+    Monday                  // 1
+    Tuesday                 // 2
+    Wednesday               // 3
+    Thursday                // 4
+    Friday                  // 5
+    Saturday                // 6
+)
+
+func (d Weekday) String() string {
+    names := [...]string{
+        "Sunday", "Monday", "Tuesday", "Wednesday",
+        "Thursday", "Friday", "Saturday",
+    }
+    if d < Sunday || d > Saturday {
+        return fmt.Sprintf("Weekday(%d)", int(d))
+    }
+    return names[d]
+}
+
+type Permission uint
+
+const (
+    Read    Permission = 1 << iota  // 1
+    Write                            // 2
+    Execute                          // 4
+)
+----
+
+.Go — application usage
+[source,go]
+----
+func describeDay(d Weekday) string {
+    switch d {
+    case Saturday, Sunday:
+        return "weekend"
+    default:
+        return "weekday"
+    }
+}
+
+func checkAccess(p Permission) {
+    if p&Read != 0 {
+        fmt.Println("can read")
+    }
+    if p&Write != 0 {
+        fmt.Println("can write")
+    }
+}
+
+func main() {
+    fmt.Println(describeDay(Friday))           // weekday
+    fmt.Println(Wednesday)                     // Wednesday (via String())
+    checkAccess(Read | Write)                  // can read / can write
+}
+----
+
+*Key traits.* Minimal syntax — enums are just typed constants.
+`iota` auto-increments within a `const` block; bitfield flags use
+`1 << iota`.  No associated data per variant; methods are ordinary
+receiver functions.
+
+=== Reference: C# enums with extension methods
+
+C# enums are integer-backed value types with optional explicit underlying
+type.  Methods cannot be declared inside the enum; extension method classes
+provide the equivalent.
+
+.C# — definition
+[source,csharp]
+----
+public enum HttpStatus : ushort {
+    OK          = 200,
+    Created     = 201,
+    NoContent   = 204,
+    BadRequest  = 400,
+    NotFound    = 404,
+    ServerError = 500,
+}
+
+public static class HttpStatusExtensions {
+    public static bool IsSuccess(this HttpStatus s) =>
+        (int)s >= 200 && (int)s < 300;
+
+    public static string Describe(this HttpStatus s) =>
+        s switch {
+            HttpStatus.OK          => "OK",
+            HttpStatus.Created     => "Created",
+            HttpStatus.NotFound    => "Not Found",
+            HttpStatus.ServerError => "Internal Server Error",
+            _                      => $"HTTP {(int)s}",
+        };
+}
+----
+
+.C# — application usage
+[source,csharp]
+----
+void ProcessResponse(HttpStatus status) {
+    Console.WriteLine($"{(int)status} {status.Describe()}");
+
+    if (status.IsSuccess())
+        Console.WriteLine("Request succeeded.");
+    else if (status == HttpStatus.NotFound)
+        Console.WriteLine("Resource not found.");
+    else
+        Console.WriteLine("Unexpected status.");
+}
+
+ProcessResponse(HttpStatus.NotFound);
+// 404 Not Found
+// Resource not found.
+----
+
+*Key traits.* Explicit integral values on any member; underlying storage
+type can be `byte`, `short`, `ushort`, `int`, `long`, etc.
+`Enum.GetValues()` and `Enum.TryParse()` provide runtime reflection.
+No per-variant associated data; extension methods approximate attached
+behaviour.
+
+=== Reference: Oxygene (RemObjects) enum methods
+
+Oxygene extends the Object Pascal enum with inline method declarations,
+keeping Pascal syntax while adding behaviour directly on the type.
+
+.Oxygene — definition
+[source,pascal]
+----
+type
+  Status = public enum
+    Pending,
+    Running,
+    Complete,
+    Failed;
+
+    public method IsTerminal: Boolean;
+    public method Description: String;
+  end;
+
+method Status.IsTerminal: Boolean;
+begin
+  Result := (Self = Complete) or (Self = Failed);
+end;
+
+method Status.Description: String;
+begin
+  case Self of
+    Pending:  Result := 'Not started';
+    Running:  Result := 'In progress';
+    Complete: Result := 'Finished';
+    Failed:   Result := 'Error occurred';
+  end;
+end;
+----
+
+.Oxygene — application usage
+[source,pascal]
+----
+procedure ProcessJob(AStatus: Status);
+begin
+  WriteLn(AStatus.Description);
+  if AStatus.IsTerminal then
+    WriteLn('Job has reached a terminal state.');
+  case AStatus of
+    Pending:  WriteLn('Queued');
+    Running:  WriteLn('Executing');
+    Complete: WriteLn('Done');
+    Failed:   WriteLn('Error');
+  end;
+end;
+
+begin
+  ProcessJob(Running);
+  // In progress
+  // Executing
+end.
+----
+
+*Key traits.* Methods are declared inside the `enum` block and implemented
+as top-level procedures with a `Status.MethodName` prefix — familiar Pascal
+style.  No associated data per variant; `case` dispatch remains ordinal.
+Oxygene targets .NET and JVM, so enum method calls compile to interface
+dispatch under the hood.
+
+=== Option B — Enum with built-in string names
+
+A lightweight extension: the compiler bakes a read-only name lookup table
+into the binary so each variant can produce its display name without user
+code writing a manual `case` statement.
+
+.Proposed Blaise syntax — definition
+[source,pascal]
+----
+type
+  TDirection = enum
+    dNorth = ('North'),
+    dSouth = ('South'),
+    dEast  = ('East'),
+    dWest  = ('West');
+  end;
+----
+
+.Proposed Blaise syntax — application usage
+[source,pascal]
+----
+var
+  D: TDirection;
+  S: string;
+begin
+  D := dEast;
+  S := TDirection.NameOf(D);   // 'East'
+  WriteLn('Heading: ' + S);    // Heading: East
+
+  // Reverse lookup (may raise exception if value not found)
+  D := TDirection.FromName('West');
+  WriteLn(Integer(D));         // 3
+end.
+----
+
+*Implementation notes.*  The compiler emits a `$typeinfo_TDirection_names`
+data section containing NUL-terminated strings indexed by ordinal.
+`NameOf` and `FromName` are compiler-generated RTL wrappers.  This keeps
+enum values as plain integers and does not require object allocation.
+Works naturally with `case` and `set of`.
+
+*Constraints.*  If ordinals are non-contiguous (e.g. `Idle=10, Done=30`),
+the lookup table must be sparse or indexed via a generated search function.
+The simpler contiguous case (0-based or gapless explicit values) produces
+a flat array.
+
+=== Option C — Enum class with per-variant fields
+
+A richer extension: enum variants are singleton instances of a
+compiler-generated class.  Each variant carries typed fields.  Methods
+are declared on the class and dispatched virtually.
+
+.Proposed Blaise syntax — definition
+[source,pascal]
+----
+type
+  THTTPStatus = enum class
+    OK         (Code: Integer = 200, Phrase: string = 'OK'),
+    Created    (Code: Integer = 201, Phrase: string = 'Created'),
+    NotFound   (Code: Integer = 404, Phrase: string = 'Not Found'),
+    ServerError(Code: Integer = 500, Phrase: string = 'Internal Server Error');
+
+    function IsSuccess: Boolean;
+    function ToString: string; override;
+  end;
+
+function THTTPStatus.IsSuccess: Boolean;
+begin
+  Result := (Code >= 200) and (Code < 300);
+end;
+
+function THTTPStatus.ToString: string;
+begin
+  Result := IntToStr(Code) + ' ' + Phrase;
+end;
+----
+
+.Proposed Blaise syntax — application usage
+[source,pascal]
+----
+procedure HandleResponse(S: THTTPStatus);
+begin
+  WriteLn(S.ToString);
+  if S.IsSuccess then
+    WriteLn('Request succeeded.')
+  else
+    WriteLn('Request failed with code ' + IntToStr(S.Code));
+end;
+
+begin
+  HandleResponse(THTTPStatus.NotFound);
+  // 404 Not Found
+  // Request failed with code 404
+end.
+----
+
+*Implementation notes.*  Each variant becomes a global singleton of the
+compiler-generated class.  The variable type is an object pointer (8 bytes).
+`case` on an enum class requires identity comparison (`ceql` on pointer
+values), not ordinal comparison; this is a breaking change from simple enums.
+`set of THTTPStatus` is not supported — sets require small-integer ordinals.
+The compiler must generate a vtable for the class and emit singleton
+initialisers in a dedicated data section.
+
+*Trade-off.*  The expressiveness is high (Java-equivalent), but the
+implementation cost is significant and it breaks the simplicity guarantee
+that enums are integers.  A new keyword or syntax (`enum class`) is needed
+to distinguish this from simple enums so existing code is unaffected.
+
+=== Recommended progression
+
+. *Done* — Explicit ordinal values (`(A=0, B=10, C=100)`) with
+  auto-continuation for unlabelled members.
+. *Near-term* — Enum intrinsics: `Ord(E)`, `Succ(E)`, `Pred(E)`,
+  `Low(TEnum)`, `High(TEnum)`.
+. *Medium-term* — Option B (built-in string names) — small compiler
+  change, large quality-of-life gain.  Compatible with existing `case`/`set`.
+. *Long-term* — Option C (enum class with fields and methods) as a
+  distinct `enum class` type form.  Breaking from simple enum semantics
+  is acceptable provided it is a new keyword.
+
