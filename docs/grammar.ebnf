@@ -375,17 +375,25 @@ ConstSection
     ;
 
 ConstDecl
-    = IDENT EQUALS ConstExpr SEMICOLON
+    = IDENT [ COLON TypeName ] EQUALS ConstExpr SEMICOLON
     ;
 
 ConstExpr
     = [ MINUS ] IntLit
+    | [ MINUS ] FloatLit
     | StrLit
+    | IDENT                    (* named constant reference, e.g. True / False *)
     ;
 
-(* ConstExpr covers the constant initialisers currently supported:
- *   - integer literals, optionally negated
- *   - string literals
+(* ConstDecl supports both untyped and typed forms:
+ *   Untyped:  const MaxItems = 100;
+ *   Typed:    const Pi: Double = 3.14159;
+ *
+ * When a TypeName is present the declared type is used as-is; the RHS
+ * value must be representable in that type (enforced by the semantic pass).
+ * Supported TypeNames for typed constants: Integer, Int64, Double, Single,
+ * Boolean, string.
+ *
  * ConstSection may appear in: program/unit Block, InterfaceSection,
  * ImplementationSection, standalone procedure/function/method bodies,
  * and class declaration bodies (class-level constants). *)

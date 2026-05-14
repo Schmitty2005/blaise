@@ -1866,7 +1866,18 @@ begin
       end;
       CD.StrVal := Resolved;
     end;
-    if CD.IsString then
+    if CD.TypeName <> '' then
+    begin
+      { Typed constant: use the declared type.  The value kind (IsFloat,
+        IsString, IntVal) is still set by the parser from the RHS literal,
+        which is all the codegen needs.  We only override the symbol's type
+        descriptor so that type-checking against the declared type is exact. }
+      TD := FTable.FindType(CD.TypeName);
+      if TD = nil then
+        SemanticError(Format('Unknown type ''%s'' in typed constant ''%s''',
+          [CD.TypeName, CD.Name]), CD.Line, CD.Col);
+    end
+    else if CD.IsString then
       TD := FTable.TypeString
     else if CD.IsFloat then
       TD := FTable.TypeDouble

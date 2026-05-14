@@ -2187,3 +2187,45 @@ for simplicity and ABI predictability.  Set types also use `w` for sets with
 
 Blaise currently follows FPC's `Result` convention inside functions.
 No change is planned, but this should be formally documented.
+
+== Typed Constants
+
+=== Decision
+
+Blaise supports typed constant declarations with the form:
+
+[source,pascal]
+----
+const
+  Pi: Double = 3.14159265358979323846;
+  MaxItems: Integer = 100;
+  Greeting: string = 'hello';
+----
+
+The type annotation is optional; untyped constants (`const N = 42`) continue
+to work unchanged with inferred types.
+
+=== Supported types
+
+Integer, Int64, Double, Single, Boolean, string.  Record, class, enum, and
+pointer typed constants are not supported in this iteration — they require
+compound value syntax (record literals, address-of) that adds significant
+parser complexity for rare use cases.
+
+=== Rationale
+
+Typed constants give the programmer explicit control over the type of a
+constant value.  Without them, `const Pi = 3.14159` infers `Double`, which is
+correct, but `const Scale = 2` infers `Integer` — there is no way to declare a
+`Single` or `Int64` constant without a typed form.
+
+The primary motivator was `Pi: Double` in `math.pas`, where the untyped form
+would have ambiguous type inference across platforms and makes the intent
+opaque.
+
+=== Alternatives Rejected
+
+*Using type-cast syntax* (`const Pi = Double(3.14159)`) — requires the parser
+to distinguish a type-cast expression from a function call inside a const
+initialiser, which is more complex than a simple colon annotation and is not
+the FPC/Delphi convention.

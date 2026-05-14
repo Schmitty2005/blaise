@@ -53,6 +53,19 @@ type
     procedure TestLocalConstInMethod;
     { Constant in a class declaration section (class-level constant) }
     procedure TestConstInClassDeclaration;
+
+    { Typed constants — const Name: Type = Value }
+    procedure TestTypedConst_Integer;
+    procedure TestTypedConst_Int64;
+    procedure TestTypedConst_Double;
+    procedure TestTypedConst_Single;
+    procedure TestTypedConst_Boolean;
+    procedure TestTypedConst_String;
+    procedure TestTypedConst_TypeAnnotationPreserved;
+    procedure TestTypedConst_NegativeDouble;
+    procedure TestTypedConst_NegativeInteger;
+    procedure TestTypedConst_InUnit;
+    procedure TestTypedConst_UsedInExpression;
   end;
 
 implementation
@@ -469,6 +482,176 @@ begin
   );
   AssertTrue('IR should be non-empty', IR <> '');
   AssertTrue('Class const value should appear in IR', IRContains(IR, '100'));
+end;
+
+{ ------------------------------------------------------------------ }
+{ Typed constants                                                      }
+{ ------------------------------------------------------------------ }
+
+procedure TConstTests.TestTypedConst_Integer;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program Test;
+    const MaxItems: Integer = 100;
+    var x: Integer;
+    begin x := MaxItems end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('value in IR', IRContains(IR, '100'));
+end;
+
+procedure TConstTests.TestTypedConst_Int64;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program Test;
+    const BigVal: Int64 = 1000000000;
+    var x: Int64;
+    begin x := BigVal end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('value in IR', IRContains(IR, '1000000000'));
+end;
+
+procedure TConstTests.TestTypedConst_Double;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program Test;
+    const Pi: Double = 3.14159;
+    var x: Double;
+    begin x := Pi end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('value in IR', IRContains(IR, '3.14159'));
+end;
+
+procedure TConstTests.TestTypedConst_Single;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program Test;
+    const E: Single = 2.71828;
+    var x: Single;
+    begin x := E end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('value in IR', IRContains(IR, '2.71828'));
+end;
+
+procedure TConstTests.TestTypedConst_Boolean;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program Test;
+    const Flag: Boolean = True;
+    var b: Boolean;
+    begin b := Flag end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+end;
+
+procedure TConstTests.TestTypedConst_String;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program Test;
+    const Greeting: string = 'hello';
+    begin WriteLn(Greeting) end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('value in IR', IRContains(IR, 'hello'));
+end;
+
+procedure TConstTests.TestTypedConst_TypeAnnotationPreserved;
+var
+  L:  TLexer;
+  P:  TParser;
+  Pr: TProgram;
+  SA: TSemanticAnalyser;
+  Sym: TSymbol;
+begin
+  L  := TLexer.Create('program Test; const Pi: Double = 3.14; begin end.');
+  P  := TParser.Create(L);
+  Pr := P.Parse;
+  SA := TSemanticAnalyser.Create;
+  try
+    SA.Analyse(Pr);
+    Sym := Pr.SymbolTable.Lookup('Pi');
+    AssertNotNil('Pi symbol exists', Sym);
+    AssertEquals('Pi is Double', 'Double', Sym.TypeDesc.Name);
+  finally
+    SA.Free; Pr.Free; P.Free; L.Free;
+  end;
+end;
+
+procedure TConstTests.TestTypedConst_NegativeDouble;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program Test;
+    const NegPi: Double = -3.14159;
+    var x: Double;
+    begin x := NegPi end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('negative value in IR', IRContains(IR, '-3.14159'));
+end;
+
+procedure TConstTests.TestTypedConst_NegativeInteger;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program Test;
+    const MinVal: Integer = -42;
+    var x: Integer;
+    begin x := MinVal end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('negative value in IR', IRContains(IR, '-42'));
+end;
+
+procedure TConstTests.TestTypedConst_InUnit;
+var
+  U: TUnit;
+begin
+  U := ParseUnit(
+    '''
+    unit MyMath;
+    interface
+    const Pi: Double = 3.14159265358979;
+    implementation
+    end.
+    ''');
+  AssertNotNull('unit parsed', U);
+  AssertEquals('one const decl', 1, U.IntfBlock.ConstDecls.Count);
+  U.Free;
+end;
+
+procedure TConstTests.TestTypedConst_UsedInExpression;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program Test;
+    const Scale: Double = 2.5;
+    var x, y: Double;
+    begin
+      x := 4.0;
+      y := x * Scale
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('Scale value in IR', IRContains(IR, '2.5'));
 end;
 
 initialization

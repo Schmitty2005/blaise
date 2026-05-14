@@ -681,10 +681,11 @@ type
     destructor Destroy; override;
   end;
 
-  { Constant declaration: const Name = Value; }
+  { Constant declaration: const Name = Value; or const Name: Type = Value; }
   TConstDecl = class(TASTNode)
   public
     Name:       string;
+    TypeName:   string;   { non-empty when a type annotation was written }
     IntVal:     Int64;    { used when kind = integer }
     StrVal:     string;   { used when IsString = True or IsFloat = True (raw text) }
     IsString:   Boolean;

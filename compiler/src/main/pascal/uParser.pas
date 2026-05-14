@@ -556,6 +556,17 @@ begin
     CD.Col  := FCurrent.Col;
     CD.Name := FCurrent.Value;
     Advance;
+    { Typed constant: const Name: TypeName = Value }
+    if Check(tkColon) then
+    begin
+      Advance;
+      if not Check(tkIdent) then
+        raise EParseError.Create(Format(
+          'Expected type name after '':'' in const at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      CD.TypeName := FCurrent.Value;
+      Advance;
+    end;
     Expect(tkEquals);
     if Check(tkMinus) then
     begin
