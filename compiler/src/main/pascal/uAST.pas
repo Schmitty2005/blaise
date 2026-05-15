@@ -732,6 +732,9 @@ type
     SymbolTable: TSymbolTable; { owned after standalone semantic analysis;
                                  nil when the unit is analysed as part of a
                                  program (program owns the table). }
+    GenericInstances:     TObjectList;
+    GenericFuncInstances: TObjectList;
+    GenericIntfInstances: TObjectList;
     constructor Create;
     destructor Destroy; override;
   end;
@@ -1397,18 +1400,21 @@ begin
   ImplBlock  := TBlock.Create;
   InitStmts  := nil;
   FinalStmts := nil;
+  GenericInstances     := TObjectList.Create(True);
+  GenericFuncInstances := TObjectList.Create(True);
+  GenericIntfInstances := TObjectList.Create(True);
 end;
 
 destructor TUnit.Destroy;
 begin
+  GenericIntfInstances.Free;
+  GenericFuncInstances.Free;
+  GenericInstances.Free;
   IntfBlock.Free;
   ImplBlock.Free;
   InitStmts.Free;
   FinalStmts.Free;
   UsedUnits.Free;
-  { Transferred from TSemanticAnalyser when the unit is analysed standalone;
-    nil when the unit is analysed as a dependency of a program (program owns
-    the shared symbol table in that case). }
   SymbolTable.Free;
   inherited Destroy;
 end;

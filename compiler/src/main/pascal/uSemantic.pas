@@ -32,6 +32,7 @@ type
   private
     FTable:                TSymbolTable;
     FProg:                 TProgram;      { current program being analysed; set in Analyse }
+    FCurrentUnit:          TUnit;        { current unit being analysed; nil during program analysis }
     FMethodIndex:          TStringList;  { 'TypeName.MethodName' → TMethodDecl (not owned) }
     FProcIndex:            TStringList;  { 'ProcName' → TMethodDecl (not owned) }
     FGenericFuncTemplates: TStringList;  { base name → TMethodDecl template (not owned) }
@@ -460,6 +461,7 @@ var
   Sym:      TSymbol;
 begin
   FCurrentUnitName := AUnit.Name;
+  FCurrentUnit := AUnit;
   FTable.PushScope;
   try
     { Resolve interface type and constant declarations. }
@@ -471,7 +473,7 @@ begin
     for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
     begin
       MDecl := nil;  { reuse var below }
-      ParType := FTable.FindType(TVarDecl(AUnit.IntfBlock.Decls.Items[I]).TypeName);
+      ParType := FindTypeOrInstantiate(TVarDecl(AUnit.IntfBlock.Decls.Items[I]).TypeName);
       if ParType = nil then
         SemanticError(
           Format('Unknown type ''%s''',
@@ -551,7 +553,7 @@ begin
     { Register impl-section global variables. }
     for I := 0 to AUnit.ImplBlock.Decls.Count - 1 do
     begin
-      ParType := FTable.FindType(TVarDecl(AUnit.ImplBlock.Decls.Items[I]).TypeName);
+      ParType := FindTypeOrInstantiate(TVarDecl(AUnit.ImplBlock.Decls.Items[I]).TypeName);
       if ParType = nil then
         SemanticError(
           Format('Unknown type ''%s''',
@@ -711,11 +713,9 @@ begin
   finally
     FTable.PopScope;
   end;
-  { Transfer table ownership so TTypeDesc instances referenced by AST
-    nodes (Par.ResolvedType, ResolvedReturnType, etc.) outlive this
-    analyser.  Mirrors the Analyse(TProgram) behaviour. }
   AUnit.SymbolTable := FTable;
   FTable := nil;
+  FCurrentUnit := nil;
 end;
 
 procedure TSemanticAnalyser.AnalyseUnitForExport(AUnit: TUnit);
@@ -730,6 +730,7 @@ var
   VDecl:    TVarDecl;
 begin
   FCurrentUnitName := AUnit.Name;
+  FCurrentUnit := AUnit;
   { --- Interface section ------------------------------------------------
     No scope is pushed here: all FTable.Define calls go to the global scope,
     making these symbols visible to callers of this unit. }
@@ -744,7 +745,7 @@ begin
   for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
   begin
     VDecl := TVarDecl(AUnit.IntfBlock.Decls.Items[I]);
-    ParType := FTable.FindType(VDecl.TypeName);
+    ParType := FindTypeOrInstantiate(VDecl.TypeName);
     if ParType = nil then
       SemanticError(Format('Unknown type ''%s''', [VDecl.TypeName]),
         VDecl.Line, VDecl.Col);
@@ -827,7 +828,7 @@ begin
     for I := 0 to AUnit.ImplBlock.Decls.Count - 1 do
     begin
       VDecl := TVarDecl(AUnit.ImplBlock.Decls.Items[I]);
-      ParType := FTable.FindType(VDecl.TypeName);
+      ParType := FindTypeOrInstantiate(VDecl.TypeName);
       if ParType = nil then
         SemanticError(Format('Unknown type ''%s''', [VDecl.TypeName]), VDecl.Line, VDecl.Col);
       VDecl.ResolvedType := ParType;
@@ -975,6 +976,7 @@ begin
   finally
     FTable.PopScope;
   end;
+  FCurrentUnit := nil;
 end;
 
 procedure TSemanticAnalyser.LinkClassMethodImpls(ABlock: TBlock);
@@ -1576,12 +1578,14 @@ begin
         RT.AddImplements(IntfDesc);
     end;
 
-    { Register the instantiation for codegen }
     GI          := TGenericInstance.Create;
     GI.TypeName := ATypeName;
     GI.ClassDef := ClonedCD;
     GI.TypeDesc := RT;
-    FProg.GenericInstances.Add(GI);
+    if FCurrentUnit <> nil then
+      FCurrentUnit.GenericInstances.Add(GI)
+    else
+      FProg.GenericInstances.Add(GI);
 
     Result := RT;
   finally
@@ -1681,7 +1685,10 @@ begin
     {$IFDEF FPC}GII.IntfDef.Free;{$ENDIF}
     GII.IntfDef  := nil;
     GII.TypeDesc := Result;
-    FProg.GenericIntfInstances.Add(GII);
+    if FCurrentUnit <> nil then
+      FCurrentUnit.GenericIntfInstances.Add(GII)
+    else
+      FProg.GenericIntfInstances.Add(GII);
   finally
     Args.Free;
   end;
@@ -1805,7 +1812,10 @@ begin
     GFI            := TGenericFuncInstance.Create;
     GFI.InstName   := AInstName;
     GFI.MethodDecl := NewMDecl;
-    FProg.GenericFuncInstances.Add(GFI);
+    if FCurrentUnit <> nil then
+      FCurrentUnit.GenericFuncInstances.Add(GFI)
+    else
+      FProg.GenericFuncInstances.Add(GFI);
 
     Result := NewMDecl;
   finally

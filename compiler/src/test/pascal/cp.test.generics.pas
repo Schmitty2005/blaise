@@ -26,6 +26,8 @@ type
     function ParseSrc(const ASrc: string): TProgram;
     function AnalyseSrc(const ASrc: string): TProgram;
     function GenIR(const ASrc: string): string;
+    function AnalyseUnit(const ASrc: string): TUnit;
+    function GenUnitIR(const ASrc: string): string;
     procedure AnalyseExpectError(const ASrc: string);
   published
     { ------------------------------------------------------------------ }
@@ -56,12 +58,23 @@ type
     procedure TestSemantic_Generic_TwoParams_BothFieldsResolved;
 
     { ------------------------------------------------------------------ }
+    { Semantic — unit-scope generic var declarations                        }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_UnitIntf_GenericVar_Resolves;
+    procedure TestSemantic_UnitImpl_GenericVar_Resolves;
+
+    { ------------------------------------------------------------------ }
     { Codegen — monomorphized types                                        }
     { ------------------------------------------------------------------ }
     procedure TestCodegen_Generic_TypeInfoEmitted;
     procedure TestCodegen_Generic_ConstructorAllocsMemory;
     procedure TestCodegen_Generic_MethodEmitted;
     procedure TestCodegen_Generic_FieldAccessWorks;
+
+    { ------------------------------------------------------------------ }
+    { Codegen — unit-scope generic var                                     }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_UnitIntf_GenericVar_GlobalData;
   end;
 
 implementation
@@ -167,6 +180,34 @@ const
         end.
         ''';
 
+  SrcUnitIntfGenericVar =
+    '''
+        unit U;
+        interface
+        type
+          TBox<T> = class
+            FValue: T;
+          end;
+        var
+          G: TBox<Integer>;
+        implementation
+        end.
+        ''';
+
+  SrcUnitImplGenericVar =
+    '''
+        unit U;
+        interface
+        type
+          TBox<T> = class
+            FValue: T;
+          end;
+        implementation
+        var
+          G: TBox<string>;
+        end.
+        ''';
+
 { ------------------------------------------------------------------ }
 { Helpers                                                             }
 { ------------------------------------------------------------------ }
@@ -212,6 +253,47 @@ begin
   finally
     CG.Free;
     Prog.Free;
+  end;
+end;
+
+function TGenericsTests.AnalyseUnit(const ASrc: string): TUnit;
+var
+  L:  TLexer;
+  P:  TParser;
+  SA: TSemanticAnalyser;
+begin
+  L := TLexer.Create(ASrc);
+  P := TParser.Create(L);
+  try
+    Result := P.ParseUnit;
+  finally
+    P.Free;
+    L.Free;
+  end;
+  SA := TSemanticAnalyser.Create;
+  try
+    SA.AnalyseUnit(Result);
+  finally
+    SA.Free;
+  end;
+end;
+
+function TGenericsTests.GenUnitIR(const ASrc: string): string;
+var
+  U:  TUnit;
+  CG: TCodeGenQBE;
+begin
+  U := AnalyseUnit(ASrc);
+  try
+    CG := TCodeGenQBE.Create;
+    try
+      CG.GenerateUnit(U);
+      Result := CG.GetOutput;
+    finally
+      CG.Free;
+    end;
+  finally
+    U.Free;
   end;
 end;
 
@@ -531,6 +613,53 @@ begin
   IR := GenIR(SrcGenericUsage);
   { SetValue stores into FValue; verify a store instruction is emitted }
   AssertTrue('method bodies emitted with stores', Pos('storew', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Semantic — unit-scope generic var declarations                        }
+{ ------------------------------------------------------------------ }
+
+procedure TGenericsTests.TestSemantic_UnitIntf_GenericVar_Resolves;
+var
+  U: TUnit;
+begin
+  U := AnalyseUnit(SrcUnitIntfGenericVar);
+  try
+    AssertEquals('interface var count', 1, U.IntfBlock.Decls.Count);
+    AssertTrue('resolved type not nil',
+      TVarDecl(U.IntfBlock.Decls.Items[0]).ResolvedType <> nil);
+    AssertEquals('resolved type name', 'TBox<Integer>',
+      TVarDecl(U.IntfBlock.Decls.Items[0]).ResolvedType.Name);
+  finally
+    U.Free;
+  end;
+end;
+
+procedure TGenericsTests.TestSemantic_UnitImpl_GenericVar_Resolves;
+var
+  U: TUnit;
+begin
+  U := AnalyseUnit(SrcUnitImplGenericVar);
+  try
+    AssertEquals('impl var count', 1, U.ImplBlock.Decls.Count);
+    AssertTrue('resolved type not nil',
+      TVarDecl(U.ImplBlock.Decls.Items[0]).ResolvedType <> nil);
+    AssertEquals('resolved type name', 'TBox<string>',
+      TVarDecl(U.ImplBlock.Decls.Items[0]).ResolvedType.Name);
+  finally
+    U.Free;
+  end;
+end;
+
+procedure TGenericsTests.TestCodegen_UnitIntf_GenericVar_GlobalData;
+var
+  IR: string;
+begin
+  IR := GenUnitIR(SrcUnitIntfGenericVar);
+  AssertTrue('global data slot for G emitted',
+    Pos('data $G', IR) > 0);
+  AssertTrue('typeinfo for TBox_Integer emitted',
+    Pos('$typeinfo_TBox_Integer', IR) > 0);
 end;
 
 initialization

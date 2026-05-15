@@ -150,6 +150,8 @@ type
     procedure EmitStaticSubscriptAssign(AStmt: TStaticSubscriptAssign);
     procedure EmitWrite(ACall: TProcCall; ANewline: Boolean);
     function  EmitExpr(AExpr: TASTExpr): string;
+    procedure EmitInterfaceExprPair(AExpr: TASTExpr;
+      out AObjTemp, AItabTemp: string);
     function  EmitIsExpr(AExpr: TIsExpr): string;
     function  EmitAsExpr(AExpr: TAsExpr): string;
     function  EmitSupportsExpr(AExpr: TSupportsExpr): string;
@@ -4791,6 +4793,13 @@ begin
         else if Par.IsVarParam then
           ArgLine := ArgLine + Format(', l %s',
             [EmitLValueAddr(TASTExpr(ACall.Args.Items[I]))])
+        else if (Par.ResolvedType <> nil) and
+                (Par.ResolvedType.Kind = tyInterface) then
+        begin
+          EmitInterfaceExprPair(TASTExpr(ACall.Args.Items[I]),
+            ArgTemp, ArgTemp2);
+          ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
+        end
         else
         begin
           ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
@@ -4840,22 +4849,8 @@ begin
       else if (Par.ResolvedType <> nil) and
               (Par.ResolvedType.Kind = tyInterface) then
       begin
-        { Interface fat pointer — pass _obj and _itab as two l args.
-          Currently supports TIdentExpr (local or global var); other
-          interface-typed expressions (e.g. function returns) are not
-          yet wired. }
-        if not (TASTExpr(ACall.Args.Items[I]) is TIdentExpr) then
-          raise ECodeGenError.Create(
-            'Interface argument forms other than identifier not yet ' +
-            'supported by codegen — file an issue if you hit this');
-        ArgTemp  := AllocTemp;
-        ArgTemp2 := AllocTemp;
-        EmitLine(Format('  %s =l loadl %s_obj', [ArgTemp,
-          VarRef(TIdentExpr(TASTExpr(ACall.Args.Items[I])).Name,
-                 TIdentExpr(TASTExpr(ACall.Args.Items[I])).IsGlobal)]));
-        EmitLine(Format('  %s =l loadl %s_itab', [ArgTemp2,
-          VarRef(TIdentExpr(TASTExpr(ACall.Args.Items[I])).Name,
-                 TIdentExpr(TASTExpr(ACall.Args.Items[I])).IsGlobal)]));
+        EmitInterfaceExprPair(TASTExpr(ACall.Args.Items[I]),
+          ArgTemp, ArgTemp2);
         ArgLine := ArgLine + Format('l %s, l %s', [ArgTemp, ArgTemp2]);
       end
       else
@@ -6349,6 +6344,13 @@ begin
           else if Par.IsVarParam then
             ArgLine := ArgLine + Format(', l %s',
               [EmitLValueAddr(TASTExpr(FC.Args.Items[I]))])
+          else if (Par.ResolvedType <> nil) and
+                  (Par.ResolvedType.Kind = tyInterface) then
+          begin
+            EmitInterfaceExprPair(TASTExpr(FC.Args.Items[I]),
+              ArgTemp, ArgTemp2);
+            ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
+          end
           else
           begin
             ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
@@ -6402,6 +6404,13 @@ begin
         else if Par.IsVarParam then
           ArgLine := ArgLine + Format('l %s',
             [EmitLValueAddr(TASTExpr(FC.Args.Items[I]))])
+        else if (Par.ResolvedType <> nil) and
+                (Par.ResolvedType.Kind = tyInterface) then
+        begin
+          EmitInterfaceExprPair(TASTExpr(FC.Args.Items[I]),
+            ArgTemp, ArgTemp2);
+          ArgLine := ArgLine + Format('l %s, l %s', [ArgTemp, ArgTemp2]);
+        end
         else
         begin
           ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I]));
@@ -7717,6 +7726,52 @@ begin
     raise ECodeGenError.Create('Unknown expression node type');
 end;
 
+procedure TCodeGenQBE.EmitInterfaceExprPair(AExpr: TASTExpr;
+  out AObjTemp, AItabTemp: string);
+var
+  ObjT, ItabT: string;
+  OkT, LblOk, LblFail, LblEnd: string;
+  AE: TAsExpr;
+  IE: TIdentExpr;
+begin
+  if AExpr is TIdentExpr then
+  begin
+    IE := TIdentExpr(AExpr);
+    AObjTemp  := AllocTemp;
+    AItabTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %s_obj', [AObjTemp,
+      VarRef(IE.Name, IE.IsGlobal)]));
+    EmitLine(Format('  %s =l loadl %s_itab', [AItabTemp,
+      VarRef(IE.Name, IE.IsGlobal)]));
+  end
+  else if AExpr is TAsExpr then
+  begin
+    AE := TAsExpr(AExpr);
+    ObjT := EmitExpr(AE.Obj);
+    ItabT := AllocTemp;
+    EmitLine(Format('  %s =l call $_GetItab(l %s, l $typeinfo_%s)',
+      [ItabT, ObjT, AE.TypeName]));
+    OkT     := AllocTemp;
+    LblOk   := AllocLabel('as_ok');
+    LblFail := AllocLabel('as_fail');
+    LblEnd  := AllocLabel('as_end');
+    EmitLine(Format('  %s =w cnel %s, 0', [OkT, ItabT]));
+    EmitLine(Format('  jnz %s, @%s, @%s', [OkT, LblOk, LblFail]));
+    EmitLine('@' + LblFail);
+    EmitLine('  call $_Raise_InvalidCast()');
+    EmitLine(Format('  jmp @%s', [LblEnd]));
+    EmitLine('@' + LblOk);
+    EmitLine(Format('  jmp @%s', [LblEnd]));
+    EmitLine('@' + LblEnd);
+    AObjTemp  := ObjT;
+    AItabTemp := ItabT;
+  end
+  else
+    raise ECodeGenError.Create(
+      'Unsupported interface expression form for argument passing: ' +
+      AExpr.ClassName);
+end;
+
 function TCodeGenQBE.EmitIsExpr(AExpr: TIsExpr): string;
 var
   ObjTemp: string;
@@ -7938,11 +7993,17 @@ end;
 
 procedure TCodeGenQBE.GenerateUnit(AUnit: TUnit);
 var
-  I:         Integer;
+  I, J, S:   Integer;
   ImplDecl:  TMethodDecl;
   IntfNames: TStringList;
   Body:      TIRBuffer;
   SavedOut:  TIRBuffer;
+  GI:        TGenericInstance;
+  GFI:       TGenericFuncInstance;
+  MDecl:     TMethodDecl;
+  RT:        TRecordTypeDesc;
+  VLine:     string;
+  E:         TVTableEntry;
 begin
   FOutput.Clear;
   FStrLits.Clear;
@@ -7966,6 +8027,21 @@ begin
           ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls.Items[I]);
           EmitFuncDef(ImplDecl, IntfNames.IndexOf(ImplDecl.Name) >= 0);
         end;
+        for I := 0 to AUnit.GenericInstances.Count - 1 do
+        begin
+          GI := TGenericInstance(AUnit.GenericInstances.Items[I]);
+          for J := 0 to GI.ClassDef.Methods.Count - 1 do
+          begin
+            MDecl := TMethodDecl(GI.ClassDef.Methods.Items[J]);
+            if MDecl.Body <> nil then
+              EmitMethodDef(GI.TypeName, MDecl);
+          end;
+        end;
+        for I := 0 to AUnit.GenericFuncInstances.Count - 1 do
+        begin
+          GFI := TGenericFuncInstance(AUnit.GenericFuncInstances.Items[I]);
+          EmitFuncDef(GFI.MethodDecl, True);
+        end;
       finally
         FOutput := SavedOut;
       end;
@@ -7974,6 +8050,30 @@ begin
       EmitLine('# Unit: ' + AUnit.Name);
       EmitLine('');
       EmitDataSection;
+      EmitGlobalVarData(AUnit.IntfBlock);
+      EmitGlobalVarData(AUnit.ImplBlock);
+      for I := 0 to AUnit.GenericInstances.Count - 1 do
+      begin
+        GI := TGenericInstance(AUnit.GenericInstances.Items[I]);
+        RT := TRecordTypeDesc(GI.TypeDesc);
+        EmitLine(Format('data $typeinfo_%s = { l 0 }', [QBEMangle(GI.TypeName)]));
+        if RT.HasVTable then
+        begin
+          VLine := Format('data $vtable_%s = { l $typeinfo_%s',
+            [QBEMangle(GI.TypeName), QBEMangle(GI.TypeName)]);
+          for S := 0 to RT.VTableCount - 1 do
+          begin
+            E := RT.VTableEntryAt(S);
+            if E.IsAbstract then
+              VLine := VLine + ', l $_AbstractMethodError'
+            else
+              VLine := VLine + ', l $' + QBEMangle(StrCopyTail(E.ImplName, 1));
+          end;
+          VLine := VLine + ' }';
+          EmitLine(VLine);
+        end;
+        EmitFieldCleanupFn(GI.TypeName, RT);
+      end;
       FOutput.AppendBuffer(Body);
     finally
       Body.Free;

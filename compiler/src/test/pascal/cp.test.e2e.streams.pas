@@ -40,6 +40,7 @@ type
     procedure TestRun_TBuffer_IndexOf_FindsByte;
     procedure TestRun_InterfaceDispatch_ViaSupports;
     procedure TestRun_InterfaceDispatch_AsFunctionParam;
+    procedure TestRun_InterfaceArg_AsExpr;
     procedure TestRun_CopyStream_MemoryToMemory;
     procedure TestRun_CopyStream_FileToFile;
   end;
@@ -464,6 +465,27 @@ const
     end.
     ''';
 
+  SrcInterfaceArgAsExpr = '''
+    program P;
+    uses Streams;
+    procedure WriteFour(S: IOutputStream);
+    var B: array[0..3] of Byte;
+    begin
+      B[0] := 65; B[1] := 66; B[2] := 67; B[3] := 68;
+      S.Write(@B[0], 4)
+    end;
+    var M: TMemoryOutputStream;
+    begin
+      M := TMemoryOutputStream.Create;
+      try
+        WriteFour(M as IOutputStream);
+        WriteLn(M.ToString)
+      finally
+        M.Free
+      end
+    end.
+    ''';
+
   { CopyStream from one memory stream to another via the fallback
     byte-loop path (no concrete IReaderFrom/IWriterTo implementations
     yet — those are a future optimisation). }
@@ -714,6 +736,15 @@ begin
   AssertTrue('compile+run', CompileAndRunWithRTL(SrcInterfaceAsParam, Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('interface as function param dispatches correctly', 'ABCD' + LE, Output)
+end;
+
+procedure TE2EStreamsTests.TestRun_InterfaceArg_AsExpr;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRunWithRTL(SrcInterfaceArgAsExpr, Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('as-expr interface arg dispatches correctly', 'ABCD' + LE, Output)
 end;
 
 procedure TE2EStreamsTests.TestRun_CopyStream_MemoryToMemory;

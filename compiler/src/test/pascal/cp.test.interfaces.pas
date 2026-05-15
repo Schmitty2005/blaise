@@ -89,6 +89,12 @@ type
     procedure TestSemantic_Supports_NonInterface_RaisesError;
     procedure TestCodegen_Supports_TwoArg_CallsImplementsInterface;
     procedure TestCodegen_Supports_ThreeArg_WritesSlots;
+
+    { ------------------------------------------------------------------ }
+    { Interface argument passing — non-identifier expressions              }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_InterfaceArg_AsExpr_PassesBothSlots;
+    procedure TestCodegen_InterfaceArg_Identifier_PassesBothSlots;
   end;
 
 implementation
@@ -270,6 +276,58 @@ const
           T := TFoo.Create;
           F := T;
           F.DoIt
+        end.
+        ''';
+
+  SrcInterfaceArgAsExpr =
+    '''
+        program P;
+        type
+          IFoo = interface
+            procedure DoIt;
+          end;
+          TFoo = class(TObject, IFoo)
+            procedure DoIt; virtual;
+          end;
+        procedure TFoo.DoIt;
+        begin
+        end;
+        procedure UseIntf(X: IFoo);
+        begin
+          X.DoIt;
+        end;
+        var
+          T: TFoo;
+        begin
+          T := TFoo.Create;
+          UseIntf(T as IFoo)
+        end.
+        ''';
+
+  SrcInterfaceArgIdent =
+    '''
+        program P;
+        type
+          IFoo = interface
+            procedure DoIt;
+          end;
+          TFoo = class(TObject, IFoo)
+            procedure DoIt; virtual;
+          end;
+        procedure TFoo.DoIt;
+        begin
+        end;
+        procedure UseIntf(X: IFoo);
+        begin
+          X.DoIt;
+        end;
+        var
+          F: IFoo;
+          T: TFoo;
+        begin
+          T := TFoo.Create;
+          F := T as IFoo;
+          UseIntf(F)
         end.
         ''';
 
@@ -930,6 +988,32 @@ begin
   { itab slot must be populated via _GetItab }
   AssertTrue('calls _GetItab',
     Pos('call $_GetItab', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Interface argument passing — non-identifier expressions              }
+{ ------------------------------------------------------------------ }
+
+procedure TInterfaceTests.TestCodegen_InterfaceArg_AsExpr_PassesBothSlots;
+var IR: string;
+begin
+  IR := GenIR(SrcInterfaceArgAsExpr);
+  AssertTrue('calls _GetItab for as-expr arg',
+    Pos('call $_GetItab', IR) > 0);
+  AssertTrue('calls UseIntf',
+    Pos('call $UseIntf', IR) > 0);
+end;
+
+procedure TInterfaceTests.TestCodegen_InterfaceArg_Identifier_PassesBothSlots;
+var IR: string;
+begin
+  IR := GenIR(SrcInterfaceArgIdent);
+  AssertTrue('loads _obj slot for ident arg',
+    Pos('loadl $F_obj', IR) > 0);
+  AssertTrue('loads _itab slot for ident arg',
+    Pos('loadl $F_itab', IR) > 0);
+  AssertTrue('calls UseIntf',
+    Pos('call $UseIntf', IR) > 0);
 end;
 
 initialization
