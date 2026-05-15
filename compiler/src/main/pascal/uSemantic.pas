@@ -1926,25 +1926,39 @@ begin
   begin
     CD := TConstDecl(ABlock.ConstDecls.Items[I]);
     if not CD.IsArrayConst then Continue;
-    IdxTD := FTable.FindType(CD.ArrayIndexType);
-    if IdxTD = nil then
-      SemanticError(Format('Unknown index type ''%s'' in array const ''%s''',
-        [CD.ArrayIndexType, CD.Name]), CD.Line, CD.Col);
-    if IdxTD.Kind <> tyEnum then
-      SemanticError(Format('Array const index type must be an enum, got ''%s''',
-        [IdxTD.Name]), CD.Line, CD.Col);
     ElemTD := FTable.FindType(CD.ArrayElemType);
     if ElemTD = nil then
       SemanticError(Format('Unknown element type ''%s'' in array const ''%s''',
         [CD.ArrayElemType, CD.Name]), CD.Line, CD.Col);
-    EnumDesc := TEnumTypeDesc(IdxTD);
-    Expected := EnumDesc.Members.Count;
-    if CD.ArrayElements.Count <> Expected then
-      SemanticError(Format(
-        'Array const ''%s'' has %d element(s) but index type ''%s'' has %d member(s)',
-        [CD.Name, CD.ArrayElements.Count, CD.ArrayIndexType, Expected]),
-        CD.Line, CD.Col);
-    ArrTD := FTable.NewStaticArrayType(ElemTD, 0, Expected - 1);
+    if CD.ArrayIsRangeIndexed then
+    begin
+      Expected := CD.ArrayHighBound - CD.ArrayLowBound + 1;
+      if CD.ArrayElements.Count <> Expected then
+        SemanticError(Format(
+          'Array const ''%s'' has %d element(s) but range [%d..%d] needs %d',
+          [CD.Name, CD.ArrayElements.Count, CD.ArrayLowBound,
+           CD.ArrayHighBound, Expected]),
+          CD.Line, CD.Col);
+      ArrTD := FTable.NewStaticArrayType(ElemTD, CD.ArrayLowBound, CD.ArrayHighBound);
+    end
+    else
+    begin
+      IdxTD := FTable.FindType(CD.ArrayIndexType);
+      if IdxTD = nil then
+        SemanticError(Format('Unknown index type ''%s'' in array const ''%s''',
+          [CD.ArrayIndexType, CD.Name]), CD.Line, CD.Col);
+      if IdxTD.Kind <> tyEnum then
+        SemanticError(Format('Array const index type must be an enum, got ''%s''',
+          [IdxTD.Name]), CD.Line, CD.Col);
+      EnumDesc := TEnumTypeDesc(IdxTD);
+      Expected := EnumDesc.Members.Count;
+      if CD.ArrayElements.Count <> Expected then
+        SemanticError(Format(
+          'Array const ''%s'' has %d element(s) but index type ''%s'' has %d member(s)',
+          [CD.Name, CD.ArrayElements.Count, CD.ArrayIndexType, Expected]),
+          CD.Line, CD.Col);
+      ArrTD := FTable.NewStaticArrayType(ElemTD, 0, Expected - 1);
+    end;
     Sym := TSymbol.Create(CD.Name, skConstant, ArrTD);
     Sym.IsGlobal := True;
     Sym.ConstArray := TStringList.Create;

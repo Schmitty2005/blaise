@@ -34,6 +34,10 @@ type
     procedure TestRun_TypeAlias_AsParam_Length;
     procedure TestRun_TypeAlias_MultipleVarsShareType;
     procedure TestRun_TypeAlias_GlobalAndLocal;
+
+    { Range-indexed const array: const X: array[L..H] of T = (...) }
+    procedure TestRun_ConstArray_RangeIndexed_Strings;
+    procedure TestRun_ConstArray_RangeIndexed_Integers;
   end;
 
 implementation
@@ -289,6 +293,64 @@ begin
     Lines.Text := Trim(Output);
     AssertEquals('G[0]=7', '7', Lines.Strings[0]);
     AssertEquals('G[2]=9', '9', Lines.Strings[1]);
+  finally Lines.Free end
+end;
+
+procedure TE2EStaticArrayTests.TestRun_ConstArray_RangeIndexed_Strings;
+const
+  Src =
+    '''
+    program P;
+    const Days: array[0..6] of string = ('Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat');
+    var I: Integer;
+    begin
+      WriteLn(Days[0]);
+      WriteLn(Days[3]);
+      WriteLn(Days[6]);
+      I := 5;
+      WriteLn(Days[I])
+    end.
+    ''';
+var Output: string; RCode: Integer;
+  Lines: TStringList;
+begin
+  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('Days[0]', 'Sun', Lines.Strings[0]);
+    AssertEquals('Days[3]', 'Wed', Lines.Strings[1]);
+    AssertEquals('Days[6]', 'Sat', Lines.Strings[2]);
+    AssertEquals('Days[5]', 'Fri', Lines.Strings[3]);
+  finally Lines.Free end
+end;
+
+procedure TE2EStaticArrayTests.TestRun_ConstArray_RangeIndexed_Integers;
+const
+  Src =
+    '''
+    program P;
+    const Primes: array[0..4] of Integer = (2, 3, 5, 7, 11);
+    begin
+      WriteLn(Primes[0]);
+      WriteLn(Primes[2]);
+      WriteLn(Primes[4])
+    end.
+    ''';
+var Output: string; RCode: Integer;
+  Lines: TStringList;
+begin
+  if not ToolchainAvailable then begin Fail('<toolchain-missing>'); Exit end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('Primes[0]', '2', Lines.Strings[0]);
+    AssertEquals('Primes[2]', '5', Lines.Strings[1]);
+    AssertEquals('Primes[4]', '11', Lines.Strings[2]);
   finally Lines.Free end
 end;
 

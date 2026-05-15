@@ -75,6 +75,13 @@ type
     procedure TestArrayConst_IndexedByEnumVar;
     procedure TestArrayConst_WrongElementCount_Error;
     procedure TestArrayConst_InUnit;
+
+    { Range-indexed array constants: array[Low..High] of T = (...) }
+    procedure TestArrayConst_RangeIndexed_Parses;
+    procedure TestArrayConst_RangeIndexed_InIR;
+    procedure TestArrayConst_RangeIndexed_StringElements;
+    procedure TestArrayConst_RangeIndexed_WrongCount_Error;
+    procedure TestArrayConst_RangeIndexed_IndexedByVar;
   end;
 
 implementation
@@ -800,6 +807,99 @@ begin
     ''');
   AssertTrue('IR non-empty', IR <> '');
   AssertTrue('Rainy in IR', IRContains(IR, 'Rainy'));
+end;
+
+procedure TConstTests.TestArrayConst_RangeIndexed_Parses;
+var U: TUnit;
+begin
+  U := ParseUnit(
+    '''
+    unit W;
+    interface
+    const Days: array[0..6] of string = ('Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat');
+    implementation
+    end.
+    ''');
+  AssertNotNull('unit parsed', U);
+  AssertEquals('one const decl', 1, U.IntfBlock.ConstDecls.Count);
+  U.Free;
+end;
+
+procedure TConstTests.TestArrayConst_RangeIndexed_InIR;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const Vals: array[0..3] of Integer = (10, 20, 30, 40);
+    begin
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('Vals in IR', IRContains(IR, 'Vals'));
+end;
+
+procedure TConstTests.TestArrayConst_RangeIndexed_StringElements;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const Days: array[0..2] of string = ('Mon', 'Tue', 'Wed');
+    begin
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('Mon in IR', IRContains(IR, 'Mon'));
+  AssertTrue('Tue in IR', IRContains(IR, 'Tue'));
+  AssertTrue('Wed in IR', IRContains(IR, 'Wed'));
+end;
+
+procedure TConstTests.TestArrayConst_RangeIndexed_WrongCount_Error;
+var
+  L:  TLexer;
+  P:  TParser;
+  Pr: TProgram;
+  SA: TSemanticAnalyser;
+  GotError: Boolean;
+begin
+  GotError := False;
+  L  := TLexer.Create(
+    '''
+    program P;
+    const Vals: array[0..3] of Integer = (10, 20);
+    begin end.
+    ''');
+  P  := TParser.Create(L);
+  Pr := P.Parse;
+  SA := TSemanticAnalyser.Create;
+  try
+    try
+      SA.Analyse(Pr);
+    except
+      on E: ESemanticError do GotError := True;
+    end;
+  finally
+    SA.Free; Pr.Free; P.Free; L.Free;
+  end;
+  AssertTrue('wrong count raises error', GotError);
+end;
+
+procedure TConstTests.TestArrayConst_RangeIndexed_IndexedByVar;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const Days: array[0..2] of string = ('Mon', 'Tue', 'Wed');
+    var I: Integer; S: string;
+    begin
+      I := 1;
+      S := Days[I]
+    end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('Days in IR', IRContains(IR, 'Days'));
 end;
 
 initialization

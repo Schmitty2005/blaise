@@ -566,12 +566,28 @@ begin
         { array-typed constant }
         Advance;
         Expect(tkLBracket);
-        if not Check(tkIdent) then
+        if Check(tkIntLit) then
+        begin
+          CD.ArrayLowBound := StrToInt(FCurrent.Value);
+          Advance;
+          Expect(tkDotDot);
+          if not Check(tkIntLit) then
+            raise EParseError.Create(Format(
+              'Expected integer high bound in array const at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+          CD.ArrayHighBound := StrToInt(FCurrent.Value);
+          Advance;
+          CD.ArrayIsRangeIndexed := True;
+        end
+        else if Check(tkIdent) then
+        begin
+          CD.ArrayIndexType := FCurrent.Value;
+          Advance;
+        end
+        else
           raise EParseError.Create(Format(
-            'Expected index type name in array const at line %d col %d in %s',
+            'Expected index type or range in array const at line %d col %d in %s',
             [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-        CD.ArrayIndexType := FCurrent.Value;
-        Advance;
         Expect(tkRBracket);
         Expect(tkOf);
         if not Check(tkIdent) then

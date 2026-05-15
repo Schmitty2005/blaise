@@ -381,6 +381,7 @@ ConstDecl
 ConstTypeAnnotation
     = TypeName                                            (* scalar typed const *)
     | ARRAY LBRACKET TypeName RBRACKET OF TypeName        (* array-of-enum const *)
+    | ARRAY LBRACKET IntLit DOTDOT IntLit RBRACKET OF TypeName  (* array-of-range const *)
     ;
 
 ConstRhs
@@ -399,9 +400,11 @@ ConstExpr
  *   Untyped:      const MaxItems = 100;
  *   Scalar-typed: const Pi: Double = 3.14159;
  *   Array-typed:  const Names: array[TWeather] of string = ('Sunny', 'Cloudy', 'Rainy');
+ *                 const Days: array[0..6] of string = ('Sun', 'Mon', ...);
  *
- * Array-typed constants require an enum as the index type.  The element
- * count in the value list must exactly match the number of enum members.
+ * Array-typed constants accept either an enum type name or an integer
+ * range as the index.  The element count in the value list must exactly
+ * match the number of index positions (enum member count or High-Low+1).
  * Array consts are emitted as pre-initialised global data sections.
  *
  * ConstSection may appear in: program/unit Block, InterfaceSection,

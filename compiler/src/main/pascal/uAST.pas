@@ -700,6 +700,9 @@ type
     ArrayIndexType: string;   { enum type name used as index, e.g. 'TWeather' }
     ArrayElemType:  string;   { element type name, e.g. 'string', 'Integer' }
     ArrayElements:  TStringList; { ordered list of raw element values (strings or int literals) }
+    ArrayIsRangeIndexed: Boolean; { True when index is Low..High integer range }
+    ArrayLowBound:  Integer;
+    ArrayHighBound: Integer;
     destructor Destroy; override;
   end;
 
