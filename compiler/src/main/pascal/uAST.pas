@@ -498,7 +498,8 @@ type
 
   TRecordTypeDef = class(TASTTypeDef)
   public
-    Fields: TObjectList;  { owned TFieldDecl }
+    Fields:  TObjectList;  { owned TFieldDecl }
+    Methods: TObjectList;  { owned TMethodDecl }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -568,6 +569,7 @@ type
                                        empty string means use Name verbatim }
     IsExternal:         Boolean;     { declared with 'external' directive — no body }
     ExternalName:       string;      { C symbol name from 'external name ''c_foo'''; empty = use Pascal name }
+    IsRecordMethod:     Boolean;     { set by uSemantic — owner type is a record (not a class) }
     VTableSlot:         Integer;     { -1 = static; >=0 = vtable index (set by uSemantic) }
     TypeParams:         TStringList; { non-nil = generic function template; owns param names }
     TypeParamConstraints: TStringList; { parallel to TypeParams; '' = unconstrained,
@@ -1107,12 +1109,14 @@ end;
 constructor TRecordTypeDef.Create;
 begin
   inherited Create;
-  Fields := TObjectList.Create(True);
+  Fields  := TObjectList.Create(True);
+  Methods := TObjectList.Create(True);
 end;
 
 destructor TRecordTypeDef.Destroy;
 begin
   Fields.Free;
+  Methods.Free;
   inherited Destroy;
 end;
 

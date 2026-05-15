@@ -894,14 +894,30 @@ begin
 end;
 
 function TParser.ParseRecordDef: TRecordTypeDef;
+var
+  MethDecl: TMethodDecl;
 begin
   Result := TRecordTypeDef.Create;
   try
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Expect(tkRecord);
-    while Check(tkIdent) or Check(tkLBracket) do
-      ParseFieldDecl(Result.Fields);
+    repeat
+      if Check(tkIdent) or Check(tkLBracket) then
+        ParseFieldDecl(Result.Fields)
+      else if Check(tkFunction) then
+      begin
+        MethDecl := ParseMethodDecl(True);
+        Result.Methods.Add(MethDecl);
+      end
+      else if Check(tkProcedure) then
+      begin
+        MethDecl := ParseMethodDecl(False);
+        Result.Methods.Add(MethDecl);
+      end
+      else
+        Break;
+    until False;
     Expect(tkEnd);
   except
     Result.Free;

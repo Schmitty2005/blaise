@@ -2461,3 +2461,137 @@ which adds complexity and is rarely more readable than the enum form.
 
 *Named-constant workaround* (`case` statement) — correct but verbose and not
 checked by the compiler against enum additions.
+
+== Record Methods
+
+Blaise records may declare methods alongside fields:
+
+[source,pascal]
+----
+type
+  TPoint = record
+    X, Y: Integer;
+    function Distance(Other: TPoint): Integer;
+    function ToString: string;
+  end;
+
+function TPoint.Distance(Other: TPoint): Integer;
+begin
+  Result := Abs(Self.X - Other.X) + Abs(Self.Y - Other.Y)
+end;
+----
+
+=== Calling Convention
+
+Record methods receive `Self` by pointer (functionally a `var` parameter at
+the QBE ABI level).  The language preserves value semantics: assignments copy
+the record content, parameters pass by value unless `var` is specified.  The
+pointer-pass for `Self` is an implementation detail — within a method body
+`Self.Field := V` mutates the caller's record, the same as in any imperative
+record method.
+
+=== Restrictions
+
+Records cannot have constructors, destructors, or virtual methods.  There is
+no inheritance: a record `type` declaration cannot list a parent.  Records do
+not participate in the vtable / RTTI system; they have no class identity.
+
+=== Why no constructors
+
+Pascal records have always been initialisable by struct-style assignment
+(`P.X := 1; P.Y := 2`) or by `MakePoint(1, 2)`-style factory functions.
+Adding constructor syntax would either require introducing a *new*
+two-keyword construction form (Delphi's `record constructor`) or overloading
+the existing `Create` method name with new semantics — both add complexity
+without enabling anything that factory functions don't already cover.  The
+five-type date/time RTL (`DateUtils`) settled the question in practice: the
+`Make*` factory pattern reads cleanly, threads through `with` blocks, and
+keeps record literal construction (the common case) free of method-call
+overhead.
+
+=== Alternatives Rejected
+
+*Record inheritance* (Delphi extended records with parent) — would require
+either a vtable per record (defeating the cost model — records are meant to
+be value types, fast to copy, no indirection) or a single-inheritance chain
+without polymorphism (no semantic advantage over composition).  Classes
+already cover the cases where inheritance is wanted.
+
+*Virtual methods on records* — same as above: needs a vtable, conflicts with
+copy-by-value, and the design pressure for it (polymorphism) is satisfied by
+interfaces over classes.
+
+== Date and Time RTL — Five-Type Model
+
+The `DateUtils` unit replaces FPC/Delphi's `TDateTime`-as-`Double` with five
+distinct record types: `TDate`, `TTime`, `TDateTime`, `TInstant`, and
+`TDuration`, plus a `TTimeZoneOffset` helper.
+
+=== Why not `TDateTime` as Double
+
+The Delphi/FPC convention encodes `TDateTime` as a `Double`: integer part
+is days since 1899-12-30, fractional part is the time of day.  This has
+three well-known problems:
+
+* *Precision loss.*  A `Double` has 53 bits of mantissa.  Operations on
+  dates more than a few centuries from the epoch lose milliseconds and
+  eventually whole seconds.  Arithmetic round-trips do not preserve the
+  original value.
+* *Type confusion.*  The same type is used for a calendar date, a local
+  wall-clock instant, and a UTC point-in-time.  There is no way for the
+  type system to flag a function that adds a local-time value to a
+  UTC instant — both compile to `Double + Double`.
+* *No timezone metadata.*  The bare `Double` carries no information about
+  whether the encoded value is local time, UTC, or naive.  Reasoning about
+  DST transitions or cross-timezone arithmetic requires out-of-band
+  knowledge.
+
+The five-type model addresses all three: every value uses integer storage
+(no precision drift), the types name their semantic role, and timezone is
+explicit where it matters.
+
+=== Type semantics
+
+`TDate` — calendar date (Year, Month, Day) without time or timezone.
+
+`TTime` — time of day (Hour, Minute, Second, Nanosecond) without date or
+timezone.
+
+`TDateTime` — local date+time without timezone.  Use when wall-clock fields
+are what matter and the timezone is implied or irrelevant.
+
+`TInstant` — unique point on the UTC timeline, stored as nanoseconds since
+the Unix epoch (signed `Int64`).  The right type for "when did this happen"
+across timezones, log timestamps, scheduling.
+
+`TDuration` — signed nanosecond interval (`Int64`).  Closed under addition
+and negation; not anchored to any point in time.
+
+=== Timezone scope
+
+`TTimeZoneOffset` represents a fixed UTC offset (`+HH:MM` or `-HH:MM`).  Full
+IANA tzdata / DST rules are deferred to a future phase — they require a
+runtime tzdata reader and DST-aware arithmetic that would significantly
+expand the unit's scope.  The fixed-offset model covers ISO 8601 timestamp
+formatting and a substantial fraction of real-world timezone needs.
+
+=== Why integer storage everywhere
+
+`TInstant` and `TDuration` use signed `Int64` nanoseconds — large enough to
+cover ±292 years from epoch with nanosecond precision.  `TDate` / `TTime` /
+`TDateTime` use `Integer` per sub-field.  Blaise does not yet implement
+`packed` records, so each `Byte`-sized field would still consume 4 bytes
+due to alignment padding; using `Integer` everywhere is simpler and the
+record size is identical.  When `packed` records arrive, the field types
+can be tightened without changing the API.
+
+=== Alternatives Rejected
+
+*Single 128-bit instant type* — covers nanosecond precision over the full
+ICU calendar range, but requires emulated 128-bit arithmetic for every
+operation.  `Int64` nanoseconds with a ±292-year range is sufficient for
+all practical engineering uses.
+
+*ISO 8601 string as the canonical type* — readable but slow and
+allocation-heavy.  The wire format is ISO 8601 (`ToString` methods produce
+it); the in-memory representation is structured.

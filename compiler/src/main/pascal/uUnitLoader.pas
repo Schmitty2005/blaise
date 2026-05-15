@@ -51,10 +51,9 @@ implementation
 function TUnitLoader.IsBuiltin(const AName: string): Boolean;
 begin
   Result :=
-    SameText(AName, 'System')    or
-    SameText(AName, 'DateUtils') or SameText(AName, 'Windows')   or
-    SameText(AName, 'Unix')      or SameText(AName, 'BaseUnix')  or
-    SameText(AName, 'CThreads')  or SameText(AName, 'FGL')       or
+    SameText(AName, 'System')   or SameText(AName, 'Windows')   or
+    SameText(AName, 'Unix')     or SameText(AName, 'BaseUnix')  or
+    SameText(AName, 'CThreads') or SameText(AName, 'FGL')       or
     SameText(AName, 'Types');
 end;
 

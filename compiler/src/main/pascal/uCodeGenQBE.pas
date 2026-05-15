@@ -3103,6 +3103,9 @@ begin
       EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
       EmitLine(Format('  storel %s, %s', [ValTemp, DstField]));
     end
+    else if F.TypeDesc.Kind = tyRecord then
+      { Nested record field: recurse into sub-fields }
+      Self.EmitRecordCopy(TRecordTypeDesc(F.TypeDesc), DstField, SrcField)
     else if QbeTypeOf(F.TypeDesc) = 'w' then
     begin
       ValTemp := AllocTemp;
@@ -3173,9 +3176,23 @@ begin
   begin
     MCallExpr := TMethodCallExpr(AExpr);
     MDecl := TMethodDecl(MCallExpr.ResolvedMethod);
-    SelfTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %s',
-      [SelfTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
+    if MDecl.IsRecordMethod and MCallExpr.IsVarParam then
+    begin
+      { Record var-param receiver — slot holds the address; load it. }
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s',
+        [SelfTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
+    end
+    else if MDecl.IsRecordMethod then
+      { Regular record variable: VarRef IS the record address — pass directly. }
+      SelfTemp := VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)
+    else
+    begin
+      { Class variable: load the heap pointer from the variable slot. }
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s',
+        [SelfTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
+    end;
     FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, MCallExpr.Name);
     ArgLine  := Format('l %s, l %s', [ASretAddr, SelfTemp]);
     for I := 0 to MCallExpr.Args.Count - 1 do
@@ -3218,8 +3235,22 @@ begin
         SelfTemp := Ptr;
       end;
     end
+    else if MDecl.IsRecordMethod and FldAccess.IsVarParam then
+    begin
+      { Record var-param receiver (Self inside a record method, or a record
+        passed via var): the slot holds the address — load it. }
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s',
+        [SelfTemp, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+    end
+    else if MDecl.IsRecordMethod then
+    begin
+      { Regular record variable: VarRef IS the record address — pass directly. }
+      SelfTemp := VarRef(FldAccess.RecordName, FldAccess.IsGlobal);
+    end
     else
     begin
+      { Class variable: load the heap pointer from the variable slot. }
       SelfTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %s',
         [SelfTemp, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
@@ -3393,6 +3424,19 @@ begin
   end
   else
     Ptr := FieldPtr(AAssign.RecordName, AAssign.FieldInfo.Offset, AAssign.IsGlobal);
+
+  { Record-typed field: copy all subfields recursively (ValTemp is the source
+    record address; Ptr is the destination field address inside the parent). }
+  if AAssign.FieldInfo.TypeDesc.Kind = tyRecord then
+  begin
+    if IsRecordCall(AAssign.Expr) then
+    begin
+      EmitRecordCallSret(AAssign.Expr, Ptr);
+    end
+    else
+      EmitRecordCopy(TRecordTypeDesc(AAssign.FieldInfo.TypeDesc), Ptr, ValTemp);
+    Exit;
+  end;
 
   IsStr := AAssign.FieldInfo.TypeDesc.IsString;
   IsArc := IsStr or (AAssign.FieldInfo.TypeDesc.Kind = tyClass);
@@ -4438,21 +4482,32 @@ end;
 
 procedure TCodeGenQBE.EmitMethodDefs(AProg: TProgram);
 var
-  I, J:  Integer;
-  TD:    TTypeDecl;
-  CD:    TClassTypeDef;
-  GI:    TGenericInstance;
-  MDecl: TMethodDecl;
+  I, J:    Integer;
+  TD:      TTypeDecl;
+  CD:      TClassTypeDef;
+  RD:      TRecordTypeDef;
+  GI:      TGenericInstance;
+  MDecl:   TMethodDecl;
+  Methods: TObjectList;
 begin
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
     TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);
-    if not (TD.Def is TClassTypeDef) then
+    if TD.Def is TClassTypeDef then
+    begin
+      CD      := TClassTypeDef(TD.Def);
+      Methods := CD.Methods;
+    end
+    else if TD.Def is TRecordTypeDef then
+    begin
+      RD      := TRecordTypeDef(TD.Def);
+      Methods := RD.Methods;
+    end
+    else
       Continue;
-    CD := TClassTypeDef(TD.Def);
-    for J := 0 to CD.Methods.Count - 1 do
-      if TMethodDecl(CD.Methods.Items[J]).Body <> nil then
-        EmitMethodDef(TD.Name, TMethodDecl(CD.Methods.Items[J]));
+    for J := 0 to Methods.Count - 1 do
+      if TMethodDecl(Methods.Items[J]).Body <> nil then
+        EmitMethodDef(TD.Name, TMethodDecl(Methods.Items[J]));
   end;
 
   { Generic instances — emit with mangled type name }
@@ -6633,9 +6688,18 @@ begin
       evaluating the receiver expression (e.g. a typecast). }
     if MCallExpr.ObjExpr <> nil then
       SelfTemp := EmitExpr(MCallExpr.ObjExpr)
+    else if MDecl.IsRecordMethod and MCallExpr.IsVarParam then
+    begin
+      { Record var-param receiver — slot holds the record address; load once. }
+      SelfTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_%s', [SelfTemp, MCallExpr.ObjectName]));
+    end
+    else if MDecl.IsRecordMethod then
+      { Regular record variable: VarRef IS the record address — pass directly. }
+      SelfTemp := VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)
     else if MCallExpr.IsVarParam then
     begin
-      { Var/out param: local slot holds caller's address — dereference twice }
+      { Var/out param of class type: local slot holds caller's address — dereference twice }
       SelfTemp := AllocTemp;
       FPtrTemp := AllocTemp;
       EmitLine(Format('  %s =l loadl %%_var_%s', [FPtrTemp, MCallExpr.ObjectName]));
@@ -6995,9 +7059,24 @@ begin
       end
       else
       begin
-        L := AllocTemp;
-        EmitLine(Format('  %s =l loadl %s',
-          [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+        { For class variables, load the object pointer from the variable.
+          For record var-params (Self inside a record method), dereference
+          the pointer slot to get the actual record address.
+          For regular record variables, the variable address IS the record. }
+        if MDecl.IsRecordMethod and FldAccess.IsVarParam then
+        begin
+          L := AllocTemp;
+          EmitLine(Format('  %s =l loadl %s',
+            [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+        end
+        else if MDecl.IsRecordMethod then
+          L := VarRef(FldAccess.RecordName, FldAccess.IsGlobal)
+        else
+        begin
+          L := AllocTemp;
+          EmitLine(Format('  %s =l loadl %s',
+            [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+        end;
         QType := QbeTypeOf(MDecl.ResolvedReturnType);
         T := AllocTemp;
         if MDecl.VTableSlot >= 0 then
@@ -8200,19 +8279,30 @@ begin
           EmitFuncDef(ImplDecl, IntfNames.IndexOf(ImplDecl.Name) >= 0);
         end;
 
-        { Class method bodies from interface type declarations.
-          After LinkClassMethodImpls the class definition's TMethodDecl nodes
+        { Class and record method bodies from interface type declarations.
+          After LinkClassMethodImpls the definition's TMethodDecl nodes
           hold the bodies and parameter types are resolved by AnalyseMethodBodies. }
         for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
         begin
           TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
-          if not (TD.Def is TClassTypeDef) then Continue;
-          CD := TClassTypeDef(TD.Def);
-          for J := 0 to CD.Methods.Count - 1 do
+          if TD.Def is TClassTypeDef then
           begin
-            MDecl := TMethodDecl(CD.Methods.Items[J]);
-            if MDecl.Body <> nil then
-              EmitMethodDef(TD.Name, MDecl);
+            CD := TClassTypeDef(TD.Def);
+            for J := 0 to CD.Methods.Count - 1 do
+            begin
+              MDecl := TMethodDecl(CD.Methods.Items[J]);
+              if MDecl.Body <> nil then
+                EmitMethodDef(TD.Name, MDecl);
+            end;
+          end
+          else if TD.Def is TRecordTypeDef then
+          begin
+            for J := 0 to TRecordTypeDef(TD.Def).Methods.Count - 1 do
+            begin
+              MDecl := TMethodDecl(TRecordTypeDef(TD.Def).Methods.Items[J]);
+              if MDecl.Body <> nil then
+                EmitMethodDef(TD.Name, MDecl);
+            end;
           end;
         end;
 

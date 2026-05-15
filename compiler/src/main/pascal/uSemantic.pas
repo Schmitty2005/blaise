@@ -2240,7 +2240,29 @@ begin
     if TD.Def is TRecordTypeDef then
     begin
       FieldList  := TRecordTypeDef(TD.Def).Fields;
-      MethodList := nil;
+      MethodList := TRecordTypeDef(TD.Def).Methods;
+      { Resolve param and return types for record methods. }
+      if MethodList <> nil then
+        for J := 0 to MethodList.Count - 1 do
+        begin
+          MDecl := TMethodDecl(MethodList.Items[J]);
+          MDecl.IsRecordMethod := True;
+          for K := 0 to MDecl.Params.Count - 1 do
+          begin
+            Par              := TMethodParam(MDecl.Params.Items[K]);
+            Par.ResolvedType := ResolveParamType(Par, MDecl.Line, MDecl.Col);
+          end;
+          if MDecl.ReturnTypeName <> '' then
+          begin
+            ParType := FTable.FindType(MDecl.ReturnTypeName);
+            if ParType = nil then
+              SemanticError(
+                Format('Unknown return type ''%s'' for method ''%s''',
+                  [MDecl.ReturnTypeName, MDecl.Name]),
+                MDecl.Line, MDecl.Col);
+            MDecl.ResolvedReturnType := ParType;
+          end;
+        end;
     end
     else
     begin
@@ -2313,11 +2335,8 @@ begin
         end;
       end;
 
-      { Pre-resolve param types for every method now (was done post-field
-        previously) so the vtable pre-pass below can compute mangled keys
-        for overloaded methods.  Type names referenced here must already
-        be in scope, which Pass 1 of AnalyseTypeDecls guarantees by
-        registering all type names before any Pass 2 resolution. }
+      { Pre-resolve param and return types for class methods so that MangleParamSig
+        can compute overloaded keys correctly in the vtable pre-pass below. }
       if MethodList <> nil then
         for J := 0 to MethodList.Count - 1 do
         begin
@@ -2657,24 +2676,39 @@ end;
 
 procedure TSemanticAnalyser.AnalyseMethodBodies(ABlock: TBlock);
 var
-  I, J:  Integer;
-  TD:    TTypeDecl;
-  CD:    TClassTypeDef;
-  RT:    TRecordTypeDesc;
-  Sym:   TSymbol;
+  I, J:    Integer;
+  TD:      TTypeDecl;
+  CD:      TClassTypeDef;
+  RD:      TRecordTypeDef;
+  RT:      TRecordTypeDesc;
+  Sym:     TSymbol;
+  Methods: TObjectList;
 begin
   for I := 0 to ABlock.TypeDecls.Count - 1 do
   begin
     TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
-    if not (TD.Def is TClassTypeDef) then
+    if TD.Def is TClassTypeDef then
+    begin
+      CD  := TClassTypeDef(TD.Def);
+      Sym := FTable.Lookup(TD.Name);
+      if (Sym = nil) or not (Sym.TypeDesc is TRecordTypeDesc) then
+        Continue;
+      RT      := TRecordTypeDesc(Sym.TypeDesc);
+      Methods := CD.Methods;
+    end
+    else if TD.Def is TRecordTypeDef then
+    begin
+      RD  := TRecordTypeDef(TD.Def);
+      Sym := FTable.Lookup(TD.Name);
+      if (Sym = nil) or not (Sym.TypeDesc is TRecordTypeDesc) then
+        Continue;
+      RT      := TRecordTypeDesc(Sym.TypeDesc);
+      Methods := RD.Methods;
+    end
+    else
       Continue;
-    CD  := TClassTypeDef(TD.Def);
-    Sym := FTable.Lookup(TD.Name);
-    if (Sym = nil) or not (Sym.TypeDesc is TRecordTypeDesc) then
-      Continue;
-    RT := TRecordTypeDesc(Sym.TypeDesc);
-    for J := 0 to CD.Methods.Count - 1 do
-      AnalyseMethodDecl(TMethodDecl(CD.Methods.Items[J]), RT);
+    for J := 0 to Methods.Count - 1 do
+      AnalyseMethodDecl(TMethodDecl(Methods.Items[J]), RT);
   end;
 end;
 
@@ -2691,8 +2725,13 @@ begin
   FTable.PushScope;
   Inc(FScopeDepth);
   try
-    { Define Self as a variable of the class type }
-    Sym := TSymbol.Create('Self', skVariable, AClassType);
+    { Record methods receive the record by pointer (like a var param); class
+      methods receive the object pointer as a value.  Declaring Self as
+      skVarParameter for records makes the codegen dereference it correctly. }
+    if AMethod.IsRecordMethod then
+      Sym := TSymbol.Create('Self', skVarParameter, AClassType)
+    else
+      Sym := TSymbol.Create('Self', skVariable, AClassType);
     FTable.Define(Sym);
 
     { For function methods, define Result as a writable variable }
@@ -5670,9 +5709,9 @@ begin
     Exit;
   end;
 
-  if not (ObjSym.TypeDesc.Kind in [tyClass, tyInterface]) then
+  if not (ObjSym.TypeDesc.Kind in [tyClass, tyInterface, tyRecord]) then
     SemanticError(
-      Format('''%s'' is not a class or interface variable', [AExpr.ObjectName]),
+      Format('''%s'' is not a class, interface, or record variable', [AExpr.ObjectName]),
       AExpr.Line, AExpr.Col);
 
   { Interface method call expression: dispatch through itab }
@@ -6554,7 +6593,13 @@ begin
     else
     begin
       CheckTypesMatch(LType, RType, 'binary expression', ABin.Line, ABin.Col);
-      Result := LType;
+      { Int64 wins over narrower integer types — promotes the result so codegen
+        emits l-typed instructions (avoids truncating 64-bit values).  Without
+        this, "0 - X" where X is Int64 silently truncates to 32 bits. }
+      if (LType.Kind = tyInt64) or (RType.Kind = tyInt64) then
+        Result := FTable.TypeInt64
+      else
+        Result := LType;
     end;
   end;
 end;

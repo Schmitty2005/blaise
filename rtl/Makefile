@@ -28,7 +28,8 @@ C_SRCS = $(SRC_DIR)/blaise_arc_class.c \
          $(SRC_DIR)/blaise_float.c \
          $(SRC_DIR)/blaise_io.c \
          $(SRC_DIR)/blaise_process.c \
-         $(SRC_DIR)/blaise_sys_posix.c
+         $(SRC_DIR)/blaise_sys_posix.c \
+         $(SRC_DIR)/blaise_time.c
 C_OBJS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(C_SRCS))
 
 # Pascal RTL units compiled via the Blaise compiler.
