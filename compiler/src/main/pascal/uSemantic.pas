@@ -3197,10 +3197,12 @@ function TSemanticAnalyser.StmtRejectsInline(AStmt: TASTStmt;
                                               const ASelfDecl: TMethodDecl;
                                               var AStmtCount: Integer): Boolean;
 var
-  I:    Integer;
+  I, J: Integer;
   Cmp:  TCompoundStmt;
   Asg:  TAssignment;
   Ifs:  TIfStmt;
+  Cs:   TCaseStmt;
+  Br:   TCaseBranch;
 begin
   Result := True;
   if AStmt = nil then begin Result := False; Exit; end;
@@ -3215,7 +3217,6 @@ begin
      (AStmt is TRaiseStmt) or
      (AStmt is TBreakStmt) or
      (AStmt is TContinueStmt) or
-     (AStmt is TCaseStmt) or
      (AStmt is TMethodCallStmt) or
      (AStmt is TInheritedCallStmt) or
      (AStmt is TPointerWriteStmt) or
@@ -3278,12 +3279,30 @@ begin
     Exit;
   end;
 
+  if AStmt is TCaseStmt then
+  begin
+    Cs := TCaseStmt(AStmt);
+    Inc(AStmtCount);
+    if ExprRejectsInline(Cs.Selector, ASelfDecl) then Exit;
+    for I := 0 to Cs.Branches.Count - 1 do
+    begin
+      Br := TCaseBranch(Cs.Branches.Items[I]);
+      for J := 0 to Br.Values.Count - 1 do
+        if ExprRejectsInline(TASTExpr(Br.Values.Items[J]), ASelfDecl) then Exit;
+      if StmtRejectsInline(Br.Stmt, ASelfDecl, AStmtCount) then Exit;
+    end;
+    if (Cs.ElseStmt <> nil) and
+       StmtRejectsInline(Cs.ElseStmt, ASelfDecl, AStmtCount) then Exit;
+    Result := False;
+    Exit;
+  end;
+
   { Unknown statement form: reject conservatively. }
 end;
 
 function TSemanticAnalyser.IsInlineEligible(ADecl: TMethodDecl): Boolean;
 const
-  MAX_STMTS = 8;
+  MAX_STMTS = 24;
 var
   I:   Integer;
   Par: TMethodParam;
