@@ -46,6 +46,66 @@ All values in milliseconds.  Ratio = blaise_mem / malloc per
 workload; "—" when malloc baseline is 0 ms.
 
 ================================================================
+2026-05-16 — commit c16249a + bootstrap binary refreshed
+================================================================
+
+  Workload | malloc | blaise_mem | ratio
+  ---------+--------+------------+--------
+     S     |   7    |      9     |  1.3x
+     M     |   5    |      5     |  1.0x
+     R     |   5    |     10-11  |  2.1x
+     L     |   0    |      0     |   —
+     H     |   5    |      5     |  1.0x
+
+  Notes:
+    Captures the cumulative effect of three changes shipped in this
+    session, with the v0.8.0 bootstrap binary refreshed in-place
+    against the verified stage-3 fixpoint of the new source.
+
+    Contributing changes since the 2026-05-16 first-row baseline:
+
+      9847369  fix(rtl): restore large-alloc LIFO cache in
+               blaise_mem.  L workload 33 ms -> 0 ms (matches malloc).
+
+      b4ec712  feat(codegen): promote tyPointer and tyPChar locals
+               to QBE temps.  Foundational; no direct workload
+               change but unlocks downstream wins by removing stack
+               slot loads on every pointer access.
+
+      314b537  feat(semantic): mark inline candidates.  Analyser
+               only; no codegen change yet.
+
+      c16249a  feat(codegen): inline small leaf functions at call
+               sites.  20 candidates inlined compiler-wide
+               (RoundUpToClass, MapFailed, PageRound, MemCopy,
+               StrData, _StringLength, etc.).  R workload
+               12-13 ms -> 10-11 ms (-15%).  S workload 10 -> 9 ms.
+
+    Compared to the original 2026-05-16 first-row baseline
+    (before the IsLarge fix landed):
+
+      S: 14 -> 9 ms   (-36%)
+      M: 8  -> 5 ms   (-38%)
+      R: 13 -> 10 ms  (-23%)
+      L: 33 -> 0  ms  (now matches malloc)
+      H: 5  -> 5  ms  (unchanged; already at malloc parity)
+
+    Open gaps (next targets):
+      R workload (2.1x malloc) — remaining gap is in the
+        SmallGetMem/memcpy/SmallFreeMem fallback path that fires
+        when realloc crosses size classes.  Inlining SizeClassIndex
+        and SizeClassBytes would help further; both currently
+        rejected by the analyser (case stmt, > 8 statements).
+      S workload (1.3x malloc) — freelist push/pop is already O(1);
+        the remaining gap is glibc tcache thread-local caching.
+        Not closing this without a redesign.
+
+    Bootstrap binary: releases/v0.8.0/blaise replaced in-place with
+    the stage-3 fixpoint binary.  Fixpoint now converges at
+    stage-2/3 (was stage-3/4), so future fixpoint runs are faster
+    (~2 min instead of ~4).
+
+================================================================
 2026-05-16 — investigation: in-place arena-tail realloc growth
 ================================================================
 
