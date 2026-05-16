@@ -8,8 +8,6 @@
 
 unit uParser;
 
-{$mode objfpc}{$H+}
-
 // Recursive-descent parser for the Blaise grammar:
 //   Program        ::= 'program' Ident ';' [Uses] Block '.'
 //   Uses           ::= 'uses' Ident {',' Ident} ';'
@@ -41,7 +39,7 @@ unit uParser;
 interface
 
 uses
-  SysUtils, Classes, contnrs, uLexer, uAST;
+  SysUtils, Classes, contnrs, uLexer, uAST, uStrCompat;
 
 type
   EParseError = class(Exception);
@@ -568,14 +566,14 @@ begin
         Expect(tkLBracket);
         if Check(tkIntLit) then
         begin
-          CD.ArrayLowBound := StrToInt(FCurrent.Value);
+          CD.ArrayLowBound := ParseIntLiteral(FCurrent.Value);
           Advance;
           Expect(tkDotDot);
           if not Check(tkIntLit) then
             raise EParseError.Create(Format(
               'Expected integer high bound in array const at line %d col %d in %s',
               [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-          CD.ArrayHighBound := StrToInt(FCurrent.Value);
+          CD.ArrayHighBound := ParseIntLiteral(FCurrent.Value);
           Advance;
           CD.ArrayIsRangeIndexed := True;
         end
@@ -676,7 +674,7 @@ begin
       Advance;
       if Check(tkFloatLit) then
       begin
-        CD.StrVal  := '-' + FCurrent.Value;
+        CD.StrVal  := '-' + StripUnderscores(FCurrent.Value);
         CD.IsFloat := True;
         Advance;
       end
@@ -685,20 +683,20 @@ begin
         if not Check(tkIntLit) then
           raise EParseError.Create(Format('Expected numeric literal after minus in const at line %d col %d in %s',
             [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-        CD.IntVal   := -StrToInt64(FCurrent.Value);
+        CD.IntVal   := -ParseIntLiteral(FCurrent.Value);
         CD.IsString := False;
         Advance;
       end;
     end
     else if Check(tkFloatLit) then
     begin
-      CD.StrVal  := FCurrent.Value;
+      CD.StrVal  := StripUnderscores(FCurrent.Value);
       CD.IsFloat := True;
       Advance;
     end
     else if Check(tkIntLit) then
     begin
-      CD.IntVal   := StrToInt64(FCurrent.Value);
+      CD.IntVal   := ParseIntLiteral(FCurrent.Value);
       CD.IsString := False;
       Advance;
     end
@@ -781,7 +779,7 @@ begin
       if not Check(tkIntLit) then
         raise EParseError.Create(Format('Expected integer after ''='' in enum at line %d col %d in %s',
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-      ExplicitVal := StrToInt(FCurrent.Value);
+      ExplicitVal := ParseIntLiteral(FCurrent.Value);
       if Negative then ExplicitVal := -ExplicitVal;
       Advance;
       NextVal := ExplicitVal;
@@ -808,7 +806,7 @@ begin
         if not Check(tkIntLit) then
           raise EParseError.Create(Format('Expected integer after ''='' in enum at line %d col %d in %s',
             [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-        ExplicitVal := StrToInt(FCurrent.Value);
+        ExplicitVal := ParseIntLiteral(FCurrent.Value);
         if Negative then ExplicitVal := -ExplicitVal;
         Advance;
         NextVal := ExplicitVal;
@@ -2935,7 +2933,7 @@ begin
         IntNode       := TIntLiteral.Create;
         IntNode.Line  := FCurrent.Line;
         IntNode.Col   := FCurrent.Col;
-        IntNode.Value := StrToInt64(FCurrent.Value);
+        IntNode.Value := ParseIntLiteral(FCurrent.Value);
         Advance;
         Result := IntNode;
       end;
@@ -2944,7 +2942,7 @@ begin
         FloatNode       := TFloatLiteral.Create;
         FloatNode.Line  := FCurrent.Line;
         FloatNode.Col   := FCurrent.Col;
-        FloatNode.Value := FCurrent.Value;
+        FloatNode.Value := StripUnderscores(FCurrent.Value);
         Advance;
         Result := FloatNode;
       end;

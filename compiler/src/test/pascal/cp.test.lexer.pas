@@ -14,7 +14,7 @@ interface
 
 uses
   blaise.testing,
-  uLexer;
+  uLexer, uStrCompat;
 
 type
   TLexerTests = class(TTestCase)
@@ -47,9 +47,29 @@ type
     procedure TestIdent_WithUnderscore;
     procedure TestIdent_WithDigits;
 
-    { Integer literals }
+    { Integer literals — decimal }
     procedure TestIntLit_SingleDigit;
     procedure TestIntLit_MultiDigit;
+
+    { Integer literals — hex }
+    procedure TestIntLit_Hex_Lowercase;
+    procedure TestIntLit_Hex_Uppercase;
+    procedure TestIntLit_Hex_WithUnderscore;
+
+    { Integer literals — binary }
+    procedure TestIntLit_Binary;
+    procedure TestIntLit_Binary_WithUnderscore;
+
+    { Integer literals — octal }
+    procedure TestIntLit_Octal;
+    procedure TestIntLit_Octal_WithUnderscore;
+
+    { Integer literals — decimal with underscores }
+    procedure TestIntLit_Decimal_WithUnderscore;
+    procedure TestIntLit_Decimal_MultipleUnderscores;
+
+    { Float literals — with underscores }
+    procedure TestFloatLit_WithUnderscore;
 
     { String literals }
     procedure TestStringLit_Simple;
@@ -77,6 +97,26 @@ type
     procedure TestSeq_VarDecl;
     procedure TestSeq_Assignment;
     procedure TestSeq_ProcCall;
+  end;
+
+  TParseIntLiteralTests = class(TTestCase)
+  published
+    { Decimal }
+    procedure TestDecimal_Simple;
+    procedure TestDecimal_WithUnderscore;
+    procedure TestDecimal_MultipleUnderscores;
+    { Hex }
+    procedure TestHex_Simple;
+    procedure TestHex_WithUnderscore;
+    { Binary }
+    procedure TestBinary_Simple;
+    procedure TestBinary_WithUnderscore;
+    { Octal }
+    procedure TestOctal_Simple;
+    procedure TestOctal_WithUnderscore;
+    { Invalid underscore placement }
+    procedure TestInvalid_TrailingUnderscore;
+    procedure TestInvalid_LeadingUnderscoreAfterPrefix;
   end;
 
 implementation
@@ -479,7 +519,179 @@ begin
   AssertEquals('EOF', Ord(tkEOF), Ord(t[4].Kind));
 end;
 
+{ Hex literals }
+
+procedure TLexerTests.TestIntLit_Hex_Lowercase;
+var tok: TToken;
+begin
+  SetLexer('$ff');
+  tok := FLexer.Next;
+  AssertEquals('Kind', Ord(tkIntLit), Ord(tok.Kind));
+  AssertEquals('Value', '$ff', tok.Value);
+end;
+
+procedure TLexerTests.TestIntLit_Hex_Uppercase;
+var tok: TToken;
+begin
+  SetLexer('$FF');
+  tok := FLexer.Next;
+  AssertEquals('Kind', Ord(tkIntLit), Ord(tok.Kind));
+  AssertEquals('Value', '$FF', tok.Value);
+end;
+
+procedure TLexerTests.TestIntLit_Hex_WithUnderscore;
+var tok: TToken;
+begin
+  SetLexer('$FF_EC');
+  tok := FLexer.Next;
+  AssertEquals('Kind', Ord(tkIntLit), Ord(tok.Kind));
+  AssertEquals('Value', '$FF_EC', tok.Value);
+end;
+
+{ Binary literals }
+
+procedure TLexerTests.TestIntLit_Binary;
+var tok: TToken;
+begin
+  SetLexer('%11111111');
+  tok := FLexer.Next;
+  AssertEquals('Kind', Ord(tkIntLit), Ord(tok.Kind));
+  AssertEquals('Value', '%11111111', tok.Value);
+end;
+
+procedure TLexerTests.TestIntLit_Binary_WithUnderscore;
+var tok: TToken;
+begin
+  SetLexer('%0010_0101');
+  tok := FLexer.Next;
+  AssertEquals('Kind', Ord(tkIntLit), Ord(tok.Kind));
+  AssertEquals('Value', '%0010_0101', tok.Value);
+end;
+
+{ Octal literals }
+
+procedure TLexerTests.TestIntLit_Octal;
+var tok: TToken;
+begin
+  SetLexer('&377');
+  tok := FLexer.Next;
+  AssertEquals('Kind', Ord(tkIntLit), Ord(tok.Kind));
+  AssertEquals('Value', '&377', tok.Value);
+end;
+
+procedure TLexerTests.TestIntLit_Octal_WithUnderscore;
+var tok: TToken;
+begin
+  SetLexer('&3_77');
+  tok := FLexer.Next;
+  AssertEquals('Kind', Ord(tkIntLit), Ord(tok.Kind));
+  AssertEquals('Value', '&3_77', tok.Value);
+end;
+
+{ Decimal with underscores }
+
+procedure TLexerTests.TestIntLit_Decimal_WithUnderscore;
+var tok: TToken;
+begin
+  SetLexer('1_000');
+  tok := FLexer.Next;
+  AssertEquals('Kind', Ord(tkIntLit), Ord(tok.Kind));
+  AssertEquals('Value', '1_000', tok.Value);
+end;
+
+procedure TLexerTests.TestIntLit_Decimal_MultipleUnderscores;
+var tok: TToken;
+begin
+  SetLexer('1_234_567');
+  tok := FLexer.Next;
+  AssertEquals('Kind', Ord(tkIntLit), Ord(tok.Kind));
+  AssertEquals('Value', '1_234_567', tok.Value);
+end;
+
+{ Float with underscore }
+
+procedure TLexerTests.TestFloatLit_WithUnderscore;
+var tok: TToken;
+begin
+  SetLexer('3.14_15');
+  tok := FLexer.Next;
+  AssertEquals('Kind', Ord(tkFloatLit), Ord(tok.Kind));
+  AssertEquals('Value', '3.14_15', tok.Value);
+end;
+
+{ TParseIntLiteralTests }
+
+procedure TParseIntLiteralTests.TestDecimal_Simple;
+begin
+  AssertEquals('255 decimal', 255, ParseIntLiteral('255'));
+end;
+
+procedure TParseIntLiteralTests.TestDecimal_WithUnderscore;
+begin
+  AssertEquals('1_000', 1000, ParseIntLiteral('1_000'));
+end;
+
+procedure TParseIntLiteralTests.TestDecimal_MultipleUnderscores;
+begin
+  AssertEquals('1_234_567', 1234567, ParseIntLiteral('1_234_567'));
+end;
+
+procedure TParseIntLiteralTests.TestHex_Simple;
+begin
+  AssertEquals('$FF', 255, ParseIntLiteral('$FF'));
+end;
+
+procedure TParseIntLiteralTests.TestHex_WithUnderscore;
+begin
+  AssertEquals('$FF_EC', 65516, ParseIntLiteral('$FF_EC'));
+end;
+
+procedure TParseIntLiteralTests.TestBinary_Simple;
+begin
+  AssertEquals('%11111111', 255, ParseIntLiteral('%11111111'));
+end;
+
+procedure TParseIntLiteralTests.TestBinary_WithUnderscore;
+begin
+  AssertEquals('%0010_0101', 37, ParseIntLiteral('%0010_0101'));
+end;
+
+procedure TParseIntLiteralTests.TestOctal_Simple;
+begin
+  AssertEquals('&377', 255, ParseIntLiteral('&377'));
+end;
+
+procedure TParseIntLiteralTests.TestOctal_WithUnderscore;
+begin
+  AssertEquals('&3_77', 255, ParseIntLiteral('&3_77'));
+end;
+
+procedure TParseIntLiteralTests.TestInvalid_TrailingUnderscore;
+var Raised: Boolean;
+begin
+  Raised := False;
+  try
+    ParseIntLiteral('52_');
+  except
+    on EConvertError do Raised := True;
+  end;
+  AssertTrue('trailing underscore raises EConvertError', Raised);
+end;
+
+procedure TParseIntLiteralTests.TestInvalid_LeadingUnderscoreAfterPrefix;
+var Raised: Boolean;
+begin
+  Raised := False;
+  try
+    ParseIntLiteral('$_52');
+  except
+    on EConvertError do Raised := True;
+  end;
+  AssertTrue('underscore after prefix raises EConvertError', Raised);
+end;
+
 initialization
   RegisterTest(TLexerTests);
+  RegisterTest(TParseIntLiteralTests);
 
 end.

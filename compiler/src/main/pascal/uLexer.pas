@@ -8,8 +8,6 @@
 
 unit uLexer;
 
-{$mode objfpc}{$H+}
-
 { Compiler lexer — wraps uPasTokeniser and converts its flat token stream
   into the compiler's specific token kinds. Skips whitespace, line endings,
   comments, and compiler directives. Unescapes string literal values. }
@@ -510,11 +508,15 @@ begin
 
     fptkNumber:
       begin
-        { Float if text contains '.' or 'e'/'E' (decimal point or exponent).
-          Hex/binary/octal literals never have those, so this is unambiguous. }
-        if (StrPos('.', FTok.TokenText) >= 0) or
-           (StrPos('e', FTok.TokenText) >= 0) or
-           (StrPos('E', FTok.TokenText) >= 0) then
+        { Float only if it is a plain decimal literal (no $ % & prefix) and
+          contains a decimal point or exponent marker.  Hex digits A-F and
+          underscore groups like $FF_EC must not be misclassified as floats. }
+        if (StrAt(FTok.TokenText, 0) <> Ord('$')) and
+           (StrAt(FTok.TokenText, 0) <> Ord('%')) and
+           (StrAt(FTok.TokenText, 0) <> Ord('&')) and
+           ((StrPos('.', FTok.TokenText) >= 0) or
+            (StrPos('e', FTok.TokenText) >= 0) or
+            (StrPos('E', FTok.TokenText) >= 0)) then
           Result.Kind := tkFloatLit
         else
           Result.Kind := tkIntLit;

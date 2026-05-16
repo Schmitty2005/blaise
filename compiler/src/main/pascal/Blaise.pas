@@ -8,8 +8,6 @@
 
 program Blaise;
 
-{$mode objfpc}{$H+}
-
 { Blaise Compiler — main entry point.
 
   Usage:

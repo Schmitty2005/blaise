@@ -8,8 +8,6 @@
 
 unit uSemantic;
 
-{$mode objfpc}{$H+}
-
 // Semantic analysis pass — walks the AST produced by uParser and:
 //   1. Resolves record/class type declarations and registers them in the symbol table.
 //   2. Indexes class methods for dispatch lookup.

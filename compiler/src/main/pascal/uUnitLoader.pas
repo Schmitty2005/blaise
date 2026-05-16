@@ -8,8 +8,6 @@
 
 unit uUnitLoader;
 
-{$mode objfpc}{$H+}
-
 { Resolves unit names to source files, parses them, and returns a
   dependency-ordered list (leaves first).  Cycle detection raises
   ECircularDependency; missing units raise EUnitNotFound.

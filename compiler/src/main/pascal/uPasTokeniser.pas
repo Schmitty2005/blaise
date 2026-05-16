@@ -24,8 +24,6 @@
 }
 unit uPasTokeniser;
 
-{$mode objfpc}{$H+}
-
 interface
 
 uses Classes, SysUtils;
@@ -269,40 +267,45 @@ begin
   FToken.Kind := fptkNumber;
   C := PosOrd(FSource, FPos);
 
-  if C = 36 then
+  if C = 36 then  { $ hex }
   begin
     Advance;
     while (FPos <= Length(FSource)) and
           (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
            ((PosOrd(FSource, FPos) >= 65) and (PosOrd(FSource, FPos) <= 70)) or
-           ((PosOrd(FSource, FPos) >= 97) and (PosOrd(FSource, FPos) <= 102))) do
+           ((PosOrd(FSource, FPos) >= 97) and (PosOrd(FSource, FPos) <= 102)) or
+           (PosOrd(FSource, FPos) = 95)) do
       Advance;
     FToken.Len := FPos - FToken.TextStart;
     Exit
   end;
 
-  if C = 37 then
+  if C = 37 then  { % binary }
   begin
     Advance;
     while (FPos <= Length(FSource)) and
-          ((PosOrd(FSource, FPos) = 48) or (PosOrd(FSource, FPos) = 49)) do
+          ((PosOrd(FSource, FPos) = 48) or (PosOrd(FSource, FPos) = 49) or
+           (PosOrd(FSource, FPos) = 95)) do
       Advance;
     FToken.Len := FPos - FToken.TextStart;
     Exit
   end;
 
-  if C = 38 then
+  if C = 38 then  { & octal }
   begin
     Advance;
     while (FPos <= Length(FSource)) and
-          ((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 55)) do
+          (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 55)) or
+           (PosOrd(FSource, FPos) = 95)) do
       Advance;
     FToken.Len := FPos - FToken.TextStart;
     Exit
   end;
 
+  { decimal integer — also allows _ between digits }
   while (FPos <= Length(FSource)) and
-        ((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) do
+        (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
+         (PosOrd(FSource, FPos) = 95)) do
     Advance;
 
   if (FPos <= Length(FSource)) and (PosOrd(FSource, FPos) = 46) and
@@ -310,7 +313,8 @@ begin
   begin
     Advance;
     while (FPos <= Length(FSource)) and
-          ((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) do
+          (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
+           (PosOrd(FSource, FPos) = 95)) do
       Advance
   end;
 
@@ -322,7 +326,8 @@ begin
        ((PosOrd(FSource, FPos) = 43) or (PosOrd(FSource, FPos) = 45)) then
       Advance;
     while (FPos <= Length(FSource)) and
-          ((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) do
+          (((PosOrd(FSource, FPos) >= 48) and (PosOrd(FSource, FPos) <= 57)) or
+           (PosOrd(FSource, FPos) = 95)) do
       Advance
   end;
 
