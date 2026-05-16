@@ -1881,6 +1881,7 @@ var
   RefSym: TSymbol;
   TD:     TTypeDesc;
   Resolved: string;
+  IsSameBlockDup: Boolean;
 begin
   for I := 0 to ABlock.ConstDecls.Count - 1 do
   begin
@@ -1927,7 +1928,21 @@ begin
     Sym.ConstValue   := CD.IntVal;
     Sym.ConstString  := CD.StrVal;
     if not FTable.Define(Sym) then
-      Sym.Free;  { duplicate const — silently ignore }
+    begin
+      Sym.Free;
+      { Only error for same-block duplicates.  Cross-unit const shadowing
+        (e.g. a unit redefining a system.pas constant) is silently accepted,
+        matching FPC behaviour and preserving the existing test coverage. }
+      IsSameBlockDup := False;
+      for J := 0 to I - 1 do
+        if SameText(TConstDecl(ABlock.ConstDecls.Items[J]).Name, CD.Name) then
+        begin
+          IsSameBlockDup := True;
+          Break;
+        end;
+      if IsSameBlockDup then
+        SemanticError(Format('Duplicate identifier ''%s''', [CD.Name]), CD.Line, CD.Col);
+    end;
   end;
 end;
 
@@ -3370,7 +3385,7 @@ end;
 
 procedure TSemanticAnalyser.AnalyseVarDecls(ABlock: TBlock);
 var
-  I, J:    Integer;
+  I, J, K: Integer;
   Decl:    TVarDecl;
   Typ:     TTypeDesc;
   VarName: string;
@@ -3407,6 +3422,16 @@ begin
     for J := 0 to Decl.Names.Count - 1 do
     begin
       VarName := Decl.Names.Strings[J];
+      { Consts from the same block live in the immediately enclosing scope
+        (AnalyseBlock pushes a new scope before calling AnalyseVarDecls, so
+        FTable.Define cannot see same-block consts).  Scan the block's own
+        ConstDecls list so we catch only same-block clashes, not legitimate
+        shadowing of outer-scope or unit-imported consts. }
+      for K := 0 to ABlock.ConstDecls.Count - 1 do
+        if SameText(TConstDecl(ABlock.ConstDecls.Items[K]).Name, VarName) then
+          SemanticError(
+            Format('Duplicate identifier ''%s''', [VarName]),
+            Decl.Line, Decl.Col);
       Sym := TSymbol.Create(VarName, skVariable, Typ);
       Sym.IsWeak   := Decl.IsWeak;
       Sym.IsGlobal := Decl.IsGlobal;

@@ -29,6 +29,10 @@ type
     procedure TestVarDecl_MultiName_BothRegistered;
     procedure TestVarDecl_UnknownType_RaisesError;
     procedure TestVarDecl_Duplicate_RaisesError;
+    { Const then var with same name in same block is a duplicate }
+    procedure TestVarDecl_DuplicatesConst_RaisesError;
+    { Const redeclared with same name in same block is a duplicate }
+    procedure TestConst_Duplicate_RaisesError;
 
     { Expression type inference }
     procedure TestExpr_IntLiteral_TypeIsInteger;
@@ -167,6 +171,18 @@ procedure TSemanticTests.TestVarDecl_Duplicate_RaisesError;
 begin
   AnalyseExpectError(
     'program P; var x: Integer; x: string; begin end.');
+end;
+
+procedure TSemanticTests.TestVarDecl_DuplicatesConst_RaisesError;
+begin
+  AnalyseExpectError(
+    'program P; const b = 42; var b: Integer; begin end.');
+end;
+
+procedure TSemanticTests.TestConst_Duplicate_RaisesError;
+begin
+  AnalyseExpectError(
+    'program P; const b = 42; b = 99; begin end.');
 end;
 
 { ------------------------------------------------------------------ }
