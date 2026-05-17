@@ -57,6 +57,10 @@ type
     procedure TestCodegen_DynArray_Length_CallsRTL;
     procedure TestCodegen_DynArray_Read_ComputesOffset;
     procedure TestCodegen_DynArray_Write_ComputesOffset;
+    procedure TestCodegen_DynArray_High_CallsRTL;
+    procedure TestCodegen_DynArray_Low_ReturnsZero;
+    procedure TestSemantic_DynArray_High_Accepted;
+    procedure TestSemantic_DynArray_Low_Accepted;
   end;
 
 implementation
@@ -351,6 +355,77 @@ begin
   { Element write: storew for Integer element }
   AssertTrue('storew for integer element write',
     Self.CountOccurrences(IR, 'storew') > 0);
+end;
+
+procedure TDynArrayTests.TestSemantic_DynArray_High_Accepted;
+var Prog: TProgram;
+begin
+  { High() on a named dynamic array type must not raise a semantic error }
+  Prog := AnalyseSrc('''
+      program P;
+      type Tar = array of Integer;
+      var ar: Tar;
+          i: Integer;
+      begin
+        i := High(ar);
+      end.
+      ''');
+  AssertNotNil('program parsed and analysed without error', Prog);
+  Prog.Free;
+end;
+
+procedure TDynArrayTests.TestSemantic_DynArray_Low_Accepted;
+var Prog: TProgram;
+begin
+  { Low() on a named dynamic array type must not raise a semantic error }
+  Prog := AnalyseSrc('''
+      program P;
+      type Tar = array of Integer;
+      var ar: Tar;
+          i: Integer;
+      begin
+        i := Low(ar);
+      end.
+      ''');
+  AssertNotNil('program parsed and analysed without error', Prog);
+  Prog.Free;
+end;
+
+procedure TDynArrayTests.TestCodegen_DynArray_High_CallsRTL;
+var IR: string;
+begin
+  { High(dynArr) = DynArrayLength(dynArr) - 1; must call _DynArrayLength }
+  IR := GenIR('''
+      program P;
+      type Tar = array of Integer;
+      var ar: Tar;
+          i: Integer;
+      begin
+        SetLength(ar, 15);
+        i := High(ar);
+        WriteLn(i);
+      end.
+      ''');
+  AssertTrue('calls _DynArrayLength for High(dynArr)',
+    Pos('_DynArrayLength', IR) > 0);
+end;
+
+procedure TDynArrayTests.TestCodegen_DynArray_Low_ReturnsZero;
+var IR: string;
+begin
+  { Low(dynArr) is always 0; must emit a copy of 0 }
+  IR := GenIR('''
+      program P;
+      type Tar = array of Integer;
+      var ar: Tar;
+          i: Integer;
+      begin
+        i := Low(ar);
+        WriteLn(i);
+      end.
+      ''');
+  AssertTrue('emits constant 0 for Low(dynArr)',
+    Pos('copy 0', IR) > 0);
 end;
 
 initialization

@@ -5722,6 +5722,14 @@ begin
           tyStaticArray:
             EmitLine(Format('  %s =w copy %d', [T,
               TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).HighBound]));
+          tyDynArray:
+          begin
+            { High(A) = Length(A) - 1; delegate to RTL helper }
+            L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+            R := AllocTemp;
+            EmitLine(Format('  %s =w call $_DynArrayLength(l %s)', [R, L]));
+            EmitLine(Format('  %s =w sub %s, 1', [T, R]));
+          end;
           tyString:
           begin
             { High(S) = Length(S) - 1; load length from ARC header at data_ptr-8 }

@@ -42,6 +42,10 @@ type
     { Class-level array constants }
     procedure TestRun_ClassConstArray_RangeIndexed;
     procedure TestRun_ClassConstArray_EnumIndexed;
+
+    { Dynamic array High/Low }
+    procedure TestRun_DynArray_High_ReturnsLengthMinusOne;
+    procedure TestRun_DynArray_Low_ReturnsZero;
   end;
 
 implementation
@@ -425,6 +429,44 @@ begin
     AssertEquals('Names[0]', 'Red', Lines.Strings[0]);
     AssertEquals('Names[2]', 'Blue', Lines.Strings[1]);
   finally Lines.Free end
+end;
+
+procedure TE2EStaticArrayTests.TestRun_DynArray_High_ReturnsLengthMinusOne;
+const Src =
+  '''
+  program P;
+  type Tar = array of Integer;
+  var ar: Tar;
+  begin
+    SetLength(ar, 15);
+    WriteLn(High(ar));
+  end.
+  ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('High of 15-element array is 14', '14', Trim(Output));
+end;
+
+procedure TE2EStaticArrayTests.TestRun_DynArray_Low_ReturnsZero;
+const Src =
+  '''
+  program P;
+  type Tar = array of Integer;
+  var ar: Tar;
+  begin
+    SetLength(ar, 15);
+    WriteLn(Low(ar));
+  end.
+  ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('Low of dynamic array is always 0', '0', Trim(Output));
 end;
 
 initialization
