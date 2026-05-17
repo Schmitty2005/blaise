@@ -50,44 +50,6 @@ value from a small negative one.
 
 *Effort.* Small — field addition and emit-path branch.
 
-=== Single-precision intrinsic dispatch for trig functions
-
-*What.* When a `Single` (32-bit float) operand is passed to a standard trig
-function (`Sin`, `Cos`, `Tan`, `ArcTan`, `Sinh`, `Cosh`, `Tanh`, and their
-inverses), the codegen should call the corresponding `*f` variant from libc
-(`sinf`, `cosf`, `tanf`, `atanf`, `sinhf`, `coshf`, `tanhf`, etc.) rather
-than the double-precision variant (`sin`, `cos`, etc.).
-
-*Why it matters.* The x87 FPU always computed in 80-bit extended precision
-regardless of operand type, so no speed difference between `Single` and
-`Double` existed there. On modern x86_64, SSE2 scalar instructions
-(`ADDSS`, `MULSS`, `SQRTSS`) do operate at genuine 32-bit precision, but
-trig is computed via software polynomial approximations in libc — and that
-is where the gap lies. The `*f` variants require a polynomial with roughly
-half as many terms (24 mantissa bits vs 53), yielding a 2–4× speedup in
-scalar trig compared to the `double` path. FPC and Delphi both call the
-`double` variants for `Single` arguments, converting `Single → Double →
-call sin() → Single` and paying the full double-precision cost plus two
-conversions. This makes `Single` trig no faster than `Double` trig in
-those compilers — a known pain point for real-time audio and signal
-processing code.
-
-*Implementation notes.*
-
-* QBE already distinguishes `s` (single) and `d` (double) types, so the
-  operand type is available at emit time.
-* The fix is a small dispatch in the trig intrinsic call emitter: check
-  the resolved type of the argument; if `tyFloat` (Single), emit a call to
-  the `*f` symbol; if `tyDouble`, emit a call to the unprefixed symbol.
-* No ABI or calling-convention changes are required; both families use
-  the standard System V AMD64 float argument registers.
-* A future extension could call a SIMD math library (e.g. SLEEF) for
-  vectorised trig across arrays of singles, but that is a separate and
-  larger undertaking.
-
-*Relevant use cases.* Real-time PCM audio synthesis, DSP filters, FFT
-pre/post-processing, simple video effects pipelines — all domains where
-single precision is sufficient and throughput matters.
 
 
 == Generics
@@ -116,31 +78,6 @@ The following features were identified as missing from Blaise while porting
 current port, noted below, so none is a blocker; they are collected here so
 they can be prioritised alongside other language work.
 
-=== Dynamic arrays with `SetLength`
-
-*What.* Support local variables of type `array of T` whose length can be set
-at runtime via `SetLength(A, N)`, with element access via `A[I]`.
-
-*Why it matters.* `SetLength` is the idiomatic Pascal way to build variadic
-collections.  In punit it is used for the `TSuiteArray` hook argument passed
-to `TRunStartHandler` — a list of suites being run, built and freed per run.
-Any future Blaise code that wants a heap-backed list without pulling in the
-full `TList<T>` generic will hit the same gap.
-
-*Current workaround in punit.* `TSuiteArray` was replaced with `PSuiteArray =
-Pointer` (a raw `GetMem` block).  `TRunStartHandler` signature changed from
-`procedure(const Suites: TSuiteArray)` to `procedure(Count: Integer; Suites:
-PSuiteArray)`.  Helper functions `BlockGet` / `BlockSet` access pointer slots
-by pointer arithmetic.  This works but is unidiomatic and requires manual
-memory management at every call site.
-
-*Implementation notes.* Dynamic arrays need: a heap-backed header (length +
-capacity + ARC refcount), `SetLength` as a compiler built-in that calls into
-the RTL to realloc the backing store, and bounds-checked index emission in
-the codegen.  The ARC model already in place for strings is the natural
-template.
-
-*Effort.* Significant — new type kind, RTL support, codegen changes.
 
 === `Str()` intrinsic — numeric to string conversion
 
@@ -272,9 +209,9 @@ NOTE: It is important to note that the if-then-else expression differs from the 
 
 See also Delphi's documentation: https://docwiki.embarcadero.com/RADStudio/Florence/en/Conditional_Operators_(Delphi)
 
-== BCL Packages — Numeric Types
+== StdLib Packages — Numeric Types
 
-=== `Currency` and `BigDecimal` as BCL packages
+=== `Currency` and `BigDecimal` as StdLib units
 
 *What.* Two numeric types useful in financial and high-precision contexts that
 were deliberately omitted from the Blaise primitive type set:
@@ -295,18 +232,18 @@ applies equally here: the proliferation of `Currency`, `Comp`, `Extended`, and
 Blaise's two float primitives (`Double` and `Single`) cover the vast majority
 of numeric use cases.
 
-*Where they belong.* Once the BCL (`packages/`) exists:
+*Where they belong.* Once the StdLib (`stdlib/`) exists:
 
-* `bcl.numerics.fixed` — `TFixedDecimal` (Currency semantics, operator
+* `numerics.fixed` — `TFixedDecimal` (Currency semantics, operator
   overloading, 4 decimal places).
-* `bcl.numerics.bigdecimal` — `TBigDecimal` (arbitrary precision, operator
+* `numerics.bigdecimal` — `TBigDecimal` (arbitrary precision, operator
   overloading).
 
 With operator overloading, both types will look like builtins from user code:
 
 [source,pascal]
 ----
-uses bcl.numerics.fixed;
+uses numerics.fixed;
 var Price, Tax: TFixedDecimal;
 begin
   Price := TFixedDecimal.FromStr('19.99');
@@ -319,56 +256,8 @@ end.
 `Currency` and `Comp` types and suggest `TFixedDecimal` or `TBigDecimal` as
 replacements.  `Extended` maps to `Double` with a precision-loss warning.
 
-*Effort.* Medium — primarily RTL/BCL work once operator overloading is in place.
+*Effort.* Medium — primarily RTL/stdlib work once operator overloading is in place.
 No compiler changes needed.
-
-== Tooling
-
-=== Native Blaise test framework (fptest port)
-
-*What.* Port the fptest framework to pure Blaise so that the compiler's own
-test suite can be compiled and executed by the Blaise compiler, with no FPC
-dependency in the test cycle.
-
-*Why it matters.* The only remaining hard FPC dependency in the development
-cycle is the test runner: `compiler/src/test/pascal/TestRunner.pas` and every
-`cp.test.*.pas` unit import `fptest` units (`TestFramework`, `TextTestRunner`)
-that are compiled by FPC.  `pasbuild test` therefore always requires FPC even
-after the production compiler and RTL are fully self-hosting.  A native Blaise
-port eliminates that dependency and closes the loop on a fully FPC-free
-development cycle.
-
-*Why fptest specifically.* fptest is an existing framework authored by the
-same team, based on the original DUnit2 design.  It is faster than FPCUnit,
-supports parameterised tests, and has a clean API.  Its source lives at
-`/data/devel/fptest/`.  Porting it to Blaise rather than designing a new
-framework preserves the existing test API (`TTestCase`, `CheckEquals`,
-`CheckTrue`, `RegisterTest`, etc.) so that the existing `cp.test.*.pas`
-units require only minor adaptation.
-
-*Scope of the Blaise port.*
-
-* Core classes: `TTestCase`, `TTestSuite`, `TTestResult`.
-* Assert helpers: `CheckTrue`, `CheckFalse`, `CheckEquals`, `CheckNotEquals`,
-  `AssertTrue`, `AssertFalse`, `Fail`.
-* A plain text runner that prints `OK (N tests)` or a failure list to
-  stdout and exits with a non-zero code on failure (pasbuild `test` command
-  reads the exit code).
-* No GUI runner, no XML output — keep the port minimal for now.
-
-*Migration path.*
-
-. Write the Blaise port of fptest as a new RTL unit (e.g. `TestFramework.pas`
-  in `rtl/src/main/pascal/`).
-. Adapt `TestRunner.pas` to import the Blaise version instead of the FPC one.
-. Verify all existing `cp.test.*.pas` units compile and pass under Blaise.
-. Update pasbuild's `test` command to invoke the Blaise binary directly instead
-  of an FPC-compiled test runner.
-
-*Effort.* Moderate.  fptest's core is small; the main effort is ensuring the
-Blaise class system supports the TTestCase inheritance hierarchy and the
-virtual dispatch pattern fptest relies on.
-
 
 == Debugger
 

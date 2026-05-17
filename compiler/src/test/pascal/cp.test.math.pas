@@ -68,14 +68,20 @@ type
     procedure TestSemantic_Power_OK;
     procedure TestSemantic_Power_ReturnsDouble;
 
-    { Trig — Sin / Cos / Tan / ArcTan / ArcTan2 }
+    { Trig — Sin / Cos / Tan / ArcTan / ArcTan2 / ArcSin / ArcCos / Sinh / Cosh / Tanh }
     procedure TestSemantic_Sin_OK;
     procedure TestSemantic_Cos_OK;
     procedure TestSemantic_Tan_OK;
     procedure TestSemantic_ArcTan_OK;
     procedure TestSemantic_ArcTan2_OK;
+    procedure TestSemantic_ArcSin_OK;
+    procedure TestSemantic_ArcCos_OK;
+    procedure TestSemantic_Sinh_OK;
+    procedure TestSemantic_Cosh_OK;
+    procedure TestSemantic_Tanh_OK;
     procedure TestSemantic_Sin_ReturnsDouble;
     procedure TestSemantic_Sin_Single_ReturnsSingle;
+    procedure TestSemantic_Sinh_Single_ReturnsSingle;
 
     { IsNaN / IsInfinite → Boolean }
     procedure TestSemantic_IsNaN_OK;
@@ -98,6 +104,14 @@ type
     procedure TestCodegen_Tan_EmitsTan;
     procedure TestCodegen_ArcTan_EmitsAtan;
     procedure TestCodegen_ArcTan2_EmitsAtan2;
+    procedure TestCodegen_ArcSin_EmitsAsin;
+    procedure TestCodegen_ArcCos_EmitsAcos;
+    procedure TestCodegen_Sinh_EmitsSinh;
+    procedure TestCodegen_Cosh_EmitsCosh;
+    procedure TestCodegen_Tanh_EmitsTanh;
+    procedure TestCodegen_Sin_Single_EmitsSinf;
+    procedure TestCodegen_Sinh_Single_EmitsSinhf;
+    procedure TestCodegen_ArcSin_Single_EmitsAsinf;
     procedure TestCodegen_IsNaN_EmitsIsnan;
     procedure TestCodegen_IsInfinite_EmitsIsinf;
 
@@ -629,6 +643,59 @@ begin
   end;
 end;
 
+procedure TMathTests.TestSemantic_ArcSin_OK;
+begin
+  SemanticOKBuiltin(
+    'program P; var X, R: Double; begin R := ArcSin(X) end.');
+end;
+
+procedure TMathTests.TestSemantic_ArcCos_OK;
+begin
+  SemanticOKBuiltin(
+    'program P; var X, R: Double; begin R := ArcCos(X) end.');
+end;
+
+procedure TMathTests.TestSemantic_Sinh_OK;
+begin
+  SemanticOKBuiltin(
+    'program P; var X, R: Double; begin R := Sinh(X) end.');
+end;
+
+procedure TMathTests.TestSemantic_Cosh_OK;
+begin
+  SemanticOKBuiltin(
+    'program P; var X, R: Double; begin R := Cosh(X) end.');
+end;
+
+procedure TMathTests.TestSemantic_Tanh_OK;
+begin
+  SemanticOKBuiltin(
+    'program P; var X, R: Double; begin R := Tanh(X) end.');
+end;
+
+procedure TMathTests.TestSemantic_Sinh_Single_ReturnsSingle;
+var
+  Lexer:    TLexer;
+  Parser:   TParser;
+  Prog:     TProgram;
+  Semantic: TSemanticAnalyser;
+  Assign:   TAssignment;
+begin
+  Lexer := nil; Parser := nil; Prog := nil; Semantic := nil;
+  try
+    Lexer    := TLexer.Create('program P; var X, R: Single; begin R := Sinh(X) end.');
+    Parser   := TParser.Create(Lexer);
+    Prog     := Parser.Parse;
+    Semantic := TSemanticAnalyser.Create;
+    Semantic.Analyse(Prog);
+    Assign := TAssignment(Prog.Block.Stmts.Items[0]);
+    AssertNotNil('resolved type', Assign.Expr.ResolvedType);
+    AssertEquals('return type', 'Single', Assign.Expr.ResolvedType.Name);
+  finally
+    Semantic.Free; Prog.Free; Parser.Free; Lexer.Free;
+  end;
+end;
+
 { ------------------------------------------------------------------ }
 { IsNaN / IsInfinite                                                   }
 { ------------------------------------------------------------------ }
@@ -808,6 +875,70 @@ begin
   IR := GenIRBuiltin(
     'program P; var Y, X, R: Double; begin R := ArcTan2(Y, X) end.');
   AssertTrue('atan2 in IR', IRContains(IR, '$atan2'));
+end;
+
+procedure TMathTests.TestCodegen_ArcSin_EmitsAsin;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var X, R: Double; begin R := ArcSin(X) end.');
+  AssertTrue('asin in IR', IRContains(IR, '$asin'));
+end;
+
+procedure TMathTests.TestCodegen_ArcCos_EmitsAcos;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var X, R: Double; begin R := ArcCos(X) end.');
+  AssertTrue('acos in IR', IRContains(IR, '$acos'));
+end;
+
+procedure TMathTests.TestCodegen_Sinh_EmitsSinh;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var X, R: Double; begin R := Sinh(X) end.');
+  AssertTrue('sinh in IR', IRContains(IR, '$sinh'));
+end;
+
+procedure TMathTests.TestCodegen_Cosh_EmitsCosh;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var X, R: Double; begin R := Cosh(X) end.');
+  AssertTrue('cosh in IR', IRContains(IR, '$cosh'));
+end;
+
+procedure TMathTests.TestCodegen_Tanh_EmitsTanh;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var X, R: Double; begin R := Tanh(X) end.');
+  AssertTrue('tanh in IR', IRContains(IR, '$tanh'));
+end;
+
+procedure TMathTests.TestCodegen_Sin_Single_EmitsSinf;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var X, R: Single; begin R := Sin(X) end.');
+  AssertTrue('sinf in IR', IRContains(IR, '$sinf'));
+end;
+
+procedure TMathTests.TestCodegen_Sinh_Single_EmitsSinhf;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var X, R: Single; begin R := Sinh(X) end.');
+  AssertTrue('sinhf in IR', IRContains(IR, '$sinhf'));
+end;
+
+procedure TMathTests.TestCodegen_ArcSin_Single_EmitsAsinf;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var X, R: Single; begin R := ArcSin(X) end.');
+  AssertTrue('asinf in IR', IRContains(IR, '$asinf'));
 end;
 
 procedure TMathTests.TestCodegen_IsNaN_EmitsIsnan;

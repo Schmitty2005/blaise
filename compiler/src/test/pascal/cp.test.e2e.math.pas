@@ -12,7 +12,8 @@ unit cp.test.e2e.math;
 
   Compiler builtins (no unit needed):
     Sqrt, Ceil, Floor, Round, Trunc, Ln, Log2, Log10, Power,
-    Sin, Cos, Tan, ArcTan, ArcTan2, IsNaN, IsInfinite.
+    Sin, Cos, Tan, ArcTan, ArcTan2, ArcSin, ArcCos, Sinh, Cosh, Tanh,
+    IsNaN, IsInfinite.
 
   Math RTL unit (requires 'uses Math'):
     Min, Max, Sign, DivMod, InRange, EnsureRange, Pi. }
@@ -60,6 +61,13 @@ type
 
     { ArcTan2 }
     procedure TestRun_ArcTan2_OneOne;
+
+    { ArcSin / ArcCos / Sinh / Cosh / Tanh }
+    procedure TestRun_ArcSin_Zero;
+    procedure TestRun_ArcCos_One;
+    procedure TestRun_Sinh_Zero;
+    procedure TestRun_Cosh_Zero;
+    procedure TestRun_Tanh_Zero;
 
     { IsNaN / IsInfinite }
     procedure TestRun_IsNaN_NaN;
@@ -468,6 +476,95 @@ begin
     ''', Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('arctan2(1,1)', 'ok', Trim(Output));
+end;
+
+{ ------------------------------------------------------------------ }
+{ ArcSin / ArcCos / Sinh / Cosh / Tanh                                }
+{ ------------------------------------------------------------------ }
+
+procedure TE2EMathTests.TestRun_ArcSin_Zero;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(
+    '''
+    program P;
+    var R: Integer;
+    begin
+      R := Round(ArcSin(0.0));
+      WriteLn(IntToStr(R))
+    end.
+    ''', Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('arcsin(0)', '0', Trim(Output));
+end;
+
+procedure TE2EMathTests.TestRun_ArcCos_One;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(
+    '''
+    program P;
+    var R: Integer;
+    begin
+      R := Round(ArcCos(1.0));
+      WriteLn(IntToStr(R))
+    end.
+    ''', Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('arccos(1)', '0', Trim(Output));
+end;
+
+procedure TE2EMathTests.TestRun_Sinh_Zero;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(
+    '''
+    program P;
+    var R: Integer;
+    begin
+      R := Round(Sinh(0.0));
+      WriteLn(IntToStr(R))
+    end.
+    ''', Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('sinh(0)', '0', Trim(Output));
+end;
+
+procedure TE2EMathTests.TestRun_Cosh_Zero;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(
+    '''
+    program P;
+    var R: Integer;
+    begin
+      R := Round(Cosh(0.0));
+      WriteLn(IntToStr(R))
+    end.
+    ''', Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('cosh(0)', '1', Trim(Output));
+end;
+
+procedure TE2EMathTests.TestRun_Tanh_Zero;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(
+    '''
+    program P;
+    var R: Integer;
+    begin
+      R := Round(Tanh(0.0));
+      WriteLn(IntToStr(R))
+    end.
+    ''', Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('tanh(0)', '0', Trim(Output));
 end;
 
 { ------------------------------------------------------------------ }

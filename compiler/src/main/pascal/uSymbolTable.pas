@@ -1353,6 +1353,11 @@ begin
   Sym := TSymbol.Create('Tan',        skFunction, FTypeDouble);  Define(Sym);
   Sym := TSymbol.Create('ArcTan',     skFunction, FTypeDouble);  Define(Sym);
   Sym := TSymbol.Create('ArcTan2',    skFunction, FTypeDouble);  Define(Sym);
+  Sym := TSymbol.Create('ArcSin',     skFunction, FTypeDouble);  Define(Sym);
+  Sym := TSymbol.Create('ArcCos',     skFunction, FTypeDouble);  Define(Sym);
+  Sym := TSymbol.Create('Sinh',       skFunction, FTypeDouble);  Define(Sym);
+  Sym := TSymbol.Create('Cosh',       skFunction, FTypeDouble);  Define(Sym);
+  Sym := TSymbol.Create('Tanh',       skFunction, FTypeDouble);  Define(Sym);
   Sym := TSymbol.Create('IsNaN',      skFunction, FTypeBoolean); Define(Sym);
   Sym := TSymbol.Create('IsInfinite', skFunction, FTypeBoolean); Define(Sym);
 end;

@@ -5386,7 +5386,10 @@ begin
   end;
 
   if SameText(AExpr.Name, 'Sin') or SameText(AExpr.Name, 'Cos') or
-     SameText(AExpr.Name, 'Tan') or SameText(AExpr.Name, 'ArcTan') then
+     SameText(AExpr.Name, 'Tan') or SameText(AExpr.Name, 'ArcTan') or
+     SameText(AExpr.Name, 'ArcSin') or SameText(AExpr.Name, 'ArcCos') or
+     SameText(AExpr.Name, 'Sinh') or SameText(AExpr.Name, 'Cosh') or
+     SameText(AExpr.Name, 'Tanh') then
   begin
     if AExpr.Args.Count <> 1 then
       SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);

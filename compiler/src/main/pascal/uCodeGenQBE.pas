@@ -6186,6 +6186,71 @@ begin
         Exit;
       end;
 
+      if SameText(FC.Name, 'ArcSin') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
+        if QType = 's' then
+          EmitLine(Format('  %s =s call $asinf(s %s)', [T, L]))
+        else
+          EmitLine(Format('  %s =d call $asin(d %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name, 'ArcCos') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
+        if QType = 's' then
+          EmitLine(Format('  %s =s call $acosf(s %s)', [T, L]))
+        else
+          EmitLine(Format('  %s =d call $acos(d %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name, 'Sinh') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
+        if QType = 's' then
+          EmitLine(Format('  %s =s call $sinhf(s %s)', [T, L]))
+        else
+          EmitLine(Format('  %s =d call $sinh(d %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name, 'Cosh') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
+        if QType = 's' then
+          EmitLine(Format('  %s =s call $coshf(s %s)', [T, L]))
+        else
+          EmitLine(Format('  %s =d call $cosh(d %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
+      if SameText(FC.Name, 'Tanh') then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp;
+        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
+        if QType = 's' then
+          EmitLine(Format('  %s =s call $tanhf(s %s)', [T, L]))
+        else
+          EmitLine(Format('  %s =d call $tanh(d %s)', [T, L]));
+        Result := T;
+        Exit;
+      end;
+
       if SameText(FC.Name, 'IsNaN') then
       begin
         L := EmitExpr(TASTExpr(FC.Args.Items[0]));
