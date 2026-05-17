@@ -150,6 +150,17 @@ type
     procedure TestCodegen_Min_InIR;
     procedure TestCodegen_Max_InIR;
     procedure TestCodegen_Sign_InIR;
+
+    { Float → Integer assignment must be rejected }
+    procedure TestSemantic_Assign_DoubleToInteger_Rejected;
+    procedure TestSemantic_Assign_SingleToInteger_Rejected;
+    procedure TestSemantic_Assign_IntegerToDouble_Rejected;
+    procedure TestSemantic_Assign_IntegerToSingle_Rejected;
+
+    { Float ↔ Float assignment is allowed }
+    procedure TestSemantic_Assign_DoubleToDouble_OK;
+    procedure TestSemantic_Assign_SingleToSingle_OK;
+    procedure TestSemantic_Assign_SingleToDouble_OK;
   end;
 
 implementation
@@ -1329,6 +1340,80 @@ begin
     begin R := Sign(X) end.
     ''');
   AssertTrue('Math_Sign in IR', IRContains(IR, 'Sign'));
+end;
+
+{ ------------------------------------------------------------------ }
+{ Float ↔ Integer assignment type checking                            }
+{ ------------------------------------------------------------------ }
+
+procedure TMathTests.TestSemantic_Assign_DoubleToInteger_Rejected;
+begin
+  SemanticError(
+    '''
+    program P;
+    var E: Integer; D: Double;
+    begin E := D end.
+    ''');
+end;
+
+procedure TMathTests.TestSemantic_Assign_SingleToInteger_Rejected;
+begin
+  SemanticError(
+    '''
+    program P;
+    var E: Integer; S: Single;
+    begin E := S end.
+    ''');
+end;
+
+procedure TMathTests.TestSemantic_Assign_IntegerToDouble_Rejected;
+begin
+  SemanticError(
+    '''
+    program P;
+    var D: Double; I: Integer;
+    begin D := I end.
+    ''');
+end;
+
+procedure TMathTests.TestSemantic_Assign_IntegerToSingle_Rejected;
+begin
+  SemanticError(
+    '''
+    program P;
+    var S: Single; I: Integer;
+    begin S := I end.
+    ''');
+end;
+
+procedure TMathTests.TestSemantic_Assign_DoubleToDouble_OK;
+begin
+  SemanticOKBuiltin(
+    '''
+    program P;
+    var A, B: Double;
+    begin B := A end.
+    ''');
+end;
+
+procedure TMathTests.TestSemantic_Assign_SingleToSingle_OK;
+begin
+  SemanticOKBuiltin(
+    '''
+    program P;
+    var A, B: Single;
+    begin B := A end.
+    ''');
+end;
+
+procedure TMathTests.TestSemantic_Assign_SingleToDouble_OK;
+begin
+  SemanticOKBuiltin(
+    '''
+    program P;
+    var S: Single; D: Double;
+    begin D := S end.
+    ''');
 end;
 
 initialization

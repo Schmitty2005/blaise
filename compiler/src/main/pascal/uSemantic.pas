@@ -393,8 +393,13 @@ begin
     enum ↔ integer: allow assignment between enum and integer types }
   if (AExpected.Kind = tyEnum) and AActual.IsNumeric then Exit;
   if (AActual.Kind  = tyEnum) and AExpected.IsNumeric then Exit;
-  { Numeric widening/narrowing: allow between the integer family members }
-  if AExpected.IsNumeric and AActual.IsNumeric then Exit;
+  { Numeric widening/narrowing: allow within the integer family, or within the
+    float family (Single ↔ Double).  Mixing float and integer requires an
+    explicit conversion (Trunc/Round/Float/Double); silently accepting it would
+    reinterpret the bit-pattern and produce garbage values at runtime. }
+  if AExpected.IsFloat and AActual.IsFloat then Exit;
+  if AExpected.IsNumeric and AActual.IsNumeric
+     and (not AExpected.IsFloat) and (not AActual.IsFloat) then Exit;
   { subtype assignment: TDerived → TBase is allowed }
   if IsSubtypeOf(AActual, AExpected) then
     Exit;
