@@ -13,11 +13,11 @@
   after allocator changes to detect regressions.
 
   Workloads:
-    1. Small alloc/free churn   — 100 000 x GetMem(32) + FreeMem
-    2. Mixed sizes              — 50 000 x rotating 8/32/128/512/2048
-    3. Realloc growth           — 10 000 x grow 16 -> 32 -> 64 -> 128 -> 256
-    4. Large alloc/free         — 1 000 x GetMem(65536) + FreeMem
-    5. Alloc-retain-free-all    — allocate 10 000 blocks, then free all
+    1. Small alloc/free churn   — 1 000 000 x GetMem(32) + FreeMem
+    2. Mixed sizes              — 500 000 x rotating 8/32/128/512/2048
+    3. Realloc growth           — 100 000 x grow 16 -> 32 -> 64 -> 128 -> 256
+    4. Large alloc/free         — 10 000 x GetMem(65536) + FreeMem
+    5. Alloc-retain-free-all    — allocate 100 000 blocks, then free all
 
   Output: elapsed time in milliseconds per workload.  Compare across
   runs to detect regressions or improvements.
@@ -48,7 +48,7 @@ var
   Diff: Int64;
 begin
   Diff := _TimeNow - T0;
-  Result := Integer(Diff div 1000000);
+  Result := Integer(Diff div 1_000_000);
 end;
 
 procedure PrintResult(Name: string; Ms: Integer);
@@ -57,11 +57,11 @@ begin
 end;
 
 const
-  SMALL_COUNT   = 1000000;
-  MIXED_COUNT   = 500000;
-  REALLOC_COUNT = 100000;
-  LARGE_COUNT   = 10000;
-  RETAIN_COUNT  = 100000;
+  SMALL_COUNT   = 1_000_000;
+  MIXED_COUNT   = 500_000;
+  REALLOC_COUNT = 100_000;
+  LARGE_COUNT   = 10_000;
+  RETAIN_COUNT  = 100_000;
 
 var
   I, J, Elapsed: Integer;
