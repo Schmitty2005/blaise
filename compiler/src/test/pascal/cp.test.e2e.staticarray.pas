@@ -46,6 +46,10 @@ type
     { Dynamic array High/Low }
     procedure TestRun_DynArray_High_ReturnsLengthMinusOne;
     procedure TestRun_DynArray_Low_ReturnsZero;
+
+    { Dynamic array for..in }
+    procedure TestRun_DynArray_ForIn_IteratesAllElements;
+    procedure TestRun_DynArray_ForIn_EmptyArray_NoIterations;
   end;
 
 implementation
@@ -467,6 +471,63 @@ begin
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('Low of dynamic array is always 0', '0', Trim(Output));
+end;
+
+procedure TE2EStaticArrayTests.TestRun_DynArray_ForIn_IteratesAllElements;
+const Src =
+  '''
+  program P;
+  var
+    da: array of Integer;
+    x, i: Integer;
+  begin
+    SetLength(da, 4);
+    da[0] := 10;
+    da[1] := 20;
+    da[2] := 30;
+    da[3] := 40;
+    for x in da do
+      WriteLn(x)
+  end.
+  ''';
+var Output: string; RCode: Integer;
+  Lines: TStringList;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Trim(Output);
+    AssertEquals('line count', 4, Lines.Count);
+    AssertEquals('da[0]', '10', Lines.Strings[0]);
+    AssertEquals('da[1]', '20', Lines.Strings[1]);
+    AssertEquals('da[2]', '30', Lines.Strings[2]);
+    AssertEquals('da[3]', '40', Lines.Strings[3]);
+  finally Lines.Free end
+end;
+
+procedure TE2EStaticArrayTests.TestRun_DynArray_ForIn_EmptyArray_NoIterations;
+const Src =
+  '''
+  program P;
+  var
+    da: array of Integer;
+    x: Integer;
+    count: Integer;
+  begin
+    count := 0;
+    for x in da do
+      Inc(count);
+    WriteLn(count)
+  end.
+  ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('no iterations on nil/empty array', '0', Trim(Output));
 end;
 
 initialization

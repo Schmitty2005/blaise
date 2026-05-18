@@ -235,9 +235,11 @@ type
     MoveNextDecl:         TObject;    { TMethodDecl — not owned }
     CurrentDecl:          TObject;    { TMethodDecl getter — not owned }
     { Static-array iteration path (IsArrayIter = True) }
-    IdxVarName:           string;     { synthetic index slot — shared with string path }
+    IdxVarName:           string;     { synthetic index slot — shared with string/dynarray path }
     ArrayLow:             Integer;    { compile-time lower bound }
     ArrayHigh:            Integer;    { compile-time upper bound }
+    { Dynamic-array iteration path (IsDynArrayIter = True) }
+    IsDynArrayIter:       Boolean;
     { String byte-iteration path (IsStringIter = True) }
     IsStringIter:         Boolean;
     { Set iteration path (IsSetIter = True) }

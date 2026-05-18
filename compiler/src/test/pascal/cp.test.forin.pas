@@ -10,7 +10,7 @@ unit cp.test.forin;
 
 {$mode objfpc}{$H+}
 
-{ Tests for for..in loop: class-based enumerators and static array iteration. }
+{ Tests for for..in loop: class-based enumerators, static array, dynamic array, string, and set iteration. }
 
 interface
 
@@ -88,6 +88,21 @@ type
     procedure TestCodegen_SetForIn_TestsBitWithAnd1;
     procedure TestCodegen_SetForIn_JumpsBackToCond;
     procedure TestCodegen_SetForIn_EvaluatesMaskOnce;
+
+    { ------------------------------------------------------------------ }
+    { Semantic — dynamic array                                             }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_DynArrayForIn_Valid_OK;
+    procedure TestSemantic_DynArrayForIn_VarTypeMismatch_RaisesError;
+
+    { ------------------------------------------------------------------ }
+    { Codegen — dynamic array                                              }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_DynArrayForIn_HasForInCondLabel;
+    procedure TestCodegen_DynArrayForIn_HasForInEndLabel;
+    procedure TestCodegen_DynArrayForIn_CallsDynArrayLength;
+    procedure TestCodegen_DynArrayForIn_LoadsElement;
+    procedure TestCodegen_DynArrayForIn_JumpsBackToCond;
 
     { ------------------------------------------------------------------ }
     { Semantic — string                                                    }
@@ -501,6 +516,86 @@ begin
   IR := GenIR(SrcArrayForInNonZero);
   { Non-zero-based array needs a subtraction to compute element offset }
   AssertTrue('sub instruction for offset adjustment', Pos('sub', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Shared sources — dynamic array                                       }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcDynArrayForIn =
+    '''
+        program P;
+        var
+          DA: array of Integer;
+          X:  Integer;
+        begin
+          for X in DA do
+            X := X + 1
+        end.
+        ''';
+
+{ ------------------------------------------------------------------ }
+{ Semantic tests — dynamic array                                       }
+{ ------------------------------------------------------------------ }
+
+procedure TForInTests.TestSemantic_DynArrayForIn_Valid_OK;
+begin
+  AnalyseSrc(SrcDynArrayForIn).Free;
+end;
+
+procedure TForInTests.TestSemantic_DynArrayForIn_VarTypeMismatch_RaisesError;
+begin
+  AnalyseExpectError(
+    '''
+        program P;
+        var
+          DA: array of Integer;
+          X:  string;
+        begin
+          for X in DA do
+            X := X
+        end.
+        ''');
+end;
+
+{ ------------------------------------------------------------------ }
+{ Codegen tests — dynamic array                                        }
+{ ------------------------------------------------------------------ }
+
+procedure TForInTests.TestCodegen_DynArrayForIn_HasForInCondLabel;
+var IR: string;
+begin
+  IR := GenIR(SrcDynArrayForIn);
+  AssertTrue('forin_cond label present', Pos('forin_cond', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_DynArrayForIn_HasForInEndLabel;
+var IR: string;
+begin
+  IR := GenIR(SrcDynArrayForIn);
+  AssertTrue('forin_end label present', Pos('forin_end', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_DynArrayForIn_CallsDynArrayLength;
+var IR: string;
+begin
+  IR := GenIR(SrcDynArrayForIn);
+  AssertTrue('_DynArrayLength called in IR', Pos('_DynArrayLength', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_DynArrayForIn_LoadsElement;
+var IR: string;
+begin
+  IR := GenIR(SrcDynArrayForIn);
+  AssertTrue('loadw emitted for Integer array element', Pos('loadw', IR) > 0);
+end;
+
+procedure TForInTests.TestCodegen_DynArrayForIn_JumpsBackToCond;
+var IR: string;
+begin
+  IR := GenIR(SrcDynArrayForIn);
+  AssertTrue('jmp back to forin_cond', Pos('jmp @forin_cond', IR) > 0);
 end;
 
 { ------------------------------------------------------------------ }

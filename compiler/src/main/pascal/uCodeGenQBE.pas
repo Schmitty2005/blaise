@@ -2192,6 +2192,8 @@ var
   CmpT:       string;
   BasePtr:    string;
   SAT:        TStaticArrayTypeDesc;
+  DAT:        TDynArrayTypeDesc;
+  LenT:       string;
   ElemSize:   Integer;
   AdjL:       string;
   OffL:       string;
@@ -2265,6 +2267,124 @@ begin
         OffL := AllocTemp;
         EmitLine(Format('  %s =l mul %s, %d', [OffL, IdxL, ElemSize]));
       end;
+      ElemPtr := AllocTemp;
+      CurT    := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %s', [ElemPtr, BasePtr, OffL]));
+      EmitLine(Format('  %s =%s %s %s', [CurT, QType, QLoad, ElemPtr]));
+
+      { Assign element to loop variable }
+      if AStmt.ResolvedVarType.IsString then
+      begin
+        OldVarT := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s',
+          [OldVarT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+        EmitLine(Format('  call $_StringAddRef(l %s)', [CurT]));
+        EmitLine(Format('  call $_StringRelease(l %s)', [OldVarT]));
+        EmitLine(Format('  storel %s, %s',
+          [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+      end
+      else if AStmt.ResolvedVarType.Kind = tyClass then
+      begin
+        OldVarT := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s',
+          [OldVarT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+        EmitLine(Format('  call $_ClassAddRef(l %s)', [CurT]));
+        EmitLine(Format('  call $_ClassRelease(l %s)', [OldVarT]));
+        EmitLine(Format('  storel %s, %s',
+          [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+      end
+      else if QType = 'w' then
+      begin
+        if not AStmt.VarIsGlobal and IsPromoted(AStmt.VarName) then
+          EmitLine(Format('  %%_var_%s =w copy %s', [AStmt.VarName, CurT]))
+        else
+          EmitLine(Format('  storew %s, %s',
+            [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+      end
+      else
+        EmitLine(Format('  storel %s, %s',
+          [CurT, VarRef(AStmt.VarName, AStmt.VarIsGlobal)]));
+
+      EmitStmt(AStmt.Body);
+    finally
+      FBreakLabels.Delete(FBreakLabels.Count - 1);
+      FContinueLabels.Delete(FContinueLabels.Count - 1);
+    end;
+
+    { Increment index }
+    IdxW := AllocTemp;
+    NxtW := AllocTemp;
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
+    else
+      EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+    EmitLine(Format('  %s =w add %s, 1', [NxtW, IdxW]));
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s', [IdxSlot, NxtW]))
+    else
+      EmitLine(Format('  storew %s, %s', [NxtW, IdxSlot]));
+    EmitLine(Format('  jmp @%s', [LblCond]));
+
+    EmitLine('@' + LblEnd);
+    Exit;
+  end;
+
+  if AStmt.IsDynArrayIter then
+  begin
+    { ---- Dynamic array iteration ----
+      idx runs 0 .. $_DynArrayLength(ptr)-1 (0-based).
+      Condition: idx < length  (re-evaluated each iteration from the header).
+      BasePtr = data pointer (the dyn-array variable value itself). }
+    DAT      := TDynArrayTypeDesc(AStmt.CollExpr.ResolvedType);
+    ElemSize := DAT.ElementType.RawSize;
+    case DAT.ElementType.Kind of
+      tyByte, tyBoolean:            QLoad := 'loadub';
+      tyInteger, tyUInt32, tyEnum:  QLoad := 'loadw';
+    else
+      QLoad := 'loadl';
+    end;
+    QType   := QbeTypeOf(DAT.ElementType);
+    IdxSlot := '%_var_' + AStmt.IdxVarName;
+    LblCond := AllocLabel('forin_cond');
+    LblBody := AllocLabel('forin_body');
+    LblEnd  := AllocLabel('forin_end');
+
+    { Initialise index to 0 }
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy 0', [IdxSlot]))
+    else
+      EmitLine(Format('  storew 0, %s', [IdxSlot]));
+    EmitLine(Format('  jmp @%s', [LblCond]));
+
+    { Condition: idx < length }
+    EmitLine('@' + LblCond);
+    IdxW  := AllocTemp;
+    BasePtr := EmitExpr(AStmt.CollExpr);
+    CmpT  := AllocTemp;
+    LenT := AllocTemp;
+    if IsPromoted(AStmt.IdxVarName) then
+      EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
+    else
+      EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+    EmitLine(Format('  %s =w call $_DynArrayLength(l %s)', [LenT, BasePtr]));
+    EmitLine(Format('  %s =w csltw %s, %s', [CmpT, IdxW, LenT]));
+    EmitLine(Format('  jnz %s, @%s, @%s', [CmpT, LblBody, LblEnd]));
+
+    { Body: load element, assign to loop var, then user body }
+    EmitLine('@' + LblBody);
+    FBreakLabels.AddObject(LblEnd, TObject(PtrUInt(FExcDepth)));
+    FContinueLabels.AddObject(LblCond, TObject(PtrUInt(FExcDepth)));
+    try
+      BasePtr := EmitExpr(AStmt.CollExpr);
+      IdxW    := AllocTemp;
+      IdxL    := AllocTemp;
+      if IsPromoted(AStmt.IdxVarName) then
+        EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
+      else
+        EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
+      EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
+      OffL := AllocTemp;
+      EmitLine(Format('  %s =l mul %s, %d', [OffL, IdxL, ElemSize]));
       ElemPtr := AllocTemp;
       CurT    := AllocTemp;
       EmitLine(Format('  %s =l add %s, %s', [ElemPtr, BasePtr, OffL]));

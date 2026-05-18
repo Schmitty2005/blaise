@@ -3750,9 +3750,43 @@ begin
         FCurrentLocalBlock.Decls.Add(SynthDecl);
       end;
     end
+    else if CollType.Kind = tyDynArray then
+    begin
+      { ---- Dynamic array iteration path ---- }
+      ElemType := TDynArrayTypeDesc(CollType).ElementType;
+
+      VarSym := FTable.Lookup(ForInS.VarName);
+      if VarSym = nil then
+        SemanticError(
+          Format('Undeclared loop variable ''%s''', [ForInS.VarName]),
+          ForInS.Line, ForInS.Col);
+      ForInS.VarName := VarSym.Name;
+      if VarSym.Kind <> skVariable then
+        SemanticError(
+          Format('''%s'' is not a variable', [ForInS.VarName]),
+          ForInS.Line, ForInS.Col);
+      CheckTypesMatch(VarSym.TypeDesc, ElemType,
+        'for-in loop variable', ForInS.Line, ForInS.Col);
+      ForInS.VarIsGlobal    := VarSym.IsGlobal;
+      ForInS.IsDynArrayIter := True;
+      ForInS.ResolvedVarType := ElemType;
+
+      { Inject synthetic index slot __idx_N (Integer) }
+      ForInS.IdxVarName := '__idx_' + IntToStr(FForInCounter);
+      Inc(FForInCounter);
+      if FCurrentLocalBlock <> nil then
+      begin
+        SynthDecl := TVarDecl.Create;
+        SynthDecl.Names.Add(ForInS.IdxVarName);
+        SynthDecl.TypeName    := 'Integer';
+        SynthDecl.ResolvedType := FTable.TypeInteger;
+        SynthDecl.IsGlobal    := False;
+        FCurrentLocalBlock.Decls.Add(SynthDecl);
+      end;
+    end
     else
       SemanticError(
-        'for-in collection must be a class instance, static array, string, or set',
+        'for-in collection must be a class instance, static array, dynamic array, string, or set',
         ForInS.Line, ForInS.Col);
 
     Inc(FLoopDepth);
