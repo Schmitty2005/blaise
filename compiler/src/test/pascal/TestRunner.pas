@@ -105,7 +105,8 @@ uses
   cp.test.e2e.math,
   cp.test.streams,
   cp.test.e2e.streams,
-  cp.test.e2e.dateutils;
+  cp.test.e2e.dateutils,
+  cp.test.config;
 
 begin
   Halt(RunAll);

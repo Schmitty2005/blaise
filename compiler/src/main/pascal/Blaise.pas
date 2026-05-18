@@ -23,7 +23,7 @@ program Blaise;
 uses
   SysUtils, Classes, Process, contnrs,
   uLexer, uParser, uAST, uSemantic, uCodeGenQBE, uUnitLoader, uDebugOPDF,
-  uStrCompat;
+  uStrCompat, uConfig;
 
 const
   Version = '0.9.0-dev';
@@ -46,6 +46,10 @@ begin
   WriteLn('  --emit-ir           Print QBE IR to stdout and exit');
   WriteLn('  --debug-opdf        Emit OPDF debug info (.opdf.s companion file)');
   WriteLn('  --cache-dir <dir>   Directory for per-unit IR cache (speeds up incremental builds)');
+  WriteLn('');
+  WriteLn('Configuration:');
+  WriteLn('  Unit search paths can also be set in blaise.cfg (one unit-path=<dir>');
+  WriteLn('  per line). Searched next to the binary, then ~/.blaise.cfg.');
 end;
 
 { Handle FPC -i query flags: -iV (version), -iTP (target processor), -iTO (target OS).
@@ -449,6 +453,7 @@ end;
 var
   SourceFile, OutputFile: string;
   SearchPaths: TStringList;
+  ConfigPaths: TStringList;
   EmitIR:      Boolean;
   OPDFEnabled: Boolean;
   OPDFAsmFile: string;
@@ -490,6 +495,15 @@ begin
       PrintUsage;
       Halt(1);
     end;
+  end;
+
+  ConfigPaths := TStringList.Create;
+  try
+    LoadConfigPaths(ConfigPaths);
+    for I := ConfigPaths.Count - 1 downto 0 do
+      SearchPaths.Insert(0, ConfigPaths.Strings[I]);
+  finally
+    ConfigPaths.Free;
   end;
 
   if not FileExists(SourceFile) then
