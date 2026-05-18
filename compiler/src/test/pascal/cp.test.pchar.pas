@@ -39,6 +39,7 @@ type
     procedure TestCodegen_PChar_AllocEmitted;
     procedure TestCodegen_String_EmitsRTLCall;
     procedure TestCodegen_PCharSubscript_ChrByteShortCircuit;
+    procedure TestCodegen_PCharSubscript_HashCharLiteralShortCircuit;
   end;
 
 implementation
@@ -196,6 +197,33 @@ begin
   AssertTrue('storeb is emitted for p[0] write', Pos('storeb', IR) >= 0);
   AssertEquals('Chr(65) byte-store must not call $_Chr',
     -1, Pos('call $_Chr(', IR));
+end;
+
+{ Regression test for: P[I] := #0 (or any #N or single-char string literal)
+  used to emit a string-literal data item ($__sN) and storeb of the low byte
+  of that pointer, yielding garbage (the address byte) instead of the
+  intended character ord.  The fix folds 1-char string/Char literals to the
+  integer Ord value in byte-store context. }
+procedure TPCharTests.TestCodegen_PCharSubscript_HashCharLiteralShortCircuit;
+const
+  Src =
+    '''
+      program PCH;
+      var p: PChar;
+      begin
+        p := GetMem(4);
+        p[0] := #0;
+        FreeMem(p)
+      end.
+      ''';
+var IR: string;
+begin
+  IR := GenIR(Src);
+  AssertTrue('storeb emitted for p[0] write', Pos('storeb', IR) >= 0);
+  AssertEquals('#0 byte-store must not reference a string-literal data item',
+    -1, Pos('storeb $__s', IR));
+  AssertEquals('#0 byte-store must not load from a string-literal pointer',
+    -1, Pos('add $__s', IR));
 end;
 
 initialization

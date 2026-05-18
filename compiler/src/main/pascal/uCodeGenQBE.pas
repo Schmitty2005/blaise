@@ -444,10 +444,17 @@ end;
   storeb would silently truncate to the low byte of that pointer — the
   source of the historical "P[I] := Chr(N)" garbage bug.  Instead, emit
   the argument N directly as a w temp.  Callers consume the result with
-  a storeb / byte-typed store. }
+  a storeb / byte-typed store.
+
+  The same trap applies to single-char string literals (#N or 'A'): the
+  normal lowering emits a string-literal data item and returns its data
+  pointer, whose low byte is then storeb'd — yielding the address byte,
+  not the intended Ord.  Fold to the Ord value directly. }
 function TCodeGenQBE.EmitByteRhs(AExpr: TASTExpr): string;
 var
   FC: TFuncCallExpr;
+  SL: TStringLiteral;
+  T:  string;
 begin
   if (AExpr is TFuncCallExpr) then
   begin
@@ -455,6 +462,17 @@ begin
     if SameText(FC.Name, 'Chr') and (FC.Args.Count = 1) then
     begin
       Result := EmitExpr(TASTExpr(FC.Args.Items[0]));
+      Exit;
+    end;
+  end;
+  if AExpr is TStringLiteral then
+  begin
+    SL := TStringLiteral(AExpr);
+    if Length(SL.Value) = 1 then
+    begin
+      T := AllocTemp;
+      EmitLine(Format('  %s =w copy %d', [T, StrAt(SL.Value, 0)]));
+      Result := T;
       Exit;
     end;
   end;

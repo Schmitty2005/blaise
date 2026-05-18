@@ -25,6 +25,7 @@ type
     procedure TestRun_Pointer_TypedPointer_Deref;
     procedure TestRun_Pointer_NilCheck;
     procedure TestRun_PCharSubscript_ChrAssignment;
+    procedure TestRun_PCharSubscript_HashCharLiteralAssignment;
     procedure TestRun_StaticArrayOfPChar_ElementPreservesAllBits;
   end;
 
@@ -103,6 +104,26 @@ const
     end.
     ''';
 
+  { Regression: P[I] := #N (Char literal) previously emitted a string-literal
+    data item and storeb of its data pointer's low byte (the address byte),
+    instead of N itself.  Verifies both ASCII characters and the NUL
+    terminator land in the buffer correctly. }
+  SrcPCharSubscriptHashChar = '''
+    program P;
+    var
+      P1: PChar;
+    begin
+      P1 := GetMem(5);
+      P1[0] := #65;
+      P1[1] := #66;
+      P1[2] := #67;
+      P1[3] := #68;
+      P1[4] := #0;
+      WriteLn(string(P1));
+      FreeMem(P1)
+    end.
+    ''';
+
   { Regression: P[I] := Chr(N) previously stored the low byte of the
     _Chr-allocated string pointer (garbage) instead of N itself. }
   SrcPCharSubscriptChr = '''
@@ -152,6 +173,15 @@ var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertTrue('compile+run', CompileAndRun(SrcPCharSubscriptChr, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('ABCD', 'ABCD' + LE, Output);
+end;
+
+procedure TE2EPointersTests.TestRun_PCharSubscript_HashCharLiteralAssignment;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcPCharSubscriptHashChar, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('ABCD', 'ABCD' + LE, Output);
 end;
