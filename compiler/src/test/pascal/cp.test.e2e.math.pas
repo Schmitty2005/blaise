@@ -133,6 +133,11 @@ type
     { Abs }
     procedure TestRun_AbsInt_Positive;
     procedure TestRun_AbsInt_Negative;
+
+    { Integer → Double/Single implicit assignment }
+    procedure TestRun_IntAssignDouble;
+    procedure TestRun_IntAssignSingle;
+    procedure TestRun_Int64AssignDouble;
   end;
 
 implementation
@@ -1264,6 +1269,65 @@ begin
     ''', Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('Abs(-7)', '7', Trim(Output));
+end;
+
+{ ------------------------------------------------------------------ }
+{ Integer → Double/Single implicit assignment                          }
+{ ------------------------------------------------------------------ }
+
+procedure TE2EMathTests.TestRun_IntAssignDouble;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(
+    '''
+    program P;
+    var D: Double;
+    begin
+      D := 4345;
+      WriteLn(DoubleToStr(D))
+    end.
+    ''', Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('4345 as Double', '4345', Trim(Output));
+end;
+
+procedure TE2EMathTests.TestRun_IntAssignSingle;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(
+    '''
+    program P;
+    var S: Single;
+        D: Double;
+    begin
+      S := 42;
+      D := S;
+      WriteLn(DoubleToStr(D))
+    end.
+    ''', Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('42 as Single→Double', '42', Trim(Output));
+end;
+
+procedure TE2EMathTests.TestRun_Int64AssignDouble;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(
+    '''
+    program P;
+    var N: Int64;
+        D: Double;
+    begin
+      N := 123456789;
+      D := N;
+      WriteLn(DoubleToStr(D))
+    end.
+    ''', Output, RCode));
+  AssertEquals('exit code', 0, RCode);
+  AssertEquals('123456789 as Double', '123456789', Trim(Output));
 end;
 
 initialization

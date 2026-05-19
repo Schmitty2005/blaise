@@ -72,6 +72,11 @@ type
     { Int64 to Double conversion }
     procedure TestInt64MulDouble_EmitsSltof;
     procedure TestIntMulDouble_EmitsSwtof;
+
+    { Integer → Double/Single implicit assignment }
+    procedure TestIntAssignDouble_EmitsSwtof;
+    procedure TestInt64AssignDouble_EmitsSltof;
+    procedure TestIntAssignSingle_EmitsSwtof;
   end;
 
 implementation
@@ -537,6 +542,49 @@ begin
     '  D := N * 1.0'                   + LineEnding +
     'end.');
   AssertTrue('should emit swtof for Integer→Double',
+    IRContains(IR, 'swtof'));
+end;
+
+procedure TCodeGenTests.TestIntAssignDouble_EmitsSwtof;
+var IR: string;
+begin
+  IR := GenerateIR('''
+    program P;
+    var D: Double;
+    begin
+      D := 4345
+    end.
+    ''');
+  AssertTrue('should emit swtof for Integer literal→Double',
+    IRContains(IR, 'swtof'));
+end;
+
+procedure TCodeGenTests.TestInt64AssignDouble_EmitsSltof;
+var IR: string;
+begin
+  IR := GenerateIR('''
+    program P;
+    var N: Int64; D: Double;
+    begin
+      N := 100;
+      D := N
+    end.
+    ''');
+  AssertTrue('should emit sltof for Int64 var→Double',
+    IRContains(IR, 'sltof'));
+end;
+
+procedure TCodeGenTests.TestIntAssignSingle_EmitsSwtof;
+var IR: string;
+begin
+  IR := GenerateIR('''
+    program P;
+    var S: Single;
+    begin
+      S := 4345
+    end.
+    ''');
+  AssertTrue('should emit swtof for Integer literal→Single',
     IRContains(IR, 'swtof'));
 end;
 

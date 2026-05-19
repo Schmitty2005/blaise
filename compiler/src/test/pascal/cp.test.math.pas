@@ -154,8 +154,8 @@ type
     { Float → Integer assignment must be rejected }
     procedure TestSemantic_Assign_DoubleToInteger_Rejected;
     procedure TestSemantic_Assign_SingleToInteger_Rejected;
-    procedure TestSemantic_Assign_IntegerToDouble_Rejected;
-    procedure TestSemantic_Assign_IntegerToSingle_Rejected;
+    procedure TestSemantic_Assign_IntegerToDouble_OK;
+    procedure TestSemantic_Assign_IntegerToSingle_OK;
 
     { Float ↔ Float assignment is allowed }
     procedure TestSemantic_Assign_DoubleToDouble_OK;
@@ -1366,9 +1366,9 @@ begin
     ''');
 end;
 
-procedure TMathTests.TestSemantic_Assign_IntegerToDouble_Rejected;
+procedure TMathTests.TestSemantic_Assign_IntegerToDouble_OK;
 begin
-  SemanticError(
+  SemanticOKBuiltin(
     '''
     program P;
     var D: Double; I: Integer;
@@ -1376,9 +1376,9 @@ begin
     ''');
 end;
 
-procedure TMathTests.TestSemantic_Assign_IntegerToSingle_Rejected;
+procedure TMathTests.TestSemantic_Assign_IntegerToSingle_OK;
 begin
-  SemanticError(
+  SemanticOKBuiltin(
     '''
     program P;
     var S: Single; I: Integer;

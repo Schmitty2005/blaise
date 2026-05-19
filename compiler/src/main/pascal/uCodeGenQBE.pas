@@ -3298,6 +3298,38 @@ begin
         EmitLine(Format('  stored %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     end
     else if (AAssign.ResolvedLhsType <> nil) and
+            (AAssign.ResolvedLhsType.Kind = tySingle) then
+    begin
+      ValTemp := EmitExpr(AAssign.Expr);
+      if (AAssign.Expr.ResolvedType <> nil) and
+         (QbeTypeOf(AAssign.Expr.ResolvedType) = 'w') and
+         not AAssign.Expr.ResolvedType.IsFloat then
+      begin
+        ExtTemp := AllocTemp;
+        EmitLine(Format('  %s =s swtof %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end
+      else if (AAssign.Expr.ResolvedType <> nil) and
+              (QbeTypeOf(AAssign.Expr.ResolvedType) = 'l') and
+              not AAssign.Expr.ResolvedType.IsFloat then
+      begin
+        ExtTemp := AllocTemp;
+        EmitLine(Format('  %s =s sltof %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end
+      else if (AAssign.Expr.ResolvedType <> nil) and
+              (AAssign.Expr.ResolvedType.Kind = tyDouble) then
+      begin
+        ExtTemp := AllocTemp;
+        EmitLine(Format('  %s =s truncd %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end;
+      if not AAssign.IsGlobal and IsPromoted(AAssign.Name) then
+        EmitLine(Format('  %%_var_%s =s copy %s', [AAssign.Name, ValTemp]))
+      else
+        EmitLine(Format('  stores %s, %s', [ValTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    end
+    else if (AAssign.ResolvedLhsType <> nil) and
             (QbeTypeOf(AAssign.ResolvedLhsType) = 'l') then
     begin
       ValTemp := EmitExpr(AAssign.Expr);
