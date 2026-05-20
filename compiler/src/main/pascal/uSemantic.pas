@@ -145,9 +145,12 @@ type
     { Attribute helpers.  AttrMatches performs the Delphi-style suffix-drop
       lookup: [Weak] and [WeakAttribute] both resolve to the recognised
       attribute 'Weak'.  HasWeakAttribute scans an attribute list for
-      any form of the Weak marker. }
+      any form of the Weak marker.  IsCustomAttributeClass walks the parent
+      chain of a class to verify it descends from TCustomAttribute. }
     function  AttrMatches(const AAttrName, ACanonical: string): Boolean;
     function  HasWeakAttribute(AAttrs: TStringList): Boolean;
+    function  IsCustomAttributeClass(const ATypeName: string): Boolean;
+    function  ResolveCustomAttrName(const ARawName: string): string;
 
     { Default-argument support.  MinArity returns the minimum number of
       arguments a call must supply: params before the first one carrying a
@@ -254,6 +257,49 @@ begin
       Exit;
     end;
   Result := False;
+end;
+
+function TSemanticAnalyser.IsCustomAttributeClass(const ATypeName: string): Boolean;
+var
+  Sym:  TSymbol;
+  RT:   TRecordTypeDesc;
+  Walk: TRecordTypeDesc;
+begin
+  Result := False;
+  Sym := FTable.Lookup(ATypeName);
+  if (Sym = nil) or not (Sym.TypeDesc is TRecordTypeDesc) then Exit;
+  RT := TRecordTypeDesc(Sym.TypeDesc);
+  if RT.Kind <> tyClass then Exit;
+  Walk := RT;
+  while Walk <> nil do
+  begin
+    if SameText(Walk.Name, 'TCustomAttribute') then
+    begin
+      Result := True;
+      Exit;
+    end;
+    Walk := Walk.Parent;
+  end;
+end;
+
+function TSemanticAnalyser.ResolveCustomAttrName(const ARawName: string): string;
+{ Apply Delphi suffix convention: try 'Name' then 'NameAttribute'. Returns the
+  resolved class name that descends from TCustomAttribute, or '' if not found. }
+var
+  Sym: TSymbol;
+begin
+  Result := '';
+  Sym := FTable.Lookup(ARawName);
+  if (Sym <> nil) and (Sym.TypeDesc is TRecordTypeDesc) and
+     IsCustomAttributeClass(ARawName) then
+  begin
+    Result := ARawName;
+    Exit;
+  end;
+  Sym := FTable.Lookup(ARawName + 'Attribute');
+  if (Sym <> nil) and (Sym.TypeDesc is TRecordTypeDesc) and
+     IsCustomAttributeClass(ARawName + 'Attribute') then
+    Result := ARawName + 'Attribute';
 end;
 
 procedure TSemanticAnalyser.CheckTypeParamConstraint(
@@ -2039,6 +2085,9 @@ var
   EnumDef:    TEnumTypeDef;
   SetDesc:    TSetTypeDesc;
   SetDef:     TSetTypeDef;
+  AttrIdx:    Integer;
+  RawAttr:    string;
+  Resolved:   string;
   BaseSym:    TSymbol;
   MName:      string;
   MSym:       TSymbol;
@@ -2308,6 +2357,25 @@ begin
     begin
       FieldList  := TClassTypeDef(TD.Def).Fields;
       MethodList := TClassTypeDef(TD.Def).Methods;
+
+      { Resolve class-level custom attributes.  Each raw name is matched
+        using the Delphi suffix convention: [Threaded] resolves to
+        ThreadedAttribute if that class descends from TCustomAttribute.
+        [Weak] is a compiler intrinsic and is skipped here. }
+      for AttrIdx := 0 to TClassTypeDef(TD.Def).Attributes.Count - 1 do
+      begin
+        RawAttr := TClassTypeDef(TD.Def).Attributes.Strings[AttrIdx];
+        if AttrMatches(RawAttr, 'Weak') then Continue;
+        Resolved := ResolveCustomAttrName(RawAttr);
+        if Resolved = '' then
+          SemanticError(
+            Format('Unknown attribute ''%s'': no class ''%s'' or ''%sAttribute'' ' +
+                   'descending from TCustomAttribute found',
+                   [RawAttr, RawAttr, RawAttr]),
+            TD.Line, TD.Col)
+        else
+          RT.AddClassAttribute(Resolved);
+      end;
 
       { Copy inherited fields and vtable from parent class first.
         The parser may store a generic interface name (e.g. IFoo<T>) as ParentName
@@ -5045,6 +5113,30 @@ var
   PT:      TProceduralTypeDesc;
   PPar:    TProcParamInfo;
 begin
+  { HasClassAttribute(AClass, AAttrClass): Boolean — runtime query of the custom
+    attribute RTTI stored in slot 7 of the class's typeinfo.  Both arguments
+    must be metaclass expressions (bare class names).  Lowers to a call to
+    $_HasClassAttribute(l typeinfo_class, l typeinfo_attr). }
+  if SameText(AExpr.Name, 'HasClassAttribute') then
+  begin
+    if AExpr.Args.Count <> 2 then
+      SemanticError('HasClassAttribute requires exactly 2 arguments', AExpr.Line, AExpr.Col);
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    AnalyseExpr(TASTExpr(AExpr.Args.Items[1]));
+    if (TASTExpr(AExpr.Args.Items[0]).ResolvedType = nil) or
+       not (TASTExpr(AExpr.Args.Items[0]).ResolvedType.Kind in [tyClass, tyMetaClass]) then
+      SemanticError('HasClassAttribute: first argument must be a class type reference',
+        AExpr.Line, AExpr.Col);
+    if (TASTExpr(AExpr.Args.Items[1]).ResolvedType = nil) or
+       not (TASTExpr(AExpr.Args.Items[1]).ResolvedType.Kind in [tyClass, tyMetaClass]) then
+      SemanticError('HasClassAttribute: second argument must be an attribute class reference',
+        AExpr.Line, AExpr.Col);
+    AExpr.IsBuiltinHasClassAttr := True;
+    AExpr.ResolvedType := FTable.TypeBoolean;
+    Result := AExpr.ResolvedType;
+    Exit;
+  end;
+
   { SizeOf(TypeName) — compile-time type size, returns Integer }
   if SameText(AExpr.Name, 'SizeOf') then
   begin

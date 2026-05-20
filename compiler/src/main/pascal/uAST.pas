@@ -381,6 +381,9 @@ type
                                      program-level global. }
     ResolvedProcType: TObject;     { TProceduralTypeDesc — not owned;
                                      valid when IsIndirectCall }
+    IsBuiltinHasClassAttr: Boolean; { set by uSemantic — HasClassAttribute builtin }
+    HasClassAttrClass:     string;  { class name for arg 1 (class being queried) }
+    HasClassAttrAttr:      string;  { attribute class name for arg 2 }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -621,6 +624,7 @@ type
     Fields:          TObjectList;  { owned TFieldDecl }
     Methods:         TObjectList;  { owned TMethodDecl }
     Properties:      TObjectList;  { owned TPropertyDecl }
+    Attributes:      TStringList;  { owned — class-level custom attribute names e.g. 'Threaded' }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -1186,10 +1190,12 @@ begin
   Fields          := TObjectList.Create(True);
   Methods         := TObjectList.Create(True);
   Properties      := TObjectList.Create(True);
+  Attributes      := TStringList.Create;
 end;
 
 destructor TClassTypeDef.Destroy;
 begin
+  Attributes.Free;
   Properties.Free;
   Methods.Free;
   Fields.Free;

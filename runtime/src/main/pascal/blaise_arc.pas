@@ -45,6 +45,7 @@ function  _InheritsFrom(AChild, AParent: Pointer): Boolean;
 function  _ClassCreate(TInfo: Pointer): Pointer;
 procedure _ClassAddRef(UserPtr: Pointer);
 procedure _ClassFree(UserPtr: Pointer);
+function  _HasClassAttribute(AClassTI, AAttrTI: Pointer): Boolean;
 { _ClassRelease and _ClassAlloc are implemented in blaise_arc_class.c
   because they store and call a cleanup function pointer in the object
   header — a pattern not yet expressible in Blaise's Pascal RTL.
@@ -373,6 +374,49 @@ procedure _ClassFree(UserPtr: Pointer);
 begin
   if UserPtr = nil then Exit;
   _BlaiseFreeMem(UserPtr - CLASS_HDR);
+end;
+
+{ _HasClassAttribute: check whether a class (identified by its typeinfo pointer
+  AClassTI) carries the custom attribute identified by AAttrTI.  Reads typeinfo
+  slot 7 (offset 56) for the attribute table, then walks the parent chain via
+  slot 0 so attributes on a parent class are visible on derived classes.
+
+  Attribute table layout (emitted by EmitTypeInfoDefs):
+    table[0]  = count (Int64/l-slot)
+    table[1+] = typeinfo pointers, one per applied attribute }
+function _HasClassAttribute(AClassTI, AAttrTI: Pointer): Boolean;
+var
+  Current: Pointer;
+  Slot:    ^Pointer;
+  Attrs:   Pointer;
+  Count:   ^Int64;
+  Entry:   ^Pointer;
+  I:       Integer;
+begin
+  Result := False;
+  if (AClassTI = nil) or (AAttrTI = nil) then Exit;
+  Current := AClassTI;
+  while Current <> nil do
+  begin
+    Slot  := Current + 56;   { typeinfo slot 7 = attribute table ptr }
+    Attrs := Slot^;
+    if Attrs <> nil then
+    begin
+      Count := Attrs;        { first l-slot = count }
+      Entry := Attrs + 8;    { entries start after 8-byte count }
+      for I := 0 to Integer(Count^) - 1 do
+      begin
+        if Entry^ = AAttrTI then
+        begin
+          Result := True;
+          Exit;
+        end;
+        Entry := Pointer(Entry) + 8;
+      end;
+    end;
+    Slot    := Current;      { typeinfo slot 0 = parent typeinfo ptr }
+    Current := Slot^;
+  end;
 end;
 
 end.

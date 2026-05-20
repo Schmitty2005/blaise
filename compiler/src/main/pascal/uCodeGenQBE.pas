@@ -4651,12 +4651,18 @@ var
   ParentStr:       string;
   ImplStr:         string;
   MethStr:         string;
+  AttrsStr:        string;
+  AttrsLine:       string;
   MName:           string;
   MethLine:        string;
 begin
   EmitLine('data $typeinfo_TObject = { l 0, l 0, l ' +
            EmitClassNameRef('TObject') + ', l 0' +
-           ', l 8, l $_FieldCleanup_TObject, l $vtable_TObject }');
+           ', l 8, l $_FieldCleanup_TObject, l $vtable_TObject, l 0 }');
+  EmitLine('data $typeinfo_TCustomAttribute = { l $typeinfo_TObject, l 0, l ' +
+           EmitClassNameRef('TCustomAttribute') + ', l 0' +
+           ', l 8, l $_FieldCleanup_TCustomAttribute' +
+           ', l $vtable_TCustomAttribute, l 0 }');
 
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
@@ -4700,13 +4706,26 @@ begin
     else
       MethStr := '0';
 
+    if RT.ClassAttributeCount > 0 then
+    begin
+      AttrsLine := 'data $attrs_' + TD.Name + ' = { l ' + IntToStr(RT.ClassAttributeCount);
+      for J := 0 to RT.ClassAttributeCount - 1 do
+        AttrsLine := AttrsLine + ', l $typeinfo_' + RT.ClassAttributeAt(J);
+      AttrsLine := AttrsLine + ' }';
+      EmitLine(AttrsLine);
+      AttrsStr := '$attrs_' + TD.Name;
+    end
+    else
+      AttrsStr := '0';
+
     EmitLine('data $typeinfo_' + TD.Name +
              ' = { l ' + ParentStr + ', l ' + ImplStr +
              ', l ' + EmitClassNameRef(TD.Name) +
              ', l ' + MethStr +
              ', l ' + IntToStr(RT.TotalSize) +
              ', l $_FieldCleanup_' + TD.Name +
-             ', l $vtable_' + TD.Name + ' }');
+             ', l $vtable_' + TD.Name +
+             ', l ' + AttrsStr + ' }');
   end;
 
   { Generic instances — no published-method table emission yet (the
@@ -4729,7 +4748,7 @@ begin
              ', l ' + EmitClassNameRef(GI.TypeName) + ', l 0' +
              ', l ' + IntToStr(RT.TotalSize) +
              ', l $_FieldCleanup_' + MName +
-             ', l $vtable_' + MName + ' }');
+             ', l $vtable_' + MName + ', l 0 }');
   end;
 
   EmitLine('');
@@ -4755,6 +4774,8 @@ var
   ERef:         string;
 begin
   EmitLine('data $vtable_TObject = { l $typeinfo_TObject' +
+           ', l $TObject_Destroy, l $TObject_ToString }');
+  EmitLine('data $vtable_TCustomAttribute = { l $typeinfo_TCustomAttribute' +
            ', l $TObject_Destroy, l $TObject_ToString }');
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
@@ -5044,6 +5065,11 @@ var
   GI:    TGenericInstance;
 begin
   EmitLine('function $_FieldCleanup_TObject(l %self) {');
+  EmitLine('@start');
+  EmitLine('  ret');
+  EmitLine('}');
+  EmitLine('');
+  EmitLine('function $_FieldCleanup_TCustomAttribute(l %self) {');
   EmitLine('@start');
   EmitLine('  ret');
   EmitLine('}');
@@ -6570,6 +6596,19 @@ begin
         R := EmitExpr(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp;
         EmitLine(Format('  %s =l call $_MethodAddress(l %s, l %s)', [T, L, R]));
+        Result := T;
+        Exit;
+      end;
+
+      { HasClassAttribute(AClass, AAttrClass): Boolean — query attribute RTTI.
+        Both arguments are metaclass expressions (typeinfo pointers).
+        Lowers to '$_HasClassAttribute(l ti_class, l ti_attr)' returning w. }
+      if FC.IsBuiltinHasClassAttr then
+      begin
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        R := EmitExpr(TASTExpr(FC.Args.Items[1]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =w call $_HasClassAttribute(l %s, l %s)', [T, L, R]));
         Result := T;
         Exit;
       end;
@@ -9036,6 +9075,8 @@ var
   ParentStr:    string;
   ImplStr:      string;
   MethStr:      string;
+  AttrsStr:     string;
+  AttrsLine:    string;
   MethLine:     string;
   ItabLine:     string;
   ItabRef:      string;
@@ -9131,7 +9172,7 @@ begin
             EmitLine('data $typeinfo_' + TD.Name + ' = { l 0 }');
         end;
 
-        { Class typeinfo blocks — full 7-slot layout matching EmitTypeInfoDefs }
+        { Class typeinfo blocks — full 8-slot layout matching EmitTypeInfoDefs }
         for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
         begin
           TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
@@ -9171,13 +9212,26 @@ begin
           else
             MethStr := '0';
 
+          if RT.ClassAttributeCount > 0 then
+          begin
+            AttrsLine := 'data $attrs_' + TD.Name + ' = { l ' + IntToStr(RT.ClassAttributeCount);
+            for J := 0 to RT.ClassAttributeCount - 1 do
+              AttrsLine := AttrsLine + ', l $typeinfo_' + RT.ClassAttributeAt(J);
+            AttrsLine := AttrsLine + ' }';
+            EmitLine(AttrsLine);
+            AttrsStr := '$attrs_' + TD.Name;
+          end
+          else
+            AttrsStr := '0';
+
           EmitLine('data $typeinfo_' + TD.Name +
                    ' = { l ' + ParentStr + ', l ' + ImplStr +
                    ', l ' + EmitClassNameRef(TD.Name) +
                    ', l ' + MethStr +
                    ', l ' + IntToStr(RT.TotalSize) +
                    ', l $_FieldCleanup_' + TD.Name +
-                   ', l $vtable_' + TD.Name + ' }');
+                   ', l $vtable_' + TD.Name +
+                   ', l ' + AttrsStr + ' }');
         end;
 
         { Vtable data — abstract slots point at $__abstract_method_error

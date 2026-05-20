@@ -96,6 +96,7 @@ uses
   cp.test.overload,
   cp.test.classof,
   cp.test.publishedrtti,
+  cp.test.attributes,
   cp.test.proctypes_ofobject,
   cp.test.textblock,
   cp.test.tokenkindname,

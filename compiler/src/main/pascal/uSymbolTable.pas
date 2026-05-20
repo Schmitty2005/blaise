@@ -226,6 +226,7 @@ type
     FProperties:      TObjectList;  { owned TPropertyInfo }
     FHasDestroyMethod:      Boolean; { True when the class declares a 'Destroy' method }
     FHasAbstractMethods:    Boolean; { True when any vtable slot is abstract (no impl) }
+    FClassAttributes:       TStringList; { resolved attribute type names e.g. 'ThreadedAttribute' }
   public
     constructor Create(const AName: string; AKind: TTypeKind);
     destructor Destroy; override;
@@ -252,6 +253,11 @@ type
     procedure AddProperty(AProp: TPropertyInfo);
     function  FindProperty(const AName: string): TPropertyInfo;
     function  FindIndexedProperty: TPropertyInfo;
+
+    { Custom attribute tracking }
+    procedure AddClassAttribute(const AName: string);
+    function  ClassAttributeCount: Integer;
+    function  ClassAttributeAt(AIndex: Integer): string;
 
     property  Fields:      TObjectList read FFields;
     property  Properties: TObjectList read FProperties;
@@ -522,10 +528,12 @@ begin
   FVTable     := nil;  { allocated on first use }
   FImplements := TObjectList.Create(False);  { not owned }
   FProperties := TObjectList.Create(True);   { owned TPropertyInfo }
+  FClassAttributes := TStringList.Create;
 end;
 
 destructor TRecordTypeDesc.Destroy;
 begin
+  FClassAttributes.Free;
   FProperties.Free;
   FImplements.Free;
   FKeys.Free;
@@ -717,6 +725,21 @@ begin
     end;
   end;
   Result := nil;
+end;
+
+procedure TRecordTypeDesc.AddClassAttribute(const AName: string);
+begin
+  FClassAttributes.Add(AName);
+end;
+
+function TRecordTypeDesc.ClassAttributeCount: Integer;
+begin
+  Result := FClassAttributes.Count;
+end;
+
+function TRecordTypeDesc.ClassAttributeAt(AIndex: Integer): string;
+begin
+  Result := FClassAttributes.Strings[AIndex];
 end;
 
 constructor TInterfaceTypeDesc.Create(const AName: string);
@@ -1121,9 +1144,10 @@ end;
 
 procedure TSymbolTable.RegisterBuiltins;
 var
-  Sym:        TSymbol;
-  TObjectDesc: TRecordTypeDesc;
-  TMethodDesc: TRecordTypeDesc;
+  Sym:              TSymbol;
+  TObjectDesc:      TRecordTypeDesc;
+  FCustomAttrDesc:  TRecordTypeDesc;
+  TMethodDesc:      TRecordTypeDesc;
 begin
   { Primitive types }
   FTypeInteger := NewType(tyInteger, 'Integer');
@@ -1159,6 +1183,13 @@ begin
   TObjectDesc.AddVTableSlot('Destroy',  '$TObject_Destroy');
   TObjectDesc.AddVTableSlot('ToString', '$TObject_ToString');
   Define(TSymbol.Create('TObject', skType, TObjectDesc));
+
+  { TCustomAttribute — base class for user-defined custom attributes.
+    Inherits from TObject; no additional fields or methods. }
+  FCustomAttrDesc := NewClassType('TCustomAttribute');
+  FCustomAttrDesc.CopyVTableFrom(TObjectDesc);
+  FCustomAttrDesc.Parent := TObjectDesc;
+  Define(TSymbol.Create('TCustomAttribute', skType, FCustomAttrDesc));
 
   { TMethod — record carrying a (Code, Data) pair, byte-for-byte
     identical to a 'procedure of object' value's representation.  The

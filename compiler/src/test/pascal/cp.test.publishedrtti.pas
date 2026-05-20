@@ -321,13 +321,14 @@ const
         ''';
 var IR: string;
 begin
-  { Layout: parent, impllist, name, methods, totalsize, fieldcleanup, vtable.
-    The first four slots remain unchanged from Step 11b; the trailing
-    three were added in Step 11e to support runtime ClassCreate. }
+  { Layout: parent, impllist, name, methods, totalsize, fieldcleanup, vtable, attrs.
+    The first four slots remain unchanged from Step 11b; slots 4-6 were added
+    in Step 11e to support runtime ClassCreate; slot 7 (attrs) added for custom
+    attribute RTTI. }
   IR := GenIR(Src);
-  AssertTrue('typeinfo emits seven l-slots, first four unchanged',
+  AssertTrue('typeinfo emits eight l-slots, first four unchanged',
     Pos('$typeinfo_TFoo = { l $typeinfo_TObject, l 0, l $__cn_TFoo + 12, l 0' +
-        ', l 8, l $_FieldCleanup_TFoo, l $vtable_TFoo }', IR) > 0);
+        ', l 8, l $_FieldCleanup_TFoo, l $vtable_TFoo, l 0 }', IR) > 0);
 end;
 
 procedure TPublishedRTTITests.TestCodegen_NoPublishedMethods_MethodsSlotZero;

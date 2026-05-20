@@ -387,8 +387,7 @@ end;
 procedure TParser.ParseTypeSection(ABlock: TBlock);
 begin
   Expect(tkType);
-  { At least one declaration required after 'type' }
-  while Check(tkIdent) do
+  while Check(tkIdent) or Check(tkLBracket) do
     ParseTypeDecl(ABlock);
 end;
 
@@ -402,7 +401,11 @@ var
   ParamConstraints: TStringList;
   IsGeneric:        Boolean;
   Constraint:       string;
+  ClassAttrs:       TStringList;
 begin
+  ClassAttrs := TStringList.Create;
+  try
+  ParseAttributeList(ClassAttrs);
   TD := TTypeDecl.Create;
   TD.Line := FCurrent.Line;
   TD.Col  := FCurrent.Col;
@@ -489,6 +492,7 @@ begin
           GD.ParamConstraints.AddStrings(ParamConstraints);
           {$IFDEF FPC}GD.ClassDef.Free;{$ENDIF}
           GD.ClassDef := ParseClassDef;
+          GD.ClassDef.Attributes.AddStrings(ClassAttrs);
           TD.Def := GD;
         end;
       finally
@@ -511,7 +515,10 @@ begin
         TD.Def := AD;
       end
       else if Check(tkClass) then
-        TD.Def := ParseClassDef
+      begin
+        TD.Def := ParseClassDef;
+        TClassTypeDef(TD.Def).Attributes.AddStrings(ClassAttrs);
+      end
       else if Check(tkIntf) then
         TD.Def := ParseInterfaceDef
       else if Check(tkLParen) then
@@ -539,6 +546,9 @@ begin
   except
     TD.Free;
     raise;
+  end;
+  finally
+    ClassAttrs.Free;
   end;
 end;
 
