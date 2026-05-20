@@ -4118,14 +4118,27 @@ begin
   { Call on an arbitrary receiver expression: evaluate and use as Self }
   if ACall.ObjExpr <> nil then
   begin
-    SelfTemp := EmitExpr(ACall.ObjExpr);
     RT    := TRecordTypeDesc(ACall.ResolvedClassType);
     MDecl := TMethodDecl(ACall.ResolvedMethod);
     if (MDecl = nil) and SameText(ACall.Name, 'Free') then
     begin
-      EmitLine(Format('  call $_ClassRelease(l %s)', [SelfTemp]));
+      if (ACall.ObjExpr is TFieldAccessExpr) or
+         (ACall.ObjExpr is TIdentExpr) then
+      begin
+        FPtrTemp := EmitLValueAddr(ACall.ObjExpr);
+        SelfTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [SelfTemp, FPtrTemp]));
+        EmitLine(Format('  call $_ClassRelease(l %s)', [SelfTemp]));
+        EmitLine(Format('  storel 0, %s', [FPtrTemp]));
+      end
+      else
+      begin
+        SelfTemp := EmitExpr(ACall.ObjExpr);
+        EmitLine(Format('  call $_ClassRelease(l %s)', [SelfTemp]));
+      end;
       Exit;
     end;
+    SelfTemp := EmitExpr(ACall.ObjExpr);
     ArgLine := Format('l %s', [SelfTemp]);
     for I := 0 to ACall.Args.Count - 1 do
     begin
@@ -5045,6 +5058,7 @@ begin
       EmitLine(Format('  call $_StringRelease(l %s)', [Temp]))
     else
       EmitLine(Format('  call $_ClassRelease(l %s)', [Temp]));
+    EmitLine(Format('  storel 0, %s', [PtrT]));
   end;
   EmitLine('  ret');
   EmitLine('}');
