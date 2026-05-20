@@ -38,8 +38,6 @@
 
 unit blaise_weak;
 
-{$mode objfpc}{$H+}
-
 interface
 
 procedure _WeakAssign(Slot: Pointer; NewTarget: Pointer);

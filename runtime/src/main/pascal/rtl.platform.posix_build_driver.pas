@@ -6,15 +6,15 @@
   See LICENSE file in the project root for full license terms.
 }
 
-{ Build driver for blaise_process.pas — used only by the RTL Makefile to
-  compile the unit into an object file for inclusion in blaise_rtl.a.  The
-  program body is stripped from the IR before assembly; only the unit
+{ Build driver for rtl.platform.posix.pas — used only by the RTL Makefile
+  to compile the unit into an object file for inclusion in blaise_rtl.a.
+  The program body is stripped from the IR before assembly; only the unit
   functions are archived. }
 
-program blaise_process_build_driver;
+program rtl_platform_posix_build_driver;
 
 uses
-  blaise_process;
+  rtl.platform.posix;
 
 begin
 end.

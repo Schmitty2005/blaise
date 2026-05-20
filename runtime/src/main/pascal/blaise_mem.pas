@@ -37,8 +37,6 @@
 
 unit blaise_mem;
 
-{$mode objfpc}{$H+}
-
 interface
 
 function  _BlaiseGetMem(Size: Integer): Pointer;

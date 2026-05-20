@@ -26,8 +26,6 @@
 
 unit blaise_float;
 
-{$mode objfpc}{$H+}
-
 interface
 
 function _DoubleToStr(V: Double): Pointer;

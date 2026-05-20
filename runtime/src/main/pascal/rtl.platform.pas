@@ -14,6 +14,11 @@ unit rtl.platform;
 // No {$IFDEF} directives appear anywhere in this unit or its concrete
 // implementations.  Platform-specific behaviour is expressed by subclassing
 // TRtlPlatform and assigning the instance to GRtlPlatform at program start.
+//
+// Each supported platform provides a single concrete subclass:
+//   - TRtlPlatformPosix  (Linux, FreeBSD)
+//   - TRtlPlatformDarwin (macOS)  — future
+//   - TRtlPlatformWin32  (Windows) — future
 
 interface
 
@@ -35,15 +40,6 @@ type
     function GetCurrentDir: string; virtual; abstract;
     function SetCurrentDir(const APath: string): Boolean; virtual; abstract;
 
-    { Path utilities }
-    function ChangeFileExt(const APath, AExt: string): string; virtual; abstract;
-    function ExtractFileName(const APath: string): string; virtual; abstract;
-    function ExtractFilePath(const APath: string): string; virtual; abstract;
-    function ExtractFileDir(const APath: string): string; virtual; abstract;
-    function ExtractFileExt(const APath: string): string; virtual; abstract;
-    function IncludeTrailingPathDelimiter(const APath: string): string; virtual; abstract;
-    function ExcludeTrailingPathDelimiter(const APath: string): string; virtual; abstract;
-
     { OS utilities }
     function GetTempDir: string; virtual; abstract;
     function GetTempFileName(const ADir, APrefix: string): string; virtual; abstract;
@@ -56,6 +52,43 @@ type
     function Exec(const ACmd: string): Integer; virtual; abstract;
     function ParamCount: Integer; virtual; abstract;
     function ParamStr(AIndex: Integer): string; virtual; abstract;
+
+    { Console I/O — used by compiler-emitted WriteLn/Write }
+    procedure SysWriteStr(Fd: Integer; S: Pointer); virtual; abstract;
+    procedure SysWriteInt(Fd: Integer; N: Integer); virtual; abstract;
+    procedure SysWriteInt64(Fd: Integer; N: Int64); virtual; abstract;
+    procedure SysWriteNewline(Fd: Integer); virtual; abstract;
+
+    { File-descriptor primitives — used by streams }
+    function FdOpenRead(Path: Pointer): Integer; virtual; abstract;
+    function FdOpenWrite(Path: Pointer): Integer; virtual; abstract;
+    function FdOpenAppend(Path: Pointer): Integer; virtual; abstract;
+    function FdRead(Fd: Integer; Buf: Pointer; Count: Integer): Integer; virtual; abstract;
+    function FdWrite(Fd: Integer; Buf: Pointer; Count: Integer): Integer; virtual; abstract;
+    function FdSeek(Fd: Integer; Offset: Int64; Origin: Integer): Int64; virtual; abstract;
+    function FdSize(Fd: Integer): Int64; virtual; abstract;
+    procedure FdClose(Fd: Integer); virtual; abstract;
+
+    { Date/Time }
+    function TimeNow: Int64; virtual; abstract;
+    function TimeLocalOffsetSecs: Integer; virtual; abstract;
+    procedure TimeSplit(Nanos: Int64;
+      out Year, Month, Day, Hour, Min, Sec, NSec: Integer); virtual; abstract;
+    function TimeJoin(Year, Month, Day,
+      Hour, Min, Sec, NSec: Integer): Int64; virtual; abstract;
+    function TimeIsLeapYear(Year: Integer): Integer; virtual; abstract;
+    function TimeDaysInMonth(Year, Month: Integer): Integer; virtual; abstract;
+
+    { Process management — fork/exec/pipe }
+    function ProcessCreate: Pointer; virtual; abstract;
+    procedure ProcessSetExe(Proc: Pointer; ExeStr: Pointer); virtual; abstract;
+    procedure ProcessAddArg(Proc: Pointer; ArgStr: Pointer); virtual; abstract;
+    procedure ProcessExecute(Proc: Pointer); virtual; abstract;
+    function ProcessRunning(Proc: Pointer): Integer; virtual; abstract;
+    function ProcessReadOutput(Proc: Pointer): Pointer; virtual; abstract;
+    procedure ProcessWaitOnExit(Proc: Pointer); virtual; abstract;
+    function ProcessExitCode(Proc: Pointer): Integer; virtual; abstract;
+    procedure ProcessFree(Proc: Pointer); virtual; abstract;
   end;
 
 var
