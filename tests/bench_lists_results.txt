@@ -2,14 +2,13 @@ Blaise list micro-benchmark — results log
 ==========================================
 
 Each entry records the median of two consecutive runs of
-tests/bench_strings.pas and tests/bench_objects.pas, taken on the
-machine identified in the entry header.  Add new entries below the
-previous one (newest at the bottom) so the file forms a chronological
-trend.
+tests/bench_lists.pas, taken on the machine identified in the entry
+header.  Add new entries below the previous one (newest at the
+bottom) so the file forms a chronological trend.
 
-Workloads:
-  - bench_strings:  TStringList     vs  TList<String>
-  - bench_objects:  TObjectList     vs  TList<TObject>
+Workloads (all in one program):
+  - TStringList     vs  TList<String>
+  - TObjectList     vs  TList<TObject>
 
 Phases (all ms wall-clock):
   insert         1,000,000 Adds (item_<i> strings or fresh TItem instances)
@@ -57,3 +56,31 @@ Phases (all ms wall-clock):
       (e.g. TList<String> and TList<TObject> in one program) — that is
       why the benchmark is split into two files.  (Fixed in a later
       commit via per-instance AST body cloning.)
+
+
+------------------------------------------------------------------------
+2026-05-21 — Graeme @ AMD Ryzen 7 5800X (Linux 6.14)
+  Blaise compiler v0.9.0-dev
+  Commit:        b6736d3 (fix semantic: clone method bodies per generic instance)
+
+  --- merged into a single program (tests/bench_lists.pas) ---
+                                                TStringList    TList<String>
+    insert 1_000_000                                  99 ms          89 ms
+    sequential Get(i) x Count                         10 ms          10 ms
+    random  Get(i)  x 1_000_000                       20 ms          19 ms
+    for..in over 1_000_000                            15 ms          11 ms
+    IndexOf / hand-rolled scan x 1000                681 ms         287 ms
+
+                                                TObjectList    TList<TObject>
+    insert 1_000_000                                  36 ms          40 ms
+    sequential Get(i) x Count                          4 ms           6 ms
+    random  Get(i)  x 1_000_000                        9 ms          13 ms
+    IndexOf / hand-rolled scan x 1000                 16 ms         131 ms
+
+  Notes:
+    * Multi-instance generic miscompile is fixed — TList<String> and
+      TList<TObject> now co-exist in one program, so the two split
+      benchmarks have been merged into tests/bench_lists.pas.
+    * Numbers are within noise of the previous split-program run on
+      the same hardware; combining the workloads does not perturb
+      timings.

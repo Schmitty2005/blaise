@@ -6,32 +6,29 @@
   See LICENSE file in the project root for full license terms.
 }
 
-program BenchStrings;
+program BenchLists;
 
-{ Temporary micro-benchmark — TStringList vs TList<String>.
+{ Micro-benchmark — TStringList vs TList<String> and TObjectList vs
+  TList<TObject>.
 
   For each container we measure:
     1. Bulk insert      — 1_000_000 Adds
     2. Sequential read  — Get(i) for every index
     3. Random read      — 1_000_000 indexed reads in a pseudo-random pattern
-    4. Linear search    — 1000 lookups on a 100_000-item list
-                          (TList<T> has no IndexOf — hand-rolled scan)
-    5. for..in iterate  — checksum across all items
+    4. Linear search    — 1000 lookups; TList<T> uses a hand-rolled scan
+                          since it has no IndexOf method
+    5. for..in iterate  — full enumeration (strings workload only)
 
   All times are wall-clock milliseconds via TInstant.Subtract.
   Run from the project root:
 
-    compiler/target/blaise --source tests/bench_strings.pas --output /tmp/bench_strings
-    /tmp/bench_strings
-
-  NOTE: this benchmark and tests/bench_objects.pas are split because the
-  compiler currently miscompiles a program that instantiates the same
-  generic class with two different concrete type arguments
-  (e.g. TList<String> and TList<TObject> in the same program) — a
-  pre-existing limitation tracked separately. }
+    compiler/target/blaise --source tests/bench_lists.pas --output /tmp/bench_lists
+    /tmp/bench_lists
+}
 
 uses
   Classes,
+  Contnrs,
   Generics.Collections,
   DateUtils,
   SysUtils;
@@ -41,6 +38,11 @@ const
   N_MID    =  100000;
   N_RANDOM = 1000000;
   N_SEARCH =    1000;
+
+type
+  TItem = class
+    FValue: Integer;
+  end;
 
 var
   GRand: Integer;
@@ -170,14 +172,14 @@ end;
 
 procedure BenchGenericListString;
 var
-  L:    TList<String>;
-  I:    Integer;
-  Idx:  Integer;
-  J:    Integer;
-  T0:   TInstant;
-  S:    string;
-  Sum:  Int64;
-  Hits: Integer;
+  L:     TList<String>;
+  I:     Integer;
+  Idx:   Integer;
+  J:     Integer;
+  T0:    TInstant;
+  S:     string;
+  Sum:   Int64;
+  Hits:  Integer;
   Found: Boolean;
 begin
   WriteLn('TList<String>');
@@ -249,13 +251,161 @@ begin
   WriteLn
 end;
 
+procedure BenchTObjectList;
+var
+  OL:     TObjectList;
+  I:      Integer;
+  Idx:    Integer;
+  T0:     TInstant;
+  Item:   TItem;
+  Sum:    Int64;
+  Hits:   Integer;
+  Needle: TItem;
 begin
-  WriteLn('=== Blaise list micro-benchmark - strings ===');
+  WriteLn('TObjectList(OwnsObjects=True)');
+
+  { 1. Bulk insert }
+  OL := TObjectList.Create(True);
+  T0 := InstantNow;
+  for I := 0 to N_BIG - 1 do
+  begin
+    Item := TItem.Create;
+    Item.FValue := I;
+    OL.Add(Item)
+  end;
+  Report('insert 1_000_000', ElapsedMs(T0));
+
+  { 2. Sequential read }
+  T0  := InstantNow;
+  Sum := 0;
+  for I := 0 to OL.Count - 1 do
+  begin
+    Item := TItem(OL.Get(I));
+    Sum  := Sum + Item.FValue
+  end;
+  Report('sequential Get(i) x Count (sum=' + IntToStr(Sum) + ')',
+    ElapsedMs(T0));
+
+  { 3. Random read }
+  SeedRand(42);
+  T0  := InstantNow;
+  Sum := 0;
+  for I := 0 to N_RANDOM - 1 do
+  begin
+    Idx  := NextRand mod N_BIG;
+    Item := TItem(OL.Get(Idx));
+    Sum  := Sum + Item.FValue
+  end;
+  Report('random  Get(i)  x 1_000_000', ElapsedMs(T0));
+
+  { 4. IndexOf — search for known objects (pointer-equality match) }
+  SeedRand(7);
+  T0   := InstantNow;
+  Hits := 0;
+  for I := 0 to N_SEARCH - 1 do
+  begin
+    Idx    := NextRand mod N_BIG;
+    Needle := TItem(OL.Get(Idx));
+    if OL.IndexOf(Needle) >= 0 then
+      Hits := Hits + 1
+  end;
+  Report('IndexOf x 1000 (hits=' + IntToStr(Hits) + ')',
+    ElapsedMs(T0));
+
+  OL.Free;
+  WriteLn
+end;
+
+procedure BenchGenericListObject;
+var
+  L:      TList<TObject>;
+  I:      Integer;
+  J:      Integer;
+  Idx:    Integer;
+  T0:     TInstant;
+  Obj:    TObject;
+  Item:   TItem;
+  Sum:    Int64;
+  Hits:   Integer;
+  Needle: TObject;
+  Found:  Boolean;
+begin
+  WriteLn('TList<TObject> (manual Free)');
+
+  { 1. Bulk insert }
+  L  := TList<TObject>.Create;
+  T0 := InstantNow;
+  for I := 0 to N_BIG - 1 do
+  begin
+    Item := TItem.Create;
+    Item.FValue := I;
+    L.Add(Item)
+  end;
+  Report('insert 1_000_000', ElapsedMs(T0));
+
+  { 2. Sequential read }
+  T0  := InstantNow;
+  Sum := 0;
+  for I := 0 to L.Count - 1 do
+  begin
+    Item := TItem(L.Get(I));
+    Sum  := Sum + Item.FValue
+  end;
+  Report('sequential Get(i) x Count (sum=' + IntToStr(Sum) + ')',
+    ElapsedMs(T0));
+
+  { 3. Random read }
+  SeedRand(42);
+  T0  := InstantNow;
+  Sum := 0;
+  for I := 0 to N_RANDOM - 1 do
+  begin
+    Idx  := NextRand mod N_BIG;
+    Item := TItem(L.Get(Idx));
+    Sum  := Sum + Item.FValue
+  end;
+  Report('random  Get(i)  x 1_000_000', ElapsedMs(T0));
+
+  { 4. Hand-rolled IndexOf — pointer equality }
+  SeedRand(7);
+  T0   := InstantNow;
+  Hits := 0;
+  for I := 0 to N_SEARCH - 1 do
+  begin
+    Idx    := NextRand mod N_BIG;
+    Needle := L.Get(Idx);
+    Found  := False;
+    for J := 0 to L.Count - 1 do
+      if L.Get(J) = Needle then
+      begin
+        Found := True;
+        break
+      end;
+    if Found then
+      Hits := Hits + 1
+  end;
+  Report('hand-rolled scan x 1000 (hits=' + IntToStr(Hits) + ')',
+    ElapsedMs(T0));
+
+  { Manually release each item since TList<TObject> is not owning. }
+  for I := 0 to L.Count - 1 do
+  begin
+    Obj := L.Get(I);
+    Obj.Free
+  end;
+  L.Free;
+  WriteLn
+end;
+
+begin
+  WriteLn('=== Blaise list micro-benchmark ===');
   WriteLn('N_BIG=' + IntToStr(N_BIG) +
           '  N_MID=' + IntToStr(N_MID) +
           '  N_RANDOM=' + IntToStr(N_RANDOM) +
           '  N_SEARCH=' + IntToStr(N_SEARCH));
   WriteLn;
   BenchTStringList;
-  BenchGenericListString
+  BenchGenericListString;
+  BenchTObjectList;
+  BenchGenericListObject
 end.
