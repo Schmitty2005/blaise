@@ -84,3 +84,35 @@ Phases (all ms wall-clock):
     * Numbers are within noise of the previous split-program run on
       the same hardware; combining the workloads does not perturb
       timings.
+
+
+------------------------------------------------------------------------
+2026-05-21 — Graeme @ AMD Ryzen 7 5800X (Linux 6.14)
+  Blaise compiler v0.9.0-dev
+  Commit:        ffe09b3 (perf codegen: elide _ClassRelease on provably-nil slots)
+
+                                                TStringList    TList<String>
+    insert 1_000_000                                  96 ms          90 ms
+    sequential Get(i) x Count                         11 ms          11 ms
+    random  Get(i)  x 1_000_000                       19 ms          19 ms
+    for..in over 1_000_000                            15 ms          11 ms
+    IndexOf / hand-rolled scan x 1000                600 ms         283 ms
+
+                                                TObjectList    TList<TObject>
+    insert 1_000_000                                  37 ms          42 ms
+    sequential Get(i) x Count                          4 ms           5 ms
+    random  Get(i)  x 1_000_000                        9 ms          12 ms
+    IndexOf / hand-rolled scan x 1000                 16 ms          90 ms
+
+  Notes:
+    * Big win on the TList<TObject> hand-rolled scan (~30% faster:
+      131 ms -> 90 ms).  Source: nil-slot _ClassRelease elision in the
+      codegen — TList<T>.Get's `Result := Src^` no longer emits a
+      release-on-nil pair, saving one cross-TU call per Get.
+    * Smaller incidental wins on Sequential Get (6->5 ms) and Random
+      Get (13->12 ms) for TList<TObject> from the same change.
+    * TList<String> hand-rolled scan unchanged at 283 ms; the elision
+      applies to class-typed assignments only.  Strings get the same
+      treatment if we extend the optimisation to strings in a follow-up.
+    * TStringList.IndexOf dropped 681->600 ms.  Cause uncertain; may
+      just be run-to-run noise.
