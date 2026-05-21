@@ -705,30 +705,42 @@ end;
 
 function TRecordTypeDesc.FindProperty(const AName: string): TPropertyInfo;
 var
-  I: Integer;
+  I:    Integer;
+  Walk: TRecordTypeDesc;
 begin
-  for I := 0 to FProperties.Count - 1 do
-    if SameText(TPropertyInfo(FProperties.Items[I]).Name, AName) then
-    begin
-      Result := TPropertyInfo(FProperties.Items[I]);
-      Exit;
-    end;
+  Walk := Self;
+  while Walk <> nil do
+  begin
+    for I := 0 to Walk.FProperties.Count - 1 do
+      if SameText(TPropertyInfo(Walk.FProperties.Items[I]).Name, AName) then
+      begin
+        Result := TPropertyInfo(Walk.FProperties.Items[I]);
+        Exit;
+      end;
+    Walk := Walk.Parent;
+  end;
   Result := nil;
 end;
 
 function TRecordTypeDesc.FindIndexedProperty: TPropertyInfo;
 var
-  I: Integer;
-  P: TPropertyInfo;
+  I:    Integer;
+  P:    TPropertyInfo;
+  Walk: TRecordTypeDesc;
 begin
-  for I := 0 to FProperties.Count - 1 do
+  Walk := Self;
+  while Walk <> nil do
   begin
-    P := TPropertyInfo(FProperties.Items[I]);
-    if (P.IndexParamName <> '') and (P.ReadMethod <> '') then
+    for I := 0 to Walk.FProperties.Count - 1 do
     begin
-      Result := P;
-      Exit;
+      P := TPropertyInfo(Walk.FProperties.Items[I]);
+      if (P.IndexParamName <> '') and (P.ReadMethod <> '') then
+      begin
+        Result := P;
+        Exit;
+      end;
     end;
+    Walk := Walk.Parent;
   end;
   Result := nil;
 end;

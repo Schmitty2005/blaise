@@ -77,6 +77,13 @@ type
       because the analyser skipped AnalyseExpr on PropIndexExpr in the
       Base<>nil branch, leaving its ResolvedType nil. }
     procedure TestCodegen_IndexedProperty_ChainedBase_VarIndex_Compiles;
+
+    { ------------------------------------------------------------------ }
+    { Inherited property access — issue #45                                }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_InheritedProperty_ViaSubclassVar_OK;
+    procedure TestSemantic_InheritedProperty_ViaSelf_OK;
+    procedure TestSemantic_InheritedProperty_BareIdent_InSubclassMethod_OK;
   end;
 
 implementation
@@ -618,6 +625,80 @@ begin
     outer Strings[Index] is method-backed and must emit a call to Get
     threaded with the variable I. }
   AssertTrue('outer indexed getter emitted', Pos('call $TItems_Get', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Inherited property access — issue #45                                }
+{ ------------------------------------------------------------------ }
+
+procedure TPropertyTests.TestSemantic_InheritedProperty_ViaSubclassVar_OK;
+begin
+  AnalyseSrc(
+    '''
+        program P;
+        type
+          TBase = class
+            FCount: Integer;
+            property Count: Integer read FCount;
+          end;
+          TDerived = class(TBase)
+          end;
+        var
+          D: TDerived;
+          N: Integer;
+        begin
+          D := TDerived.Create;
+          N := D.Count;
+          WriteLn(N)
+        end.
+        '''
+  ).Free;
+end;
+
+procedure TPropertyTests.TestSemantic_InheritedProperty_ViaSelf_OK;
+begin
+  AnalyseSrc(
+    '''
+        program P;
+        type
+          TBase = class
+            FCount: Integer;
+            property Count: Integer read FCount;
+          end;
+          TDerived = class(TBase)
+            function Size: Integer;
+          end;
+        function TDerived.Size: Integer;
+        begin
+          Result := Self.Count
+        end;
+        begin
+        end.
+        '''
+  ).Free;
+end;
+
+procedure TPropertyTests.TestSemantic_InheritedProperty_BareIdent_InSubclassMethod_OK;
+begin
+  AnalyseSrc(
+    '''
+        program P;
+        type
+          TBase = class
+            FCount: Integer;
+            property Count: Integer read FCount;
+          end;
+          TDerived = class(TBase)
+            function Size: Integer;
+          end;
+        function TDerived.Size: Integer;
+        begin
+          Result := Count
+        end;
+        begin
+        end.
+        '''
+  ).Free;
 end;
 
 initialization
