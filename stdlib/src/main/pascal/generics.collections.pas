@@ -36,6 +36,7 @@ type
     procedure Grow;
     procedure Add(Value: T);
     function  Get(AIndex: Integer): T;
+    function  IndexOf(Value: T): Integer;
     procedure Delete(AIndex: Integer);
     procedure Clear;
     procedure Destroy;
@@ -186,6 +187,25 @@ var
 begin
   Src    := Self.FData + AIndex * SizeOf(T);
   Result := Src^
+end;
+
+function TList<T>.IndexOf(Value: T): Integer;
+var
+  I:   Integer;
+  Ptr: ^T;
+begin
+  Result := -1;
+  I      := 0;
+  while I < Self.FCount do
+  begin
+    Ptr := Self.FData + I * SizeOf(T);
+    if Ptr^ = Value then
+    begin
+      Result := I;
+      break
+    end;
+    I := I + 1
+  end
 end;
 
 procedure TList<T>.Delete(AIndex: Integer);
