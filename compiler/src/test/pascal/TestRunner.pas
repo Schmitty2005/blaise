@@ -77,6 +77,7 @@ uses
   cp.test.e2e.classes2,
   cp.test.e2e.misc,
   cp.test.e2e.tstack,
+  cp.test.e2e.tlist,
   cp.test.e2e.tqueue,
   cp.test.e2e.tset,
   cp.test.e2e.tordereddictionary,

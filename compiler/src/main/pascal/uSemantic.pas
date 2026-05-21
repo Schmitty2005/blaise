@@ -1396,6 +1396,8 @@ var
   Subst:     string;
   ConcrType: TTypeDesc;
   IntfDesc:  TInterfaceTypeDesc;
+  ParentSym: TSymbol;
+  ParentRT:  TRecordTypeDesc;
 begin
   Result := nil;
 
@@ -1511,6 +1513,37 @@ begin
       NewPDecl.IndexParamName := PDecl.IndexParamName;
       NewPDecl.IndexTypeName  := SubstTypeParam(PDecl.IndexTypeName, Templ.ParamNames, Args);
       ClonedCD.Properties.Add(NewPDecl);
+    end;
+
+    { Wire up parent class so the generic instance is a first-class class:
+      - inherits parent fields (FindField walks them after AddField copies)
+      - inherits parent vtable slots (Destroy/ToString from TObject, etc.)
+      - has a valid RT.Parent chain (FindProperty/FindMethodDecl walk it)
+      Mirrors the regular class resolution path in AnalyseProgramTypes.
+      If no explicit parent name, implicitly inherit from TObject. }
+    if ClonedCD.ParentName <> '' then
+    begin
+      ParentSym := FTable.Lookup(ClonedCD.ParentName);
+      if (ParentSym <> nil) and (ParentSym.TypeDesc is TRecordTypeDesc) then
+      begin
+        ParentRT  := TRecordTypeDesc(ParentSym.TypeDesc);
+        RT.Parent := ParentRT;
+        RT.CopyVTableFrom(ParentRT);
+        for K := 0 to ParentRT.Fields.Count - 1 do
+          RT.AddField(
+            TFieldInfo(ParentRT.Fields.Items[K]).Name,
+            TFieldInfo(ParentRT.Fields.Items[K]).TypeDesc);
+      end;
+    end
+    else if not SameText(ATypeName, 'TObject') then
+    begin
+      ParentSym := FTable.Lookup('TObject');
+      if (ParentSym <> nil) and (ParentSym.TypeDesc is TRecordTypeDesc) then
+      begin
+        ParentRT  := TRecordTypeDesc(ParentSym.TypeDesc);
+        RT.Parent := ParentRT;
+        RT.CopyVTableFrom(ParentRT);
+      end;
     end;
 
     { Pre-pass: vtable slots (before fields so vptr is counted in offsets) }
