@@ -49,6 +49,7 @@ type
     procedure TestRun_Supports_ThreeArg_AssignsAndCalls;
     procedure TestRun_ConstructorOverload_PicksCorrectArity;
     procedure TestRun_MethodReadsProgramGlobal;
+    procedure TestRun_VarParam_ClassFields_WritebackVisible;
   end;
 
 implementation
@@ -484,6 +485,29 @@ const
         end.
         ''';
 
+  SrcVarParamClassFields =
+    '''
+        program VarParamClassFields;
+        procedure Fill(var V: Int64; var F: Boolean);
+        begin
+          V := 4096;
+          F := True
+        end;
+        type
+          TNode = class
+            Value: Int64;
+            IsBig: Boolean;
+          end;
+        var N: TNode;
+        begin
+          N := TNode.Create;
+          Fill(N.Value, N.IsBig);
+          WriteLn(N.Value);
+          WriteLn(N.IsBig);
+          N.Free
+        end.
+        ''';
+
   SrcCtorOverloadArity =
     '''
         program P;
@@ -851,6 +875,19 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcMethodReadsProgramGlobal, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('global read by method', '42' + LE, Output);
+end;
+
+procedure TE2EClasses2Tests.TestRun_VarParam_ClassFields_WritebackVisible;
+var Output: string; RCode: Integer;
+begin
+  { Regression for bugs.txt BUG-001 — Fill(N.Value, N.IsBig) where N is a
+    class reference must address into the heap object, not into the storage
+    slot of N itself.  Before the fix the writes landed in unrelated memory
+    and the WriteLn calls printed 0 / False. }
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcVarParamClassFields, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('var-param writeback visible through class field', '4096' + LE + '1' + LE, Output);
 end;
 
 initialization

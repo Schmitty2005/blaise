@@ -3687,6 +3687,16 @@ begin
     FldAcc := TFieldAccessExpr(AExpr);
     if FldAcc.Base <> nil then
       BaseAddr := EmitInstancePtr(FldAcc.Base)
+    else if FldAcc.IsClassAccess then
+    begin
+      { Class field leaf: the variable's slot holds a pointer to the heap
+        object — load it so the offset addition reaches the field, not a
+        location adjacent to the slot itself. }
+      T := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s',
+        [T, VarRef(FldAcc.RecordName, FldAcc.IsGlobal)]));
+      BaseAddr := T;
+    end
     else if FldAcc.IsVarParam then
     begin
       { Var-record param leaf: dereference the param slot. }

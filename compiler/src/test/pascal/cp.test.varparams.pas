@@ -57,6 +57,14 @@ type
       where the parameter is var-typed. }
     procedure TestSemantic_VarParam_FieldAccess_OK;
     procedure TestSemantic_VarParam_DerefField_OK;
+
+    { Var-param call where the actual argument is a CLASS field
+      (C.Field where C is a class reference, not a record).  The address
+      must be computed as (loadl C) + offset, not (&C + offset), because
+      the variable holding the class reference stores a pointer to the
+      heap object — adding the offset to the variable's address points
+      at unrelated memory.  See BUG-001 in bugs.txt. }
+    procedure TestCodegen_VarParam_ClassFieldLeaf_LoadsObjectPointer;
   end;
 
 implementation
@@ -398,6 +406,37 @@ begin
         end.
         ''');
   Prog.Free;
+end;
+
+procedure TVarParamTests.TestCodegen_VarParam_ClassFieldLeaf_LoadsObjectPointer;
+const
+  SrcClassFieldVarArg =
+    '''
+        program ClassFieldVar;
+        procedure Fill(var V: Integer);
+        begin V := 4096 end;
+        type
+          TNode = class
+            Pad:   Integer;
+            Value: Integer;
+          end;
+        var N: TNode;
+        begin
+          N := TNode.Create;
+          Fill(N.Value)
+        end.
+        ''';
+var
+  IR: string;
+begin
+  IR := GenIR(SrcClassFieldVarArg);
+  { N is a global class reference, so the slot is $N and stores a pointer
+    to the heap object.  Computing the address of N.Value must first load
+    that pointer; `add $N, <offset>` would point at unrelated memory. }
+  AssertTrue('loads the class pointer from $N before offsetting',
+    Pos('loadl $N', IR) > 0);
+  AssertFalse('must NOT add a field offset to $N (the slot address)',
+    Pos('add $N,', IR) > 0);
 end;
 
 initialization
