@@ -5,6 +5,13 @@
 # Licensed under the Apache License v2.0 with Runtime Library Exception.
 # See LICENSE file in the project root for full license terms.
 #
+# Use bash with pipefail so that compiler errors in a `... | sed ...`
+# pipeline propagate, instead of being masked by sed's exit code.
+# Without this, a failing $(BLAISE) invocation produces an empty .ssa
+# file and the build silently archives an empty .o (see bugs.txt BUG-004).
+SHELL   = /bin/bash
+.SHELLFLAGS = -o pipefail -c
+
 CC      = gcc
 CFLAGS  = -O2 -Wall -Wextra -std=c11
 
