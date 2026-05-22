@@ -331,7 +331,8 @@ begin
   if SameText(AConstraint, 'record') then
   begin
     if not (ArgType.Kind in [tyRecord, tyInteger, tyInt64, tyUInt32, tyUInt64,
-                             tyByte, tyBoolean, tyString, tyPointer]) then
+                             tySmallInt, tyWord, tyByte, tyBoolean, tyString,
+                             tyPointer]) then
       raise ESemanticError.Create(Format(
         'Type ''%s'' does not satisfy constraint ''%s: record'' in %s',
         [AArgName, AParamName, AContext]));
@@ -3503,7 +3504,8 @@ begin
   begin
     K := ADecl.ResolvedReturnType.Kind;
     if not (K in [tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum,
-                  tyInt64, tyUInt64, tyDouble, tySingle, tyPointer, tyPChar]) then
+                  tyInt64, tyUInt64, tySmallInt, tyWord,
+                  tyDouble, tySingle, tyPointer, tyPChar]) then
       Exit;
   end;
 
@@ -3515,7 +3517,8 @@ begin
     if Par.ResolvedType = nil then Exit;
     K := Par.ResolvedType.Kind;
     if not (K in [tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum,
-                  tyInt64, tyUInt64, tyDouble, tySingle, tyPointer, tyPChar]) then
+                  tyInt64, tyUInt64, tySmallInt, tyWord,
+                  tyDouble, tySingle, tyPointer, tyPChar]) then
       Exit;
   end;
 
@@ -4567,6 +4570,8 @@ begin
     tyInt64:    Base := 'l';
     tyUInt32:   Base := 'u';
     tyUInt64:   Base := 'Q';
+    tySmallInt: Base := 'h';
+    tyWord:     Base := 'H';
     tyByte:     Base := 'y';
     tyBoolean:  Base := 'b';
     tyDouble:   Base := 'd';
@@ -4770,7 +4775,8 @@ begin
     when both are candidates. }
   if (AArgExpr is TIntLiteral) and AParam.IsNumeric then
   begin
-    if AParam.Kind in [tyInteger, tyInt64, tyUInt32, tyUInt64, tyByte] then
+    if AParam.Kind in [tyInteger, tyInt64, tyUInt32, tyUInt64,
+                       tySmallInt, tyWord, tyByte] then
       Result := 2
     else
       Result := 1;  { Double, Single — widening }

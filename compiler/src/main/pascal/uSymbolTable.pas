@@ -23,6 +23,8 @@ type
     tyInt64,      { Int64  — QBE 'l' }
     tyUInt32,     { UInt32 — QBE 'w' unsigned }
     tyUInt64,     { UInt64 / QWord — QBE 'l' unsigned }
+    tySmallInt,   { SmallInt / Int16 — QBE 'h' (signed half-word) }
+    tyWord,       { Word / UInt16 — QBE 'h' (unsigned half-word) }
     tyByte,       { Byte   — QBE 'b' }
     tyBoolean,    { Boolean — stored as byte, 0/1 only }
     tyString,     { ARC-managed UTF-8 string }
@@ -349,11 +351,13 @@ type
     FAllTypes:   TObjectList;   { owned TTypeDesc }
     FGenerics:   TStringList;   { non-owning: base name → TGenericTypeDef* (void ptr) }
 
-    FTypeInteger: TTypeDesc;
-    FTypeInt64:   TTypeDesc;
-    FTypeUInt32:  TTypeDesc;
-    FTypeUInt64:  TTypeDesc;
-    FTypeByte:    TTypeDesc;
+    FTypeInteger:  TTypeDesc;
+    FTypeInt64:    TTypeDesc;
+    FTypeUInt32:   TTypeDesc;
+    FTypeUInt64:   TTypeDesc;
+    FTypeSmallInt: TTypeDesc;
+    FTypeWord:     TTypeDesc;
+    FTypeByte:     TTypeDesc;
     FTypeBoolean: TTypeDesc;
     FTypeString:  TTypeDesc;
     FTypeVoid:    TTypeDesc;
@@ -420,10 +424,12 @@ type
     function  FindGeneric(const AName: string): TObject;
 
     { Convenience type accessors }
-    property TypeInteger: TTypeDesc read FTypeInteger;
-    property TypeInt64:   TTypeDesc read FTypeInt64;
-    property TypeUInt32:  TTypeDesc read FTypeUInt32;
-    property TypeUInt64:  TTypeDesc read FTypeUInt64;
+    property TypeInteger:  TTypeDesc read FTypeInteger;
+    property TypeInt64:    TTypeDesc read FTypeInt64;
+    property TypeUInt32:   TTypeDesc read FTypeUInt32;
+    property TypeUInt64:   TTypeDesc read FTypeUInt64;
+    property TypeSmallInt: TTypeDesc read FTypeSmallInt;
+    property TypeWord:     TTypeDesc read FTypeWord;
     property TypeByte:    TTypeDesc read FTypeByte;
     property TypeBoolean: TTypeDesc read FTypeBoolean;
     property TypeString:  TTypeDesc read FTypeString;
@@ -443,7 +449,7 @@ implementation
 
 function TTypeDesc.IsNumeric: Boolean;
 begin
-  Result := Kind in [tyInteger, tyInt64, tyUInt32, tyUInt64, tyByte, tyEnum, tyDouble, tySingle];
+  Result := Kind in [tyInteger, tyInt64, tyUInt32, tyUInt64, tySmallInt, tyWord, tyByte, tyEnum, tyDouble, tySingle];
 end;
 
 function TTypeDesc.IsFloat: Boolean;
@@ -458,7 +464,7 @@ end;
 
 function TTypeDesc.IsOrdinal: Boolean;
 begin
-  Result := Kind in [tyInteger, tyInt64, tyUInt32, tyUInt64, tyByte, tyBoolean, tyEnum];
+  Result := Kind in [tyInteger, tyInt64, tyUInt32, tyUInt64, tySmallInt, tyWord, tyByte, tyBoolean, tyEnum];
 end;
 
 function TTypeDesc.IsRecord: Boolean;
@@ -470,6 +476,7 @@ function TTypeDesc.RawSize: Integer;
 begin
   case Kind of
     tyByte, tyBoolean: Result := 1;
+    tySmallInt, tyWord: Result := 2;
     tyInteger, tyUInt32, tyEnum: Result := 4;
     tyInt64, tyUInt64, tyString, tyClass, tyPointer, tyNil, tyDouble: Result := 8;
     tySingle: Result := 4;
@@ -492,6 +499,7 @@ begin
   case Kind of
     tyInteger, tyUInt32, tyEnum: Result := 4;
     tyInt64, tyUInt64:   Result := 8;
+    tySmallInt, tyWord:  Result := 2;
     tyByte, tyBoolean:   Result := 1;  { true byte; stack slots are alloc4-padded by codegen }
     tyString:            Result := 8;  { pointer size on 64-bit }
     tyRecord:            Result := TRecordTypeDesc(Self).TotalSize;
@@ -516,6 +524,7 @@ begin
   case Kind of
     tyInteger, tyUInt32, tyEnum: Result := 4;
     tyByte, tyBoolean:   Result := 1;  { natural alignment }
+    tySmallInt, tyWord:  Result := 2;
     tyInt64, tyUInt64, tyString:   Result := 8;
     tyRecord:            Result := TRecordTypeDesc(Self).MaxAlign;
     tySet: if TSetTypeDesc(Self).BitCount <= 32 then Result := 4 else Result := 8;
@@ -1205,11 +1214,13 @@ var
   TMethodDesc:      TRecordTypeDesc;
 begin
   { Primitive types }
-  FTypeInteger := NewType(tyInteger, 'Integer');
-  FTypeInt64   := NewType(tyInt64,   'Int64');
-  FTypeUInt32  := NewType(tyUInt32,  'UInt32');
-  FTypeUInt64  := NewType(tyUInt64,  'UInt64');
-  FTypeByte    := NewType(tyByte,    'Byte');
+  FTypeInteger  := NewType(tyInteger,  'Integer');
+  FTypeInt64    := NewType(tyInt64,    'Int64');
+  FTypeUInt32   := NewType(tyUInt32,   'UInt32');
+  FTypeUInt64   := NewType(tyUInt64,   'UInt64');
+  FTypeSmallInt := NewType(tySmallInt, 'SmallInt');
+  FTypeWord     := NewType(tyWord,     'Word');
+  FTypeByte     := NewType(tyByte,     'Byte');
   FTypeBoolean := NewType(tyBoolean, 'Boolean');
   FTypeString  := NewType(tyString,  'string');
   FTypeVoid    := NewType(tyVoid,    'void');
@@ -1227,6 +1238,10 @@ begin
   Define(TSymbol.Create('UInt64',  skType, FTypeUInt64));
   Define(TSymbol.Create('QWord',   skType, FTypeUInt64));   { FPC alias }
   Define(TSymbol.Create('PtrUInt', skType, FTypeUInt64));   { pointer-sized unsigned on 64-bit }
+  Define(TSymbol.Create('SmallInt', skType, FTypeSmallInt));
+  Define(TSymbol.Create('Int16',    skType, FTypeSmallInt));  { Delphi alias }
+  Define(TSymbol.Create('Word',     skType, FTypeWord));
+  Define(TSymbol.Create('UInt16',   skType, FTypeWord));      { Delphi alias }
   Define(TSymbol.Create('Byte',    skType, FTypeByte));
   Define(TSymbol.Create('Boolean', skType, FTypeBoolean));
   Define(TSymbol.Create('string',  skType, FTypeString));

@@ -490,6 +490,8 @@ Blaise defines five integer types with fixed, platform-independent widths:
 | `Int64`   | 64-bit signed   | `l` |
 | `UInt32`  | 32-bit unsigned | `w` | `Cardinal`
 | `UInt64`  | 64-bit unsigned | `l` | `QWord`, `PtrUInt`
+| `SmallInt`| 16-bit signed   | `w` (2 bytes in storage) | `Int16`
+| `Word`    | 16-bit unsigned | `w` (2 bytes in storage) | `UInt16`
 | `Byte`    | 8-bit unsigned  | `w` (1 byte in storage) |
 |===
 
@@ -520,6 +522,22 @@ FPC's strict-mode behaviour and avoids the silent footgun where a
 negative `Int64` becomes a huge `UInt64` (or vice versa) without
 warning.  All narrower integer types (`Integer`, `UInt32`, `Byte`) widen
 implicitly into both `Int64` and `UInt64`.
+
+==== 16-bit integer types: SmallInt / Word
+
+`SmallInt` (16-bit signed, range −32768..32767) and `Word` (16-bit
+unsigned, range 0..65535) are provided alongside the established
+32-/64-bit integer types so that code ported from FPC or Delphi
+compiles unchanged and so that `record` field layouts can match
+fixed-width binary formats without packing tricks.
+
+In registers and temporaries both types are widened to `w` (32-bit
+QBE word); only field and array element storage uses 2 bytes per
+element (`storeh` / `loadsh` for `SmallInt`, `loaduh` for `Word`).
+Implicit widening into `Integer`, `Int64`, `UInt32` and `UInt64` is
+permitted in the same way `Byte` widens, since 16-bit values fit
+losslessly in all of those.  `Int16` and `UInt16` are accepted as
+aliases for `SmallInt` and `Word` respectively.
 
 ==== Integer literal typing
 
@@ -570,11 +588,11 @@ for any realistic string length.
   interoperating with existing 32-bit FPC code or C functions that expect
   `int32_t`.  Explicit `Int64` covers the cases that genuinely need 64 bits.
 
-* *`LongInt`, `SmallInt`, `Word` aliases* — deferred.  These FPC/Delphi
-  aliases map to fixed widths (32-bit, 16-bit, 16-bit unsigned) and
-  could be added as type aliases in a future release alongside true
-  `SmallInt` / `Word` types.  `Cardinal` is provided as an alias for
-  `UInt32` since the unsigned-32 type is already present.
+* *`LongInt` alias* — deferred.  The FPC/Delphi `LongInt` name maps to
+  a 32-bit signed integer (identical to Blaise's `Integer`) and could
+  be added as a plain type alias in a future release.  `SmallInt`,
+  `Int16`, `Word` and `UInt16` are now first-class 16-bit types, and
+  `Cardinal` remains an alias for `UInt32`.
 
 ---
 

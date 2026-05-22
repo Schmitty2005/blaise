@@ -298,7 +298,8 @@ begin
   CName := CanonicalName(AType);
   if HasBeenEmitted(CName) then Exit;
   case AType.Kind of
-    tyInteger, tyInt64, tyUInt32, tyUInt64, tyByte, tyBoolean:
+    tyInteger, tyInt64, tyUInt32, tyUInt64,
+    tySmallInt, tyWord, tyByte, tyBoolean:
       EmitPrimitive(AType);
     tyString:
       EmitUtf8Str;
@@ -334,7 +335,8 @@ begin
   SzB      := AType.RawSize;
   case AType.Kind of
     tyBoolean:         begin SubKind := SK_BOOLEAN; IsSigned := 0; end;
-    tyInt64, tyInteger:begin SubKind := SK_INTEGER;  IsSigned := 1; end;
+    tyInt64, tyInteger, tySmallInt:
+                       begin SubKind := SK_INTEGER;  IsSigned := 1; end;
   else
     SubKind := SK_INTEGER; IsSigned := 0;
   end;

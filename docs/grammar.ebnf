@@ -787,8 +787,12 @@ ArrayLiteral
  *               Alias: Cardinal
  *   UInt64    — 64-bit unsigned integer (QBE type: l)
  *               Aliases: QWord, PtrUInt (the pointer-sized unsigned)
+ *   SmallInt  — 16-bit signed integer   (QBE type: w, stored as h)
+ *               Alias: Int16
+ *   Word      — 16-bit unsigned integer (QBE type: w, stored as h)
+ *               Alias: UInt16
  *   Boolean   — 1-byte boolean          (QBE type: w; 0 = false, 1 = true)
- *   Byte      — 8-bit unsigned integer  (QBE type: w)
+ *   Byte      — 8-bit unsigned integer  (QBE type: w, stored as b)
  *   String    — ARC-managed UTF-8 string pointer (QBE type: l)
  *   Pointer   — untyped pointer         (QBE type: l)
  *   ^T        — typed pointer to T; created on demand (QBE type: l)

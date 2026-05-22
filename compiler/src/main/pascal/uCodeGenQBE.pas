@@ -596,7 +596,8 @@ end;
 function TCodeGenQBE.QbeTypeOf(AType: TTypeDesc): string;
 begin
   case AType.Kind of
-    tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum: Result := 'w';
+    tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum,
+    tySmallInt, tyWord: Result := 'w';
     tySet: if TSetTypeDesc(AType).BitCount <= 32 then Result := 'w' else Result := 'l';
     tyInt64, tyUInt64, tyString:            Result := 'l';
     tyRecord:                               Result := 'l';  { pointer to aggregate }
@@ -623,6 +624,8 @@ function TCodeGenQBE.LoadInstrFor(AType: TTypeDesc): string;
 begin
   case AType.Kind of
     tyByte, tyBoolean:                       Result := 'loadub';
+    tySmallInt:                              Result := 'loadsh';
+    tyWord:                                  Result := 'loaduh';
     tyInteger, tyUInt32, tyEnum:             Result := 'loadw';
     tySet: if TSetTypeDesc(AType).BitCount <= 32 then Result := 'loadw' else Result := 'loadl';
     tyDouble:                                Result := 'loadd';
@@ -638,6 +641,7 @@ function TCodeGenQBE.StoreInstrFor(AType: TTypeDesc): string;
 begin
   case AType.Kind of
     tyByte, tyBoolean:                       Result := 'storeb';
+    tySmallInt, tyWord:                      Result := 'storeh';
     tyInteger, tyUInt32, tyEnum:             Result := 'storew';
     tySet: if TSetTypeDesc(AType).BitCount <= 32 then Result := 'storew' else Result := 'storel';
     tyDouble:                                Result := 'stored';
@@ -775,6 +779,7 @@ begin
   Result := AKind in [
     tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum,
     tyInt64, tyUInt64,
+    tySmallInt, tyWord,
     tyDouble, tySingle,
     tySet,
     tyPointer, tyPChar
@@ -784,7 +789,8 @@ end;
 function TCodeGenQBE.PromotedQType(AKind: TTypeKind; AType: TTypeDesc): string;
 begin
   case AKind of
-    tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum: Result := 'w';
+    tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum,
+    tySmallInt, tyWord: Result := 'w';
     tyInt64, tyUInt64, tyString, tyClass, tyPointer, tyPChar, tyMetaClass: Result := 'l';
     tyDouble: Result := 'd';
     tySingle: Result := 's';
@@ -1466,7 +1472,8 @@ begin
       end;
 
       case Decl.ResolvedType.Kind of
-        tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum:
+        tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum,
+        tySmallInt, tyWord:
           begin
             EmitLine(Format('  %%_var_%s =l alloc4 1', [VarName]));
             EmitLine(Format('  storew 0, %%_var_%s', [VarName]));
@@ -1612,6 +1619,8 @@ begin
       case Decl.ResolvedType.Kind of
         tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum:
           EmitLine(Format('export data $%s = { w 0 }', [VarName]));
+        tySmallInt, tyWord:
+          EmitLine(Format('export data $%s = { h 0 }', [VarName]));
         tySet:
           if TSetTypeDesc(Decl.ResolvedType).BitCount <= 32 then
             EmitLine(Format('export data $%s = { w 0 }', [VarName]))
@@ -2388,6 +2397,8 @@ begin
     ElemSize := SAT.ElementType.RawSize;
     case SAT.ElementType.Kind of
       tyByte, tyBoolean:            QLoad := 'loadub';
+      tySmallInt:                   QLoad := 'loadsh';
+      tyWord:                       QLoad := 'loaduh';
       tyInteger, tyUInt32, tyEnum:  QLoad := 'loadw';
     else
       QLoad := 'loadl';
@@ -2513,6 +2524,8 @@ begin
     ElemSize := DAT.ElementType.RawSize;
     case DAT.ElementType.Kind of
       tyByte, tyBoolean:            QLoad := 'loadub';
+      tySmallInt:                   QLoad := 'loadsh';
+      tyWord:                       QLoad := 'loaduh';
       tyInteger, tyUInt32, tyEnum:  QLoad := 'loadw';
     else
       QLoad := 'loadl';
@@ -4543,7 +4556,8 @@ begin
     end
     else
     case Par.ResolvedType.Kind of
-      tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum:
+      tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum,
+      tySmallInt, tyWord:
         begin
           EmitLine(Format('  %%_var_%s =l alloc4 1', [Par.ParamName]));
           EmitLine(Format('  storew %%_par_%s, %%_var_%s',
@@ -5338,7 +5352,8 @@ begin
     else
     begin
       case Par.ResolvedType.Kind of
-        tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum:
+        tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum,
+        tySmallInt, tyWord:
           begin
             EmitLine(Format('  %%_var_%s =l alloc4 1', [Par.ParamName]));
             EmitLine(Format('  storew %%_par_%s, %%_var_%s',
@@ -6825,13 +6840,15 @@ begin
             begin
               ArgTemp := EmitExpr(TASTExpr(TArrayLiteralExpr(FC.Args.Items[1]).Elements.Items[I]));
               IsIntArg := TASTExpr(TArrayLiteralExpr(FC.Args.Items[1]).Elements.Items[I]).ResolvedType.Kind in
-                [tyInteger, tyBoolean, tyByte, tyUInt32, tyInt64, tyUInt64, tyEnum];
+                [tyInteger, tyBoolean, tyByte, tyUInt32, tyInt64, tyUInt64,
+                 tySmallInt, tyWord, tyEnum];
             end
             else
             begin
               ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[I + 1]));
               IsIntArg := TASTExpr(FC.Args.Items[I + 1]).ResolvedType.Kind in
-                [tyInteger, tyBoolean, tyByte, tyUInt32, tyInt64, tyUInt64, tyEnum];
+                [tyInteger, tyBoolean, tyByte, tyUInt32, tyInt64, tyUInt64,
+                 tySmallInt, tyWord, tyEnum];
             end;
             FmtSlotTemp := AllocTemp;
             EmitLine(Format('  %s =l add %s, %d', [FmtSlotTemp, FmtArrTemp, I * 16]));
@@ -7238,6 +7255,10 @@ begin
         if FC.ResolvedType.Kind = tyByte then
           { Byte(X): truncate to 8 bits — mask to [0..255] }
           EmitLine(Format('  %s =w and %s, 255', [T, ArgTemp]))
+        else if FC.ResolvedType.Kind in [tySmallInt, tyWord] then
+          { SmallInt(X) / Word(X): truncate to 16 bits.  Sign extension on
+            read is the load instruction's job (loadsh vs loaduh). }
+          EmitLine(Format('  %s =w and %s, 65535', [T, ArgTemp]))
         else if QType = 'w' then
           EmitLine(Format('  %s =w copy %s', [T, ArgTemp]))
         else
@@ -8061,12 +8082,7 @@ begin
           EmitLine(Format('  %s =l add $%s, %s', [L, FldAccess.ConstArraySymbol, Ptr]));
           QType := QbeTypeOf(SAT.ElementType);
           T     := AllocTemp;
-          case SAT.ElementType.Kind of
-            tyByte, tyBoolean: LoadInstr := 'loadub';
-            tyInteger, tyUInt32, tyEnum: LoadInstr := 'loadw';
-          else
-            LoadInstr := 'loadl';
-          end;
+          LoadInstr := LoadInstrFor(SAT.ElementType);
           EmitLine(Format('  %s =%s %s %s', [T, QType, LoadInstr, L]));
           Result := T;
           Exit;
@@ -9688,14 +9704,8 @@ begin
       Result := ElemPtr;
       Exit;
     end;
-    case SAT.ElementType.Kind of
-      tyByte, tyBoolean: QLoad := 'loadub';
-      tyInteger, tyUInt32, tyEnum: QLoad := 'loadw';
-      tyInt64, tyUInt64, tyString, tyClass, tyPointer, tyPChar, tyMetaClass: QLoad := 'loadl';
-    else
-      QLoad := 'loadl';
-    end;
-    QType   := QbeTypeOf(SAT.ElementType);
+    QLoad := LoadInstrFor(SAT.ElementType);
+    QType := QbeTypeOf(SAT.ElementType);
     ByteVal := AllocTemp;
     EmitLine(Format('  %s =%s %s %s', [ByteVal, QType, QLoad, ElemPtr]));
     Result := ByteVal;
@@ -9727,13 +9737,7 @@ begin
   if AExpr.StrExpr.ResolvedType.Kind = tyDynArray then
   begin
     ElemSize := TDynArrayTypeDesc(AExpr.StrExpr.ResolvedType).ElementType.RawSize;
-    case TDynArrayTypeDesc(AExpr.StrExpr.ResolvedType).ElementType.Kind of
-      tyByte, tyBoolean:   QLoad := 'loadub';
-      tyInteger, tyUInt32, tyEnum: QLoad := 'loadw';
-      tyInt64, tyUInt64, tyString, tyClass, tyPointer, tyPChar, tyMetaClass: QLoad := 'loadl';
-    else
-      QLoad := 'loadl';
-    end;
+    QLoad   := LoadInstrFor(TDynArrayTypeDesc(AExpr.StrExpr.ResolvedType).ElementType);
     QType   := QbeTypeOf(TDynArrayTypeDesc(AExpr.StrExpr.ResolvedType).ElementType);
     StrPtr  := EmitExpr(AExpr.StrExpr);
     IdxW    := EmitExpr(AExpr.IndexExpr);
@@ -9966,6 +9970,7 @@ begin
     EmitLine(Format('  %s =l add %s, %s', [ElemPtr, PCharBase, Offset]));
     case ElemType.Kind of
       tyByte, tyBoolean:           StoreInstr := 'storeb';
+      tySmallInt, tyWord:          StoreInstr := 'storeh';
       tyInteger, tyUInt32, tyEnum: StoreInstr := 'storew';
     else
       begin
@@ -10035,6 +10040,7 @@ begin
     ElemVal := EmitExpr(AStmt.ValueExpr);
   case ElemType.Kind of
     tyByte, tyBoolean: StoreInstr := 'storeb';
+    tySmallInt, tyWord: StoreInstr := 'storeh';
     tyInteger, tyUInt32, tyEnum: StoreInstr := 'storew';
     tyInt64, tyUInt64, tyString, tyClass, tyPointer, tyPChar, tyMetaClass: StoreInstr := 'storel';
   else
