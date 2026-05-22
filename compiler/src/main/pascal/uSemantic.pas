@@ -7155,7 +7155,7 @@ begin
     end;
 
     { Shift operators: result has the left operand's type; right is the shift amount }
-    if ABin.Op in [boShl, boShr] then
+    if ABin.Op in [boShl, boShr, boSar] then
     begin
       if not LType.IsNumeric then
         SemanticError(

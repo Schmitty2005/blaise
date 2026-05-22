@@ -141,8 +141,9 @@ begin
   KwList.Add('PACKAGE');      KwList.Add('PACKED');       KwList.Add('PROCEDURE');
   KwList.Add('PROGRAM');      KwList.Add('PROPERTY');     KwList.Add('RAISE');
   KwList.Add('RECORD');       KwList.Add('REPEAT');       KwList.Add('REQUIRES');
-  KwList.Add('RESOURCESTRING'); KwList.Add('SELF');       KwList.Add('SET');
-  KwList.Add('SHL');          KwList.Add('SHR');          KwList.Add('SPECIALIZE');
+  KwList.Add('RESOURCESTRING'); KwList.Add('SAR');        KwList.Add('SELF');
+  KwList.Add('SET');          KwList.Add('SHL');          KwList.Add('SHR');
+  KwList.Add('SPECIALIZE');
   KwList.Add('THEN');         KwList.Add('THREADVAR');    KwList.Add('TO');
   KwList.Add('TRUE');         KwList.Add('TRY');          KwList.Add('TYPE');
   KwList.Add('UNIT');         KwList.Add('UNTIL');        KwList.Add('USES');

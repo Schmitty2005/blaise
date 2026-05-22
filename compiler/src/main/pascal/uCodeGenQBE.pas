@@ -8705,7 +8705,7 @@ begin
       end;
       // For shift ops, the shift count stays w (QBE accepts w shift count for l shifts).
       // For arithmetic ops, extend the right operand to l too.
-      if not (BinExpr.Op in [boShl, boShr]) then
+      if not (BinExpr.Op in [boShl, boShr, boSar]) then
       begin
         if (BinExpr.Right.ResolvedType = nil) or
            not (BinExpr.Right.ResolvedType.Kind in [tyInt64, tyUInt64]) then
@@ -8731,6 +8731,7 @@ begin
           boXor: Op := 'xor';
           boShl: Op := 'shl';
           boShr: Op := 'shr';
+          boSar: Op := 'sar';
         else
           Op := 'add';
         end;
@@ -8748,6 +8749,7 @@ begin
           boXor: Op := 'xor';
           boShl: Op := 'shl';
           boShr: Op := 'shr';
+          boSar: Op := 'sar';
         else
           Op := 'add';
         end;
@@ -8886,6 +8888,7 @@ begin
         boXor: Op := 'xor';
         boShl: Op := 'shl';
         boShr: Op := 'shr';
+        boSar: Op := 'sar';
       else
         Op := 'add';
       end;

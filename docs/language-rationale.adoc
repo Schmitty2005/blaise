@@ -2734,3 +2734,57 @@ all practical engineering uses.
 *ISO 8601 string as the canonical type* — readable but slow and
 allocation-heavy.  The wire format is ISO 8601 (`ToString` methods produce
 it); the in-memory representation is structured.
+
+== `sar` — Arithmetic Right Shift Operator
+
+=== Decision
+
+Blaise distinguishes logical and arithmetic right shift with two separate
+keywords:
+
+* `shr` — logical (zero-fill) right shift.  The vacated high bits are
+  filled with zero regardless of the operand's signedness.  This matches
+  the documented semantics in Delphi and Free Pascal.
+* `sar` — arithmetic (sign-preserving) right shift.  The vacated high
+  bits are filled with a copy of the original sign bit.  On unsigned
+  types `sar` produces the same result as `shr`; on signed types with
+  the sign bit set, `sar` preserves the sign while `shr` discards it.
+
+The compiler maps `shr` to QBE's `shr` instruction and `sar` to QBE's
+`sar` instruction.  Both are accepted at the same precedence level as
+`*`, `/`, `div`, `mod`, `and`, `xor`, and `shl` (term-level).
+
+=== Rationale
+
+A signed right shift by one is the natural way to divide by two with
+sign-preservation: `-16 sar 1 = -8`.  Using `shr` for the same
+operation on a signed value produces a large positive number because
+the sign bit is treated as a data bit and shifted right.  Both
+operations are useful — arithmetic shift for sign-preserving division
+and bit-field extraction on signed values; logical shift for unsigned
+bit manipulation and packed-field access — and conflating them under
+a single keyword forces the programmer to cast through an unsigned
+type whenever the other interpretation is required.
+
+Delphi and Free Pascal define `shr` as logical regardless of the
+operand type and expose no separate arithmetic-shift operator.  C and
+C++ leave the choice implementation-defined.  Java and Rust expose
+both as distinct operators (`>>` arithmetic vs `>>>` logical in Java;
+`>>` follows operand signedness in Rust).  Blaise follows the
+two-operator model so the source code names the intent explicitly.
+
+=== Alternatives Rejected
+
+*Make `shr` sign-preserving on signed types* — diverges from documented
+Delphi/FPC semantics, silently changes the meaning of existing source
+ported from those compilers, and removes the ability to perform a
+logical shift on a signed value without casting.
+
+*Reject `shr` on signed types* — forces an explicit cast through
+`UInt64` (or another unsigned type) for every logical shift on a signed
+value.  Verbose and noisy in bit-manipulation code.
+
+*Use a symbolic operator (e.g. `>>` and `>>>`)* — symbols are concise
+but read less naturally next to Pascal's other keyword operators
+(`shl`, `shr`, `and`, `or`).  Three-letter mnemonic keywords match the
+established Pascal style.

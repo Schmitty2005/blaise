@@ -256,7 +256,7 @@ begin
               tkExcept, tkRaise, tkNil, tkUnit, tkIntf, tkImplementation,
               tkVirtual, tkOverride, tkExternal, tkIs, tkAs, tkAnd, tkOr,
               tkNot, tkExit, tkBreak, tkContinue, tkInherited, tkCase,
-              tkOf, tkArray, tkSet, tkIn, tkShl, tkShr, tkXor, tkConst,
+              tkOf, tkArray, tkSet, tkIn, tkShl, tkShr, tkSar, tkXor, tkConst,
               tkOut, tkConstructor, tkDestructor, tkDiv, tkMod]);
 end;
 
@@ -2862,7 +2862,8 @@ var
 begin
   Result := ParseFactor;
   while Check(tkStar) or Check(tkSlash) or Check(tkDiv) or Check(tkMod)
-        or Check(tkAnd) or Check(tkXor) or Check(tkShl) or Check(tkShr) do
+        or Check(tkAnd) or Check(tkXor) or Check(tkShl) or Check(tkShr)
+        or Check(tkSar) do
   begin
     if      Check(tkStar) then Op := boMul
     else if Check(tkMod)  then Op := boMod
@@ -2870,6 +2871,7 @@ begin
     else if Check(tkXor)  then Op := boXor
     else if Check(tkShl)  then Op := boShl
     else if Check(tkShr)  then Op := boShr
+    else if Check(tkSar)  then Op := boSar
     else                       Op := boDiv;
     OpLine     := FCurrent.Line;
     OpCol      := FCurrent.Col;

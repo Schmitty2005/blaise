@@ -706,7 +706,7 @@ Additive
     ;
 
 Term
-    = Factor { ( STAR | SLASH | DIV | MOD | AND | XOR | SHL | SHR ) Factor }
+    = Factor { ( STAR | SLASH | DIV | MOD | AND | XOR | SHL | SHR | SAR ) Factor }
     ;
 
 Factor

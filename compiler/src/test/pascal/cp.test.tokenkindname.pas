@@ -80,6 +80,7 @@ type
     procedure TestName_In;
     procedure TestName_Shl;
     procedure TestName_Shr;
+    procedure TestName_Sar;
     procedure TestName_Xor;
     procedure TestName_Const;
     procedure TestName_Out;
@@ -118,11 +119,11 @@ implementation
   token kind is appended to the enum — the test below will fail and remind
   you to also update TokenKindName. }
 const
-  ExpectedMaxTokenKindOrd = 83; { tkAt }
+  ExpectedMaxTokenKindOrd = 84; { tkAt }
 
 procedure TTokenKindNameTests.TestMaxOrdinal_IstkAt;
 begin
-  AssertEquals('tkAt must be the last TTokenKind (ord 83); update this test and TokenKindName when adding new kinds',
+  AssertEquals('tkAt must be the last TTokenKind (ord 84); update this test and TokenKindName when adding new kinds',
     ExpectedMaxTokenKindOrd, Ord(tkAt));
 end;
 
@@ -417,6 +418,11 @@ end;
 procedure TTokenKindNameTests.TestName_Shr;
 begin
   AssertEquals('shr', TokenKindName(tkShr));
+end;
+
+procedure TTokenKindNameTests.TestName_Sar;
+begin
+  AssertEquals('sar', TokenKindName(tkSar));
 end;
 
 procedure TTokenKindNameTests.TestName_Xor;

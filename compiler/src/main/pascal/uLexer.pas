@@ -75,7 +75,8 @@ type
     tkSet,    { 'set' keyword — set type declaration }
     tkIn,     { 'in'  keyword — set membership test operator }
     tkShl,    { 'shl' keyword — shift left }
-    tkShr,    { 'shr' keyword — shift right }
+    tkShr,    { 'shr' keyword — logical shift right (zero-fill) }
+    tkSar,    { 'sar' keyword — arithmetic shift right (sign-preserving) }
     tkXor,    { 'xor' keyword — bitwise exclusive-or }
     tkConst,
     tkOut,
@@ -213,6 +214,7 @@ begin
   else if AUpper = 'IN'             then Result := tkIn
   else if AUpper = 'SHL'            then Result := tkShl
   else if AUpper = 'SHR'            then Result := tkShr
+  else if AUpper = 'SAR'            then Result := tkSar
   else if AUpper = 'XOR'            then Result := tkXor
   else if AUpper = 'CONST'          then Result := tkConst
   else if AUpper = 'OUT'         then Result := tkOut
@@ -634,6 +636,7 @@ begin
     tkIn:             Result := 'in';
     tkShl:            Result := 'shl';
     tkShr:            Result := 'shr';
+    tkSar:            Result := 'sar';
     tkXor:            Result := 'xor';
     tkConst:          Result := 'const';
     tkOut:            Result := 'out';

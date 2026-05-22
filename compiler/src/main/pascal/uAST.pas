@@ -145,7 +145,7 @@ type
   end;
 
   TBinaryOp = (boAdd, boSub, boMul, boDiv, boMod, boEQ, boNE, boLT, boGT, boLE, boGE,
-               boAnd, boOr, boXor, boIn, boShl, boShr);
+               boAnd, boOr, boXor, boIn, boShl, boShr, boSar);
 
   TBinaryExpr = class(TASTExpr)
   public
@@ -797,6 +797,7 @@ begin
     boIn:  Result := 'in';
     boShl: Result := 'shl';
     boShr: Result := 'shr';
+    boSar: Result := 'sar';
   else
     Result := '?';
   end;
