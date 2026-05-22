@@ -596,6 +596,94 @@ for any realistic string length.
 
 ---
 
+=== Packed Records
+
+==== Decision
+
+Blaise supports the `packed record` qualifier with strict semantics:
+
+* `packed record ... end` lays out fields at successive byte offsets
+  with no alignment padding between them, and applies no tail padding
+  to the record as a whole.
+* `packed` is permitted only directly in front of `record`. The forms
+  `packed class` and `packed array`, accepted (often as no-ops) by FPC
+  and Delphi, are parse errors in Blaise.
+* ARC-managed field types — `string`, class references, interfaces,
+  and dynamic arrays — retain their natural 8-byte alignment inside a
+  packed record. Other field types (`Byte`, `Word`/`SmallInt`,
+  `Integer`/`UInt32`, `Int64`/`UInt64`, `Double`, enums, sets,
+  static arrays of these, and nested packed/non-packed records)
+  pack tight.
+* `MaxAlign` of a packed record collapses to `1` unless it contains
+  an ARC-managed field (in which case it stays at `8`). Arrays of
+  fully POD packed records therefore stride at the record's exact
+  field-byte sum.
+
+==== Rationale
+
+The intended use of `packed` is interop with binary formats whose
+field layout is byte-addressed: file headers, network protocol
+records, and ABI structures defined by external libraries. In every
+such case the user wants byte-exact layout that matches an external
+specification, and any silent padding the compiler inserts is a bug
+from the caller's point of view.
+
+The decision to *forbid* `packed class` and `packed array` rather
+than silently accept them is deliberate: a `class` in Blaise carries
+a vptr and lives on the heap behind an `_ClassAlloc` header, so
+"packing" it would either lie (the qualifier is ignored) or break
+runtime invariants. Arrays in Blaise are already either dynamic
+(heap-managed, no inter-element padding) or static (element-strided
+by the element's own size). Pretending `packed` applies to them
+gives users false confidence in code that won't behave the way the
+keyword suggests.
+
+The exception for ARC-managed field types preserves a hard runtime
+invariant: `_StringRelease`, `_ClassRelease`, `_IntfRelease`, and
+`_DynArrayRelease` all perform 64-bit aligned loads through the
+field pointer. Honouring a 1-byte-aligned ARC field would silently
+slow x86_64 code and outright fault on stricter ARM targets. A
+1-byte-stride layout for these types would also break the existing
+ARC invariant that every reference-holding slot is loadable as a
+single 8-byte word. Users who genuinely need a byte-exact layout
+that includes a string field should use `Byte` arrays or a typed
+pointer instead.
+
+==== Examples
+
+[source,pascal]
+----
+type
+  TPlain = record
+    A: Byte;
+    B: Int64;
+  end;   { SizeOf = 16  (A at 0, pad to 8, B at 8, no tail) }
+
+  TPacked = packed record
+    A: Byte;
+    B: Int64;
+  end;   { SizeOf = 9   (A at 0, B at 1, no tail) }
+
+  THybrid = packed record
+    A: Byte;
+    S: string;
+  end;   { SizeOf = 16  (A at 0, pad to 8, S at 8) — S stays aligned }
+----
+
+==== Alternatives rejected
+
+* *Always pack, even ARC-managed fields* — rejected. Unaligned 64-bit
+  loads through ARC pointers would either slow down or trap at runtime.
+* *Per-field `packed` annotation* — rejected. The Delphi/FPC syntax
+  already covers the common case; finer-grained control is rare and
+  can be expressed with manual `Byte` arrays.
+* *`{$ALIGN n}` / `{$PACKRECORDS n}` directives* — deferred. Blaise
+  does not yet have a compiler directive subsystem; if a use case for
+  intermediate alignments (2, 4) emerges, this is the obvious place
+  to add it later.
+
+---
+
 === Indexed Properties
 
 ==== Decision

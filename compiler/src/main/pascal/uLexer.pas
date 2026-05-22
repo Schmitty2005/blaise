@@ -31,6 +31,8 @@ type
     tkUses,
     tkType,
     tkRecord,
+    tkPacked,        { 'packed' — record-layout qualifier (only legal before
+                       'record'; affects field offsets + tail padding) }
     tkClass,
     tkProcedure,
     tkFunction,
@@ -170,6 +172,7 @@ begin
   else if AUpper = 'END'     then Result := tkEnd
   else if AUpper = 'TYPE'    then Result := tkType
   else if AUpper = 'RECORD'  then Result := tkRecord
+  else if AUpper = 'PACKED'  then Result := tkPacked
   else if AUpper = 'CLASS'     then Result := tkClass
   else if AUpper = 'PROCEDURE' then Result := tkProcedure
   else if AUpper = 'FUNCTION'  then Result := tkFunction
@@ -587,6 +590,7 @@ begin
     tkUses:           Result := 'uses';
     tkType:           Result := 'type';
     tkRecord:         Result := 'record';
+    tkPacked:         Result := 'packed';
     tkClass:          Result := 'class';
     tkProcedure:      Result := 'procedure';
     tkFunction:       Result := 'function';

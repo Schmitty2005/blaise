@@ -118,11 +118,11 @@ implementation
   token kind is appended to the enum — the test below will fail and remind
   you to also update TokenKindName. }
 const
-  ExpectedMaxTokenKindOrd = 82; { tkAt }
+  ExpectedMaxTokenKindOrd = 83; { tkAt }
 
 procedure TTokenKindNameTests.TestMaxOrdinal_IstkAt;
 begin
-  AssertEquals('tkAt must be the last TTokenKind (ord 82); update this test and TokenKindName when adding new kinds',
+  AssertEquals('tkAt must be the last TTokenKind (ord 83); update this test and TokenKindName when adding new kinds',
     ExpectedMaxTokenKindOrd, Ord(tkAt));
 end;
 

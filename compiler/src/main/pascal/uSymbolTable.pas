@@ -234,7 +234,10 @@ type
     FHasDestroyMethod:      Boolean; { True when the class declares a 'Destroy' method }
     FHasAbstractMethods:    Boolean; { True when any vtable slot is abstract (no impl) }
     FClassAttributes:       TStringList; { resolved attribute type names e.g. 'ThreadedAttribute' }
+    FIsPacked:              Boolean; { True for `packed record` — skip per-field
+                                       alignment and tail padding (records only) }
   public
+    property IsPacked: Boolean read FIsPacked write FIsPacked;
     constructor Create(const AName: string; AKind: TTypeKind);
     destructor Destroy; override;
     procedure AddField(const AName: string; AType: TTypeDesc);
@@ -242,6 +245,7 @@ type
     function  PackedSize: Integer;
     function  TotalSize: Integer;
     function  MaxAlign: Integer;
+    function  FieldAlign(AType: TTypeDesc): Integer;
 
     { Vtable management }
     function  HasVTable: Boolean;
@@ -565,6 +569,23 @@ begin
   inherited Destroy;
 end;
 
+{ Returns the alignment required for AType when laid out inside this record.
+  Normally that is AType.AllocAlign.  For a `packed record` the alignment
+  drops to 1 — except for ARC-managed fields (string / class / interface /
+  dynamic array), which must remain at their natural alignment because the
+  runtime helpers (`_StringRelease`, `_ClassRelease`, etc.) perform 64-bit
+  loads through the field pointer. }
+function TRecordTypeDesc.FieldAlign(AType: TTypeDesc): Integer;
+begin
+  Result := AType.AllocAlign;
+  if not FIsPacked then Exit;
+  case AType.Kind of
+    tyString, tyClass, tyInterface, tyDynArray: { keep natural alignment } ;
+  else
+    Result := 1;
+  end;
+end;
+
 { Cumulative byte position immediately after the last field (or after the
   vptr if no fields have been added yet).  Excludes the record's tail
   padding — that is only applied in TotalSize. }
@@ -580,7 +601,7 @@ begin
   for I := 0 to FFields.Count - 1 do
   begin
     FT := TFieldInfo(FFields.Items[I]).TypeDesc;
-    A  := FT.AllocAlign;
+    A  := FieldAlign(FT);
     if (A > 1) and (Result mod A <> 0) then
       Inc(Result, A - Result mod A);
     Inc(Result, FT.ByteSize);
@@ -594,7 +615,7 @@ var
   A:      Integer;
 begin
   Offset := PackedSize;
-  A      := AType.AllocAlign;
+  A      := FieldAlign(AType);
   if (A > 1) and (Offset mod A <> 0) then
     Offset := Offset + (A - Offset mod A);
   Info          := TFieldInfo.Create;
@@ -624,8 +645,10 @@ begin
     and back-to-back fields stay naturally aligned.  Class instances are
     heap-allocated singletons (never directly in arrays — only references
     to them are), so we leave their size unpadded to match FPC/Delphi
-    InstanceSize semantics. }
+    InstanceSize semantics.  `packed record` similarly suppresses tail
+    padding. }
   if Kind = tyClass then Exit;
+  if FIsPacked then Exit;
   Algn := MaxAlign;
   if (Algn > 1) and (Result mod Algn <> 0) then
     Inc(Result, Algn - Result mod Algn);
@@ -634,13 +657,18 @@ end;
 function TRecordTypeDesc.MaxAlign: Integer;
 var
   I, A: Integer;
+  FT:   TTypeDesc;
 begin
   Result := 1;
   if HasVTable then
     Result := 8;  { vptr requires 8-byte alignment }
   for I := 0 to FFields.Count - 1 do
   begin
-    A := TFieldInfo(FFields.Items[I]).TypeDesc.AllocAlign;
+    FT := TFieldInfo(FFields.Items[I]).TypeDesc;
+    if FIsPacked then
+      A := FieldAlign(FT)        { ARC fields keep natural align; PODs become 1 }
+    else
+      A := FT.AllocAlign;
     if A > Result then
       Result := A;
   end;

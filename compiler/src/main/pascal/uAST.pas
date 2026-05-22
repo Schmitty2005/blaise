@@ -506,8 +506,12 @@ type
 
   TRecordTypeDef = class(TASTTypeDef)
   public
-    Fields:  TObjectList;  { owned TFieldDecl }
-    Methods: TObjectList;  { owned TMethodDecl }
+    Fields:   TObjectList;  { owned TFieldDecl }
+    Methods:  TObjectList;  { owned TMethodDecl }
+    IsPacked: Boolean;      { True iff declared `packed record` — disables
+                              field alignment padding and tail padding;
+                              ARC-managed fields (string/class/intf) still
+                              retain 8-byte storage alignment }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -2012,6 +2016,7 @@ begin
   else if ASrc is TRecordTypeDef then
   begin
     RT := TRecordTypeDef.Create;
+    RT.IsPacked := TRecordTypeDef(ASrc).IsPacked;
     for I := 0 to TRecordTypeDef(ASrc).Fields.Count - 1 do
       RT.Fields.Add(CloneFieldDecl(TFieldDecl(TRecordTypeDef(ASrc).Fields.Items[I])));
     for I := 0 to TRecordTypeDef(ASrc).Methods.Count - 1 do

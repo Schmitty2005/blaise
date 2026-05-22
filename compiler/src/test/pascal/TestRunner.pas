@@ -20,6 +20,7 @@ uses
   cp.test.symtable,
   cp.test.semantic,
   cp.test.records,
+  cp.test.packedrecord,
   cp.test.classes,
   cp.test.arc,
   cp.test.methods,

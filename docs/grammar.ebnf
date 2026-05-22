@@ -86,6 +86,7 @@ IMPLEMENTATION = "implementation" ;
 USES           = "uses"           ;
 TYPE           = "type"           ;
 RECORD         = "record"         ;
+PACKED         = "packed"         ;
 CLASS          = "class"          ;
 VAR            = "var"            ;
 BEGIN          = "begin"          ;
@@ -235,14 +236,23 @@ TypeDef
     ;
 
 RecordDef
-    = RECORD { FieldDecl | MethodDecl } END
+    = [ PACKED ] RECORD { FieldDecl | MethodDecl } END
     ;
 
 (* Records may declare methods alongside fields.  Method bodies are written
  * out-of-line as TRecordName.MethodName, identical to classes.  The
  * receiver is passed by pointer (`Self` is a `var` parameter under the hood);
  * the language gives normal value semantics — assignments copy the record.
- * No constructors, destructors, or virtual methods are allowed in records. *)
+ * No constructors, destructors, or virtual methods are allowed in records.
+ *
+ * `packed` is permitted only in front of `record`.  It disables natural
+ * alignment padding between fields and disables tail padding on the record
+ * as a whole, so the record's size equals the cumulative byte size of its
+ * fields.  ARC-managed field types (`string`, class, interface, dynamic
+ * array) keep their natural 8-byte alignment even inside a packed record
+ * because the runtime helpers (`_StringRelease`, `_ClassRelease`, etc.)
+ * perform 64-bit loads through the field pointer.  `packed class` and
+ * `packed array` are rejected as parse errors. *)
 
 ClassDef
     = CLASS [ LPAREN GenericName { COMMA GenericName } RPAREN ]

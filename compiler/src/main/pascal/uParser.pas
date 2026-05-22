@@ -503,7 +503,20 @@ begin
     else
     begin
       Expect(tkEquals);
-      if Check(tkRecord) then
+      if Check(tkPacked) then
+      begin
+        { Only `packed record` is supported.  `packed class` and `packed
+          array` are legal Delphi/FPC syntax but Blaise rejects them
+          explicitly so users get a clear error rather than silent no-op. }
+        Advance;
+        if not Check(tkRecord) then
+          raise EParseError.Create(Format(
+            '''packed'' may only precede ''record'' at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        TD.Def := ParseRecordDef;
+        TRecordTypeDef(TD.Def).IsPacked := True;
+      end
+      else if Check(tkRecord) then
         TD.Def := ParseRecordDef
       else if Check(tkClass) and (PeekKind = tkOf) then
       begin

@@ -2206,7 +2206,10 @@ begin
   begin
     TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
     if TD.Def is TRecordTypeDef then
-      RT := FTable.NewRecordType(TD.Name)
+    begin
+      RT := FTable.NewRecordType(TD.Name);
+      RT.IsPacked := TRecordTypeDef(TD.Def).IsPacked;
+    end
     else if TD.Def is TClassTypeDef then
       RT := FTable.NewClassType(TD.Name)
     else if TD.Def is TGenericTypeDef then
