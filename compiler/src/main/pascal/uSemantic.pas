@@ -539,6 +539,11 @@ begin
     AnalyseTypeDecls(AUnit.IntfBlock);
     AnalyseArrayConstDecls(AUnit.IntfBlock);
 
+    { Generic class templates must receive their impl-section method bodies
+      *before* any FindTypeOrInstantiate call can clone an instance, or the
+      instance is born with nil bodies and codegen emits no function for it. }
+    LinkGenericClassMethodImpls(AUnit.ImplBlock);
+
     { Register interface-section global variables — visible to impl bodies. }
     for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
     begin
@@ -748,8 +753,8 @@ begin
       end;
     end;
 
-    { Link generic class method implementations to their template methods }
-    LinkGenericClassMethodImpls(AUnit.ImplBlock);
+    { Generic class method body linking already happened above, before any
+      potential instantiation. }
 
     { Verify every interface declaration has a matching implementation }
     for I := 0 to AUnit.IntfBlock.ProcDecls.Count - 1 do
@@ -811,6 +816,15 @@ begin
   AnalyseConstDecls(AUnit.IntfBlock);
   AnalyseTypeDecls(AUnit.IntfBlock);
   AnalyseArrayConstDecls(AUnit.IntfBlock);
+
+  { Transfer impl-section bodies to generic class templates *before* any
+    instantiation can happen.  Generic instances clone the template's
+    Methods.Body at instantiation time (uSemantic.pas ~line 1524), so if
+    the body is still nil when an interface-section global variable or
+    parameter triggers FindTypeOrInstantiate, the cloned instance method
+    is born without a body and codegen emits no function — leaving call
+    sites referencing an undefined symbol. }
+  LinkGenericClassMethodImpls(AUnit.ImplBlock);
 
   { Register interface-section global variables.  Marked IsGlobal so
     codegen emits them as data-segment slots rather than stack allocs;
@@ -883,9 +897,9 @@ begin
   end;
 
   { Link class method bodies from ImplBlock to the class type method decls
-    registered by AnalyseTypeDecls. }
+    registered by AnalyseTypeDecls.  Generic-class linking happened earlier
+    so instances can clone bodies at instantiation time. }
   LinkClassMethodImpls(AUnit.ImplBlock);
-  LinkGenericClassMethodImpls(AUnit.ImplBlock);
 
   { --- Implementation section -------------------------------------------
     Push a scope so impl-only standalone symbols don't leak globally.

@@ -26,6 +26,7 @@ type
     function GenIR(const ASrc: string): string;
     function AnalyseUnit(const ASrc: string): TUnit;
     function GenUnitIR(const ASrc: string): string;
+    function GenCombinedIR(const AUnitSrc, AProgSrc: string): string;
     procedure AnalyseExpectError(const ASrc: string);
   published
     { ------------------------------------------------------------------ }
@@ -73,6 +74,14 @@ type
     { Codegen — unit-scope generic var                                     }
     { ------------------------------------------------------------------ }
     procedure TestCodegen_UnitIntf_GenericVar_GlobalData;
+
+    { ------------------------------------------------------------------ }
+    { Codegen — generic class declared in a unit, instantiated by program  }
+    { ------------------------------------------------------------------ }
+    procedure TestCodegen_UnitGeneric_FieldCleanupFnEmitted;
+    procedure TestCodegen_UnitGeneric_VTableEmitted;
+    procedure TestCodegen_UnitGeneric_TypeInfoEmitted;
+    procedure TestCodegen_UnitGeneric_MethodBodyEmitted;
 
     { ------------------------------------------------------------------ }
     { Multi-instance: same generic class with two different type args     }
@@ -298,6 +307,57 @@ begin
       CG.Free;
     end;
   finally
+    U.Free;
+  end;
+end;
+
+function TGenericsTests.GenCombinedIR(const AUnitSrc, AProgSrc: string): string;
+{ Mirrors the real driver path in Blaise.pas: analyse the unit for export,
+  analyse the program against the now-populated global scope, then run the
+  combined codegen via AppendUnit + AppendProgram.  Use this when the bug
+  lives in the AppendUnit path (which GenUnitIR's GenerateUnit does not
+  exercise). }
+var
+  UL:   TLexer;
+  UP:   TParser;
+  PL:   TLexer;
+  PP:   TParser;
+  U:    TUnit;
+  Prog: TProgram;
+  SA:   TSemanticAnalyser;
+  CG:   TCodeGenQBE;
+begin
+  UL := TLexer.Create(AUnitSrc);
+  UP := TParser.Create(UL);
+  try
+    U := UP.ParseUnit;
+  finally
+    UP.Free;
+    UL.Free;
+  end;
+
+  PL := TLexer.Create(AProgSrc);
+  PP := TParser.Create(PL);
+  try
+    Prog := PP.Parse;
+  finally
+    PP.Free;
+    PL.Free;
+  end;
+
+  SA := TSemanticAnalyser.Create;
+  CG := TCodeGenQBE.Create;
+  try
+    SA.AnalyseUnitForExport(U);
+    SA.Analyse(Prog);
+    CG.SetSymbolTable(Prog.SymbolTable);
+    CG.AppendUnit(U);
+    CG.AppendProgram(Prog);
+    Result := CG.GetOutput;
+  finally
+    CG.Free;
+    SA.Free;
+    Prog.Free;
     U.Free;
   end;
 end;
@@ -665,6 +725,99 @@ begin
     Pos('data $G', IR) > 0);
   AssertTrue('typeinfo for TBox_Integer emitted',
     Pos('$typeinfo_TBox_Integer', IR) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Generic class declared in a unit, instantiated by program           }
+{                                                                     }
+{ Regression: AppendUnit used to ignore AUnit.GenericInstances, so a  }
+{ generic class declared in a unit and instantiated from the program  }
+{ left the constructor call site referencing undefined symbols        }
+{ ($_FieldCleanup_<mangled>, $vtable_<mangled>, $typeinfo_<mangled>,  }
+{ and the cloned method bodies).                                      }
+{ ------------------------------------------------------------------ }
+
+const
+  { The constructor call lives inside the unit (not the program), so the
+    generic instance is registered against AUnit.GenericInstances — which
+    AppendUnit must walk to emit typeinfo, vtable, _FieldCleanup_, and
+    the cloned method bodies for.  The constructor body is declared in
+    the implementation section (not inline) so the test also exercises
+    the ordering requirement that LinkGenericClassMethodImpls must run
+    before any FindTypeOrInstantiate triggered by interface-section
+    globals — otherwise the cloned instance method is born without a
+    body and codegen emits no function. }
+  SrcUnitWithGenericClass =
+    '''
+        unit UPair;
+        interface
+        type
+          TPair<K, V> = class
+            FKey: K;
+            FVal: V;
+            constructor Create(AKey: K; AVal: V);
+          end;
+        var
+          GPair: TPair<Integer, Integer>;
+        procedure InitPair;
+        implementation
+        constructor TPair<K, V>.Create(AKey: K; AVal: V);
+        begin
+          Self.FKey := AKey;
+          Self.FVal := AVal;
+        end;
+        procedure InitPair;
+        begin
+          GPair := TPair<Integer, Integer>.Create(10, 20);
+        end;
+        end.
+        ''';
+
+  SrcProgUsesUnitGeneric =
+    '''
+        program P;
+        uses UPair;
+        begin
+          InitPair;
+        end.
+        ''';
+
+procedure TGenericsTests.TestCodegen_UnitGeneric_FieldCleanupFnEmitted;
+var
+  IR: string;
+begin
+  IR := GenCombinedIR(SrcUnitWithGenericClass, SrcProgUsesUnitGeneric);
+  AssertTrue('_FieldCleanup_ function body emitted with mangled name',
+    Pos('function $_FieldCleanup_TPair_Integer_Integer', IR) > 0);
+  AssertTrue('no raw angle-bracket form of _FieldCleanup_',
+    Pos('$_FieldCleanup_TPair<', IR) <= 0);
+end;
+
+procedure TGenericsTests.TestCodegen_UnitGeneric_VTableEmitted;
+var
+  IR: string;
+begin
+  IR := GenCombinedIR(SrcUnitWithGenericClass, SrcProgUsesUnitGeneric);
+  AssertTrue('vtable data emitted for TPair_Integer_Integer',
+    Pos('data $vtable_TPair_Integer_Integer', IR) > 0);
+end;
+
+procedure TGenericsTests.TestCodegen_UnitGeneric_TypeInfoEmitted;
+var
+  IR: string;
+begin
+  IR := GenCombinedIR(SrcUnitWithGenericClass, SrcProgUsesUnitGeneric);
+  AssertTrue('typeinfo data emitted for TPair_Integer_Integer',
+    Pos('data $typeinfo_TPair_Integer_Integer', IR) > 0);
+end;
+
+procedure TGenericsTests.TestCodegen_UnitGeneric_MethodBodyEmitted;
+var
+  IR: string;
+begin
+  IR := GenCombinedIR(SrcUnitWithGenericClass, SrcProgUsesUnitGeneric);
+  AssertTrue('constructor body emitted with mangled name',
+    Pos('function $TPair_Integer_Integer_Create', IR) > 0);
 end;
 
 { ------------------------------------------------------------------ }

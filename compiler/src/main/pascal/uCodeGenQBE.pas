@@ -9328,6 +9328,9 @@ var
   RT:           TRecordTypeDesc;
   ClassRT:      TRecordTypeDesc;
   IntfDesc:     TInterfaceTypeDesc;
+  GI:           TGenericInstance;
+  MName:        string;
+  MethRef:      string;
   ParentStr:    string;
   ImplStr:      string;
   MethStr:      string;
@@ -9408,6 +9411,22 @@ begin
             RT := TRecordTypeDesc(TDesc);
             EmitFieldCleanupFn(TD.Name, RT);
           end;
+
+        { Generic class instances declared in this unit — method bodies and
+          per-instance field cleanup functions.  Mirrors the program path in
+          EmitMethodDefs and EmitFieldCleanupFns for AProg.GenericInstances. }
+        for I := 0 to AUnit.GenericInstances.Count - 1 do
+        begin
+          GI := TGenericInstance(AUnit.GenericInstances.Items[I]);
+          for J := 0 to GI.ClassDef.Methods.Count - 1 do
+          begin
+            MDecl := TMethodDecl(GI.ClassDef.Methods.Items[J]);
+            if MDecl.Body <> nil then
+              EmitMethodDef(QBEMangle(GI.TypeName), MDecl);
+          end;
+          EmitFieldCleanupFn(QBEMangle(GI.TypeName),
+                             TRecordTypeDesc(GI.TypeDesc));
+        end;
       finally
         FOutput := SavedOut;
       end;
@@ -9515,6 +9534,85 @@ begin
           end;
           VLine := VLine + ' }';
           EmitLine(VLine);
+        end;
+
+        { Generic class instance typeinfo + vtable + itab/impllist.  Mirrors
+          the program path in EmitTypeInfoDefs, EmitVTableDefs, and the
+          generic-instance itab/impllist loop. }
+        for I := 0 to AUnit.GenericInstances.Count - 1 do
+        begin
+          GI    := TGenericInstance(AUnit.GenericInstances.Items[I]);
+          RT    := TRecordTypeDesc(GI.TypeDesc);
+          MName := QBEMangle(GI.TypeName);
+          if RT.Parent <> nil then
+            ParentStr := '$typeinfo_' + QBEMangle(RT.Parent.Name)
+          else
+            ParentStr := '0';
+          if RT.ImplementsCount > 0 then
+            ImplStr := '$impllist_' + MName
+          else
+            ImplStr := '0';
+          EmitLine('data $typeinfo_' + MName +
+                   ' = { l ' + ParentStr + ', l ' + ImplStr +
+                   ', l ' + EmitClassNameRef(GI.TypeName) + ', l 0' +
+                   ', l ' + IntToStr(RT.TotalSize) +
+                   ', l $_FieldCleanup_' + MName +
+                   ', l $vtable_' + MName + ', l 0 }');
+
+          if RT.HasVTable then
+          begin
+            VLine := 'data $vtable_' + MName + ' = { l $typeinfo_' + MName;
+            for S := 0 to RT.VTableCount - 1 do
+            begin
+              E := RT.VTableEntryAt(S);
+              if E.IsAbstract then
+                VLine := VLine + ', l $_AbstractMethodError'
+              else if (Length(E.ImplName) > 0) and (StrAt(E.ImplName, 0) = Ord('$')) then
+                VLine := VLine + ', l $' + QBEMangle(StrCopyTail(E.ImplName, 1))
+              else
+                VLine := VLine + ', l ' + QBEMangle(E.ImplName);
+            end;
+            VLine := VLine + ' }';
+            EmitLine(VLine);
+          end;
+
+          if RT.ImplementsCount > 0 then
+          begin
+            for J := 0 to RT.ImplementsCount - 1 do
+            begin
+              IntfDesc   := RT.ImplementsIntfAt(J);
+              IntfMangle := QBEMangle(IntfDesc.Name);
+              ItabLine   := 'data $itab_' + MName + '_' + IntfMangle + ' = {';
+              for K := 0 to IntfDesc.MethodCount - 1 do
+              begin
+                MethName := IntfDesc.MethodName(K);
+                if IsAbstractClassMethod(RT, MethName) then
+                  MethRef := '$_AbstractMethodError'
+                else
+                  MethRef := '$' + MName + '_' + MethName;
+                if K = 0 then
+                  ItabLine := ItabLine + ' l ' + MethRef
+                else
+                  ItabLine := ItabLine + ', l ' + MethRef;
+              end;
+              ItabLine := ItabLine + ' }';
+              EmitLine(ItabLine);
+            end;
+            ImplLine := 'data $impllist_' + MName + ' = {';
+            for J := 0 to RT.ImplementsCount - 1 do
+            begin
+              IntfDesc   := RT.ImplementsIntfAt(J);
+              IntfMangle := QBEMangle(IntfDesc.Name);
+              if J = 0 then
+                ImplLine := ImplLine + ' l $typeinfo_' + IntfMangle +
+                                       ', l $itab_' + MName + '_' + IntfMangle
+              else
+                ImplLine := ImplLine + ', l $typeinfo_' + IntfMangle +
+                                       ', l $itab_' + MName + '_' + IntfMangle;
+            end;
+            ImplLine := ImplLine + ', l 0 }';
+            EmitLine(ImplLine);
+          end;
         end;
 
         { Interface itab and impllist blocks for implementing classes }
