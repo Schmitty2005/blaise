@@ -58,6 +58,13 @@ type
                                            ("last in uses wins"); System is the final fallback.
                                            Empty during pure import phases. }
 
+    { Add ADecl to FProcIndex under key AName, auto-tagging
+      ADecl.OwningUnit from FCurrentUnitName if not already set.
+      Wraps the seven free-routine registration sites so a future
+      chain-aware filter can read OwningUnit off any FProcIndex
+      entry. }
+    procedure RegisterProcDecl(const AName: string; ADecl: TMethodDecl);
+
     { Populates FCurrentUsesChain from a program/unit's UsedUnits list.
       Pure plumbing — no behavior change today; consumed by uses-chain
       lookup in a later step. }
@@ -687,6 +694,13 @@ begin
     Result := MangleUnitPrefix(FCurrentUnitName);
 end;
 
+procedure TSemanticAnalyser.RegisterProcDecl(const AName: string; ADecl: TMethodDecl);
+begin
+  if (ADecl.OwningUnit = '') and (FCurrentUnitName <> '') then
+    ADecl.OwningUnit := FCurrentUnitName;
+  FProcIndex.AddObject(AName, ADecl);
+end;
+
 procedure TSemanticAnalyser.BuildUsesChain(AUsedUnits: TStringList);
 var
   I: Integer;
@@ -822,7 +836,7 @@ begin
       else
         MDecl.ResolvedQbeName := CurrentUnitPrefix + MDecl.Name;
 
-      FProcIndex.AddObject(MDecl.Name, MDecl);
+      RegisterProcDecl(MDecl.Name, MDecl);
 
       if MDecl.ReturnTypeName <> '' then
         Sym := TSymbol.Create(MDecl.Name, skFunction, MDecl.ResolvedReturnType)
@@ -962,7 +976,7 @@ begin
           ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
         else
           ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name;
-        FProcIndex.AddObject(ImplDecl.Name, ImplDecl);
+        RegisterProcDecl(ImplDecl.Name, ImplDecl);
         if ImplDecl.ReturnTypeName <> '' then
           Sym := TSymbol.Create(ImplDecl.Name, skFunction, ImplDecl.ResolvedReturnType)
         else
@@ -1127,7 +1141,7 @@ begin
     else
       MDecl.ResolvedQbeName := CurrentUnitPrefix + MDecl.Name;
 
-    FProcIndex.AddObject(MDecl.Name, MDecl);
+    RegisterProcDecl(MDecl.Name, MDecl);
 
     if MDecl.ReturnTypeName <> '' then
       Sym := TSymbol.Create(MDecl.Name, skFunction, MDecl.ResolvedReturnType)
@@ -1264,7 +1278,7 @@ begin
           ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
         else
           ImplDecl.ResolvedQbeName := CurrentUnitPrefix + ImplDecl.Name;
-        FProcIndex.AddObject(ImplDecl.Name, ImplDecl);
+        RegisterProcDecl(ImplDecl.Name, ImplDecl);
         if ImplDecl.ReturnTypeName <> '' then
           Sym := TSymbol.Create(ImplDecl.Name, skFunction, ImplDecl.ResolvedReturnType)
         else
@@ -1329,6 +1343,9 @@ end;
 procedure TSemanticAnalyser.RegisterImportedRoutine(const AName: string;
                                                     ADecl: TMethodDecl);
 begin
+  { ADecl.OwningUnit is set by the caller (uSemanticImport) to the
+    iface's unit name before we get here; don't overwrite with
+    FCurrentUnitName since the analyser may not be mid-analysis. }
   FProcIndex.AddObject(AName, ADecl);
 end;
 
@@ -2344,7 +2361,7 @@ begin
     AnalyseStandaloneDecl(NewMDecl);
 
     { Register in proc index and global symbol table }
-    FProcIndex.AddObject(AInstName, NewMDecl);
+    RegisterProcDecl(AInstName, NewMDecl);
     if NewMDecl.ReturnTypeName <> '' then
       Sym := TSymbol.Create(AInstName, skFunction, NewMDecl.ResolvedReturnType)
     else
@@ -3833,7 +3850,7 @@ begin
       make same-named nested procs in different outer procs appear as
       ambiguous overloads of each other. }
     if FCurrentEnclosingDecl = nil then
-      FProcIndex.AddObject(ADecl.Name, ADecl);
+      RegisterProcDecl(ADecl.Name, ADecl);
 
     { Register in symbol table }
     if ADecl.ReturnTypeName <> '' then

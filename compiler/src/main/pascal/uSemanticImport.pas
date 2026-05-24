@@ -592,6 +592,7 @@ begin
     if ASemantic <> nil then
     begin
       MDecl := SynthesiseMethodDecl(Sig, ATable);
+      MDecl.OwningUnit := AIface.Name;
       ATable.OwnImportedDecl(MDecl);
       Sym.Decl := MDecl;
       ASemantic.RegisterImportedRoutine(Sig.Name, MDecl);

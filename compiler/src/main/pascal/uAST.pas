@@ -647,7 +647,8 @@ type
       enclosing standalone proc/function (nil for top-level decls). }
     CapturedVars:  TStringList; { owned; nil when no captures }
     [Unretained] EnclosingDecl: TMethodDecl; { not owned — enclosing standalone proc, or nil }
-    IsInline: Boolean; { set by uParser — 'inline' directive present }
+    IsInline: Boolean;    { set by uParser — 'inline' directive present }
+    OwningUnit: string;   { set by uSemantic / uSemanticImport — unit that declares this routine }
     constructor Create;
     destructor Destroy; override;
   end;
