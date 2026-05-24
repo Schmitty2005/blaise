@@ -103,6 +103,42 @@ begin
   if not ATable.Define(Sym) then Sym.Free;
 end;
 
+procedure RegisterRecord(AEntry: TTypeEntry; ATable: TSymbolTable);
+var
+  RecDef:   TRecordTypeDef;
+  RecDesc:  TRecordTypeDesc;
+  Sym, FldSym: TSymbol;
+  I, J:     Integer;
+  FldDecl:  TFieldDecl;
+  FldType:  TTypeDesc;
+begin
+  RecDef  := TRecordTypeDef(AEntry.Def);
+  RecDesc := ATable.NewRecordType(AEntry.Name);
+  RecDesc.IsPacked := RecDef.IsPacked;
+
+  { Pre-register so self-referential pointer fields (rare in records,
+    common in classes) can resolve against the in-progress type. }
+  Sym := TSymbol.Create(AEntry.Name, skType, RecDesc);
+  if not ATable.Define(Sym) then
+  begin
+    Sym.Free;
+    Exit;  { duplicate — caller responsibility }
+  end;
+
+  for I := 0 to RecDef.Fields.Count - 1 do
+  begin
+    FldDecl := TFieldDecl(RecDef.Fields.Items[I]);
+    FldSym  := ATable.Lookup(FldDecl.TypeName);
+    if (FldSym = nil) or (FldSym.Kind <> skType) then
+      raise EImportError.CreateFmt(
+        'Record %s field type ''%s'' unresolved',
+        [AEntry.Name, FldDecl.TypeName]);
+    FldType := FldSym.TypeDesc;
+    for J := 0 to FldDecl.Names.Count - 1 do
+      RecDesc.AddField(FldDecl.Names.Strings[J], FldType);
+  end;
+end;
+
 procedure RegisterAlias(AEntry: TTypeEntry; ATable: TSymbolTable);
 var
   AliasDef:   TTypeAliasDef;
@@ -153,6 +189,8 @@ begin
       RegisterSet(Entry, ATable)
     else if Entry.Def is TTypeAliasDef then
       RegisterAlias(Entry, ATable)
+    else if Entry.Def is TRecordTypeDef then
+      RegisterRecord(Entry, ATable)
     else
       raise EImportError.CreateFmt(
         'Type %s.%s: import of %s not yet implemented',

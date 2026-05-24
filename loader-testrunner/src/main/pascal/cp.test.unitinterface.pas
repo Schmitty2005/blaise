@@ -239,6 +239,7 @@ type
     procedure TestImport_ProcedureRoutine_DefinedAsSkProcedure;
     procedure TestImport_FunctionRoutine_DefinedAsSkFunction;
     procedure TestImport_GlobalVar_MarkedIsGlobal;
+    procedure TestImport_Record_FieldsImportedWithOffsets;
   end;
 
 implementation
@@ -2012,6 +2013,43 @@ begin
     AssertTrue('skFunction', Sym.Kind = skFunction);
     AssertTrue('returns Integer', Sym.TypeDesc = Tab.FindType('Integer'));
     AssertEquals('two params', 2, Sym.Params.Count);
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TImportRoundTripTests.TestImport_Record_FieldsImportedWithOffsets;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TPoint = record X, Y: Integer; end;' + #10 +
+    'implementation' + #10 +
+    'end.' + #10;
+var
+  Iface: TUnitInterface;
+  Tab:   TSymbolTable;
+  TyDesc: TTypeDesc;
+  Rec:   TRecordTypeDesc;
+  Fx, Fy: TFieldInfo;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  Tab   := FreshTableWithBuiltins;
+  try
+    ImportUnitInterface(Iface, Tab);
+    TyDesc := Tab.FindType('TPoint');
+    AssertTrue('TPoint defined', TyDesc <> nil);
+    AssertTrue('is record', TyDesc is TRecordTypeDesc);
+    Rec := TRecordTypeDesc(TyDesc);
+    AssertEquals('two fields', 2, Rec.Fields.Count);
+    Fx := Rec.FindField('X');
+    Fy := Rec.FindField('Y');
+    AssertTrue('X found', Fx <> nil);
+    AssertTrue('Y found', Fy <> nil);
+    AssertEquals('X offset', 0, Fx.Offset);
+    AssertEquals('Y offset', 4, Fy.Offset);
+    AssertTrue('X type Integer', Fx.TypeDesc = Tab.FindType('Integer'));
   finally
     Tab.Free;
     Iface.Free;
