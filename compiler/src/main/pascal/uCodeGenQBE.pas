@@ -66,6 +66,23 @@ type
     FContinueLabels: TStringList;  { stack of active loop-continue labels; top = innermost }
     FExitLabel:    string;       { label to jmp to for 'exit'; '' = main program }
     FSymTable:         TSymbolTable; { set via SetSymbolTable; used by AppendUnit for class data }
+    FSystemDefsEmitted: Boolean;    { Phase 1 reservation: a stage-1
+                                       binary built from this commit
+                                       carries the field but never
+                                       reads or writes it.  Phase 2
+                                       (follow-up) wires AppendUnit to
+                                       emit System-unit (TObject /
+                                       TCustomAttribute) typeinfo +
+                                       vtable + FieldCleanup *and*
+                                       gates the existing
+                                       EmitTypeInfoDefs / EmitVTableDefs
+                                       / EmitFieldCleanupDefs on this
+                                       flag.  Splitting the work in two
+                                       phases avoids the bootstrap
+                                       chicken-and-egg where a partial
+                                       state's binary emits duplicate
+                                       System defs and can't compile
+                                       its own next iteration. }
     FUnitInitNames:    TStringList;  { unit names that have initialization sections }
     { mem2reg: parallel lists tracking which locals are promoted SSA temps.
       FPromotedLocals[i] = var name; FPromotedTypes[i] = QBE type ('w','l','d','s').
@@ -447,6 +464,7 @@ begin
   FInlineDepth        := 0;
   FTempCount       := 0;
   FStrLitsEmitted  := 0;
+  FSystemDefsEmitted := False;  { Phase 1 reservation (see field comment) }
 end;
 
 destructor TCodeGenQBE.Destroy;
