@@ -250,6 +250,14 @@ type
     procedure TestRoundTrip_Metadata_UsedUnits_SourceFile;
     procedure TestRoundTrip_GenericClass_TemplateParams;
     procedure TestRoundTrip_GenericInterface_TemplateParams;
+    { End-to-end via the disk path: write → read → import.  Validates
+      the wire format carries enough info to feed ImportUnitInterface
+      directly, with no fresh-from-source rebuild in the middle. }
+    procedure TestDiskPath_Const_ImportsCleanly;
+    procedure TestDiskPath_Enum_ImportsCleanly;
+    procedure TestDiskPath_Class_ImportsCleanly;
+    procedure TestDiskPath_GenericClass_ImportsCleanly;
+    procedure TestDiskPath_GenericRoutine_ImportsCleanly;
   end;
 
   { ----- ImportUnitInterface round-trip (Phase 6c-A) -------------- }
@@ -3065,6 +3073,168 @@ begin
       Round.Free;
     end;
   finally
+    Iface.Free;
+  end;
+end;
+
+{ Helper for disk-path tests: takes a source string, builds a
+  TUnitInterface, serialises it through the disk format (string
+  round-trip), and imports the resulting iface into a fresh
+  TSymbolTable.  Returns both for the caller to assert against.
+  Caller owns the returned objects. }
+procedure DiskPathImport(const ASource: string;
+                         out ATab:   TSymbolTable;
+                         out AIface: TUnitInterface);
+var
+  Src: TUnitInterface;
+  Buf: string;
+begin
+  Src := ParseAnalyseAndExport(ASource);
+  try
+    Buf := WriteUnitInterface(Src);
+  finally
+    Src.Free;
+  end;
+  AIface := ReadUnitInterface(Buf);
+  ATab   := FreshTableWithBuiltins;
+  ImportUnitInterface(AIface, ATab);
+end;
+
+procedure TIfaceIOTests.TestDiskPath_Const_ImportsCleanly;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'const K = 99;' + #10 +
+    'implementation end.' + #10;
+var
+  Tab:   TSymbolTable;
+  Iface: TUnitInterface;
+  Sym:   TSymbol;
+begin
+  DiskPathImport(SRC, Tab, Iface);
+  try
+    Sym := Tab.Lookup('K');
+    AssertTrue('K defined', Sym <> nil);
+    AssertEquals('K value', Int64(99), Sym.ConstValue);
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestDiskPath_Enum_ImportsCleanly;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TColor = (Red, Green, Blue);' + #10 +
+    'implementation end.' + #10;
+var
+  Tab:   TSymbolTable;
+  Iface: TUnitInterface;
+  Ty:    TTypeDesc;
+  Sym:   TSymbol;
+begin
+  DiskPathImport(SRC, Tab, Iface);
+  try
+    Ty := Tab.FindType('TColor');
+    AssertTrue('TColor defined', Ty <> nil);
+    AssertTrue('is enum', Ty is TEnumTypeDesc);
+    AssertEquals('3 members', 3, TEnumTypeDesc(Ty).Members.Count);
+    Sym := Tab.Lookup('Green');
+    AssertEquals('Green ordinal', 1, Sym.ConstValue);
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestDiskPath_Class_ImportsCleanly;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TFoo = class' + #10 +
+    '  Counter: Integer;' + #10 +
+    '  procedure Speak; virtual;' + #10 +
+    'end;' + #10 +
+    'implementation' + #10 +
+    'procedure TFoo.Speak; begin end;' + #10 +
+    'end.' + #10;
+var
+  Tab:   TSymbolTable;
+  Iface: TUnitInterface;
+  RT:    TRecordTypeDesc;
+  Slot:  Integer;
+begin
+  DiskPathImport(SRC, Tab, Iface);
+  try
+    RT := TRecordTypeDesc(Tab.FindType('TFoo'));
+    AssertTrue('TFoo defined', RT <> nil);
+    AssertTrue('Counter field', RT.FindField('Counter') <> nil);
+    Slot := RT.FindVTableSlot('Speak');
+    AssertTrue('Speak in vtable', Slot >= 0);
+    AssertEquals('Speak ImplName',
+      '$TFoo_Speak', RT.VTableEntryAt(Slot).ImplName);
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestDiskPath_GenericClass_ImportsCleanly;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TBox<T> = class V: T; end;' + #10 +
+    'implementation end.' + #10;
+var
+  Tab:   TSymbolTable;
+  Iface: TUnitInterface;
+  Templ: TObject;
+begin
+  DiskPathImport(SRC, Tab, Iface);
+  try
+    Templ := Tab.FindGeneric('TBox');
+    AssertTrue('TBox template registered', Templ <> nil);
+    AssertTrue('is TGenericTypeDef', Templ is TGenericTypeDef);
+    AssertEquals('one type param', 1,
+      TGenericTypeDef(Templ).ParamNames.Count);
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestDiskPath_GenericRoutine_ImportsCleanly;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'function Identity<T>(V: T): T;' + #10 +
+    'implementation' + #10 +
+    'function Identity<T>(V: T): T; begin Result := V; end;' + #10 +
+    'end.' + #10;
+var
+  Tab:   TSymbolTable;
+  Iface: TUnitInterface;
+  Templ: TObject;
+begin
+  { Generic routines: body serialisation is not yet implemented in
+    the wire format, so MethodDecl.Body comes back nil through the
+    disk path.  Asserting registration only — instantiation
+    requires bodies and is gated on the AST body serialiser. }
+  DiskPathImport(SRC, Tab, Iface);
+  try
+    Templ := Tab.FindGenericRoutine('Identity');
+    AssertTrue('Identity template registered', Templ <> nil);
+    AssertTrue('is TMethodDecl', Templ is TMethodDecl);
+    AssertEquals('one type param', 1,
+      TMethodDecl(Templ).TypeParams.Count);
+  finally
+    Tab.Free;
     Iface.Free;
   end;
 end;

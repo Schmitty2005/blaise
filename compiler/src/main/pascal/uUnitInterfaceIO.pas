@@ -154,8 +154,11 @@ begin
   end;
 end;
 
-{ Encode an enum's member list as comma-joined names within an lpstr.
-  Commas are safe inside lpstr since the outer length drives parsing. }
+{ Enum members: encode name=ordinal pairs.  Members.Objects[i]
+  holds the explicit ordinal (TEnumTypeDef.AddMember stashes it
+  there as a pointer-cast int), so a naive name-only encoding
+  rounds back to ordinal 0 for everything.  Renders as
+  '<name>=<ord>,<name>=<ord>,…' inside the outer lpstr. }
 function EncodeEnumMembers(AEnum: TEnumTypeDef): string;
 var
   I:    Integer;
@@ -165,7 +168,7 @@ begin
   for I := 0 to AEnum.Members.Count - 1 do
   begin
     if I > 0 then Acc := Acc + ',';
-    Acc := Acc + AEnum.Members.Strings[I];
+    Acc := Acc + AEnum.Members.Strings[I] + '=' + IntToStr(AEnum.OrdinalAt(I));
   end;
   Result := EncodeLpstr(Acc);
 end;
@@ -587,16 +590,57 @@ begin
   end;
 end;
 
+{ Emit only generic free routines.  Generic class/interface
+  templates are already in the TYPE block under 'generic-class' /
+  'generic-interface' kinds — including those here would
+  double-register.  Body AST is NOT serialised yet (no statement /
+  expression writer); the wire-side MethodDecl comes back without
+  a Body, which downstream instantiation will need.  Until the AST
+  body serialiser lands, disk-loaded generic routines are
+  signature-only. }
+function WriteGenericRoutines(AIface: TUnitInterface): string;
+var
+  I:   Integer;
+  G:   TGenericBody;
+  SB:  TStringList;
+  Eligible: TObjectList;
+begin
+  Eligible := TObjectList.Create(False);
+  SB := TStringList.Create;
+  try
+    for I := 0 to AIface.GenericBodies.Count - 1 do
+    begin
+      G := TGenericBody(AIface.GenericBodies.Items[I]);
+      if not G.IsType then Eligible.Add(G);
+    end;
+    SB.Add('GENROUT ' + IntToStr(Eligible.Count));
+    for I := 0 to Eligible.Count - 1 do
+    begin
+      G := TGenericBody(Eligible.Items[I]);
+      SB.Add(
+        EncodeLpstr(G.Name) +
+        EncodeTypeParamList(G.TypeParams, G.Constraints) +
+        EncodeMethodDecl(G.MethodDecl));
+    end;
+    SB.Add('END');
+    Result := SB.Text;
+  finally
+    SB.Free;
+    Eligible.Free;
+  end;
+end;
+
 function WriteUnitInterface(AIface: TUnitInterface): string;
 begin
   Result :=
     IFACE_MAGIC + ' ' + IntToStr(IFACE_VERSION) + #10 +
     EncodeLpstr(AIface.Name) + #10 +
-    WriteMeta    (AIface) +
-    WriteTypes   (AIface) +
-    WriteConsts  (AIface) +
-    WriteVars    (AIface) +
-    WriteRoutines(AIface);
+    WriteMeta           (AIface) +
+    WriteTypes          (AIface) +
+    WriteConsts         (AIface) +
+    WriteVars           (AIface) +
+    WriteRoutines       (AIface) +
+    WriteGenericRoutines(AIface);
 end;
 
 { ----- Reader ----------------------------------------------------- }
@@ -831,6 +875,43 @@ begin
   if Length(Cur) > 0 then ATarget.Add(Cur);
 end;
 
+{ Parse 'name=ord,name=ord,…' into an EnumTypeDef using AddMember so
+  the ordinal stash lands in Members.Objects[i] (where OrdinalAt
+  reads it back from). }
+procedure LoadEnumMembers(const ASrc: string; AEnum: TEnumTypeDef);
+var
+  Pairs: TStringList;
+  I:     Integer;
+  Pair:  string;
+  Eq:    Integer;
+  NameP: string;
+  OrdP:  Integer;
+begin
+  Pairs := TStringList.Create;
+  try
+    SplitMembers(ASrc, Pairs);
+    for I := 0 to Pairs.Count - 1 do
+    begin
+      Pair := Pairs.Strings[I];
+      Eq   := Pos('=', Pair);
+      if Eq < 0 then
+      begin
+        { Tolerate bare names from an older/hand-written .bif —
+          assume sequential ordinals. }
+        AEnum.AddMember(Pair, I);
+      end
+      else
+      begin
+        NameP := Copy(Pair, 0, Eq);
+        OrdP  := StrToInt(Copy(Pair, Eq + 1, Length(Pair) - Eq - 1));
+        AEnum.AddMember(NameP, OrdP);
+      end;
+    end;
+  finally
+    Pairs.Free;
+  end;
+end;
+
 function DecodeCount(const AText: string; var APos: Integer): Integer;
 begin
   Result := StrToInt(ReadLpstrAt(AText, APos));
@@ -984,6 +1065,37 @@ var
 begin
   C := DecodeCount(AText, APos);
   for I := 1 to C do ATarget.Add(ReadMethodDecl(AText, APos));
+end;
+
+procedure ReadGenericRoutines(const AText: string; var APos: Integer;
+                              AIface: TUnitInterface);
+var
+  Count, I, J: Integer;
+  G:           TGenericBody;
+  Name:        string;
+  MD:          TMethodDecl;
+begin
+  Count := ReadDecimalAt(AText, APos);
+  for I := 1 to Count do
+  begin
+    Name := ReadLpstrAt(AText, APos);
+    G := TGenericBody.Create;
+    G.Name   := Name;
+    G.IsType := False;
+    ReadTypeParamList(AText, APos, G.TypeParams, G.Constraints);
+    MD := ReadMethodDecl(AText, APos);
+    { ReadMethodDecl doesn't reconstitute TypeParams (the
+      method-decl payload omits them — they're encoded once at the
+      GenericBody level).  Copy them across so a downstream
+      instantiation sees a complete TMethodDecl template. }
+    MD.TypeParams := TStringList.Create;
+    for J := 0 to G.TypeParams.Count - 1 do
+      MD.TypeParams.Add(G.TypeParams.Strings[J]);
+    G.MethodDecl := MD;
+    AIface.AddGenericBody(G);
+  end;
+  if ReadTag(AText, APos) <> 'END' then
+    raise EIfaceFormatError.Create('GENROUT block: missing END marker');
 end;
 
 procedure ReadMeta(const AText: string; var APos: Integer;
@@ -1157,7 +1269,7 @@ begin
     begin
       Payload := ReadLpstrAt(AText, APos);
       EnumDef := TEnumTypeDef.Create;
-      SplitMembers(Payload, EnumDef.Members);
+      LoadEnumMembers(Payload, EnumDef);
       Entry.Def := EnumDef;
     end
     else if Kind = 'set' then
@@ -1262,12 +1374,13 @@ begin
       SkipWhitespace(AText, Cur);
       if Cur >= Length(AText) then Break;
       Tag := ReadTag(AText, Cur);
-      if      Tag = 'CONST' then ReadConsts  (AText, Cur, Result)
-      else if Tag = 'VAR'   then ReadVars    (AText, Cur, Result)
-      else if Tag = 'TYPE'  then ReadTypes   (AText, Cur, Result)
-      else if Tag = 'ROUT'  then ReadRoutines(AText, Cur, Result)
-      else if Tag = 'META'  then ReadMeta    (AText, Cur, Result)
-      else if Tag = ''      then Break
+      if      Tag = 'CONST'   then ReadConsts         (AText, Cur, Result)
+      else if Tag = 'VAR'     then ReadVars           (AText, Cur, Result)
+      else if Tag = 'TYPE'    then ReadTypes          (AText, Cur, Result)
+      else if Tag = 'ROUT'    then ReadRoutines       (AText, Cur, Result)
+      else if Tag = 'META'    then ReadMeta           (AText, Cur, Result)
+      else if Tag = 'GENROUT' then ReadGenericRoutines(AText, Cur, Result)
+      else if Tag = ''        then Break
       else
         raise EIfaceFormatError.Create(Format(
           'unknown record tag ''%s'' at position %d', [Tag, Cur]));
