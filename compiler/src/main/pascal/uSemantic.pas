@@ -51,6 +51,15 @@ type
                                            UnitIfaces in Blaise.pas).  Registered alongside
                                            ImportUnitInterface and after AnalyseUnitForExport
                                            so per-unit lookups can find an iface by name. }
+    FUnitSymbols:          TStringList;  { owned (case-insensitive); keys are
+                                           'UnitName' + #1 + 'SymbolName'; Objects[I] is
+                                           a TSymbol (NOT owned — the canonical TSymbol
+                                           is owned by FTable today, mirrored here as a
+                                           direct per-unit index.  Used by the chain
+                                           walker so retrieval doesn't need to filter
+                                           a flat global by OwningUnit.  Sentinel
+                                           character #1 keeps the key unambiguous even
+                                           when a unit name contains a colon (rare). }
     FCurrentUsesChain:     TStringList;  { owned — uses-chain visible to FCurrentUnitName.
                                            Index 0 is the implicit System unit; entries 1..N-1
                                            come from the analysed program/unit's UsedUnits in
@@ -259,6 +268,19 @@ type
       (last-wins, paralleling "uses-chain last-wins").  Task #44 step 3. }
     procedure RegisterUnitIface(AIface: TUnitInterface);
 
+    { Register a per-unit symbol mapping in FUnitSymbols.  ASym is
+      NOT owned — its lifetime is managed by FTable (or whatever
+      owner the caller designates).  Called by uSemanticImport
+      alongside the existing Define when an iface symbol is
+      materialised, and by the source-side Define wrapper for the
+      unit being analysed.  Task #44 step 9. }
+    procedure RegisterUnitSymbol(const AUnitName: string; ASym: TSymbol);
+
+    { Look up a per-unit symbol by (AUnitName, ASymName).  Returns
+      nil when not registered.  Used by LookupViaUsesChain to walk
+      the chain without going through the flat global. }
+    function FindUnitSymbol(const AUnitName, ASymName: string): TSymbol;
+
     { Look up a registered TUnitInterface by unit name.  Returns nil
       if not registered.  Case-insensitive. }
     function FindUnitIface(const AUnitName: string): TUnitInterface;
@@ -351,11 +373,14 @@ begin
   FCurrentUsesChain.CaseSensitive := False;
   FUnitIfaces           := TStringList.Create;
   FUnitIfaces.CaseSensitive := False;
+  FUnitSymbols          := TStringList.Create;
+  FUnitSymbols.CaseSensitive := False;
   FLoopDepth            := 0;
 end;
 
 destructor TSemanticAnalyser.Destroy;
 begin
+  FUnitSymbols.Free;
   FUnitIfaces.Free;
   FCurrentUsesChain.Free;
   FGenericFuncTemplates.Free;
@@ -1351,7 +1376,9 @@ end;
 
 procedure TSemanticAnalyser.RegisterUnitIface(AIface: TUnitInterface);
 var
-  Idx: Integer;
+  Idx, I:  Integer;
+  Scope:   TScope;
+  Sym:     TSymbol;
 begin
   if AIface = nil then Exit;
   Idx := FUnitIfaces.IndexOf(AIface.Name);
@@ -1359,6 +1386,20 @@ begin
     FUnitIfaces.Objects[Idx] := AIface
   else
     FUnitIfaces.AddObject(AIface.Name, AIface);
+
+  { Absorb the symbols this unit Define'd into FTable's global scope
+    into the per-unit cache.  Lets LookupViaUsesChain do a direct
+    keyed retrieval without filtering the flat global by OwningUnit.
+    Walks each global-scope symbol once and grabs the ones whose
+    OwningUnit matches AIface.Name. }
+  if FTable = nil then Exit;
+  Scope := FTable.GlobalScope;
+  for I := 0 to Scope.SymbolCount - 1 do
+  begin
+    Sym := Scope.SymbolAt(I);
+    if (Sym <> nil) and SameText(Sym.OwningUnit, AIface.Name) then
+      RegisterUnitSymbol(AIface.Name, Sym);
+  end;
 end;
 
 function TSemanticAnalyser.FindUnitIface(const AUnitName: string): TUnitInterface;
@@ -1372,11 +1413,39 @@ begin
     Result := nil;
 end;
 
+procedure TSemanticAnalyser.RegisterUnitSymbol(const AUnitName: string;
+                                               ASym: TSymbol);
+var
+  Key: string;
+  Idx: Integer;
+begin
+  if (AUnitName = '') or (ASym = nil) then Exit;
+  Key := AUnitName + #1 + ASym.Name;
+  Idx := FUnitSymbols.IndexOf(Key);
+  if Idx >= 0 then
+    FUnitSymbols.Objects[Idx] := ASym
+  else
+    FUnitSymbols.AddObject(Key, ASym);
+end;
+
+function TSemanticAnalyser.FindUnitSymbol(const AUnitName,
+                                          ASymName: string): TSymbol;
+var
+  Idx: Integer;
+begin
+  Idx := FUnitSymbols.IndexOf(AUnitName + #1 + ASymName);
+  if Idx >= 0 then
+    Result := TSymbol(FUnitSymbols.Objects[Idx])
+  else
+    Result := nil;
+end;
+
 function TSemanticAnalyser.LookupViaUsesChain(const AName: string): TSymbol;
 var
-  I:     Integer;
-  Iface: TUnitInterface;
-  Sym:   TSymbol;
+  I:        Integer;
+  UnitName: string;
+  Iface:    TUnitInterface;
+  Sym:      TSymbol;
 begin
   Result := nil;
   if FTable = nil then Exit;
@@ -1385,19 +1454,31 @@ begin
   try
     for I := FCurrentUsesChain.Count - 1 downto 0 do
     begin
-      Iface := FindUnitIface(FCurrentUsesChain.Strings[I]);
-      if Iface = nil then Continue;
-      if not Iface.HasSymbol(AName) then Continue;
+      UnitName := FCurrentUsesChain.Strings[I];
 
-      { The flat FTable currently holds the canonical TSymbol for
-        AName (only one — name collisions are impossible at the
-        semantic level today).  Step 9 will remove the flat merge;
-        this resolves from a per-unit symbol pool then. }
-      Sym := FTable.Lookup(AName);
+      { Prefer the per-unit symbol cache — direct keyed lookup, no
+        flat-global filtering needed.  Populated by uSemanticImport
+        when materialising iface symbols. }
+      Sym := FindUnitSymbol(UnitName, AName);
+
+      { Fallback: probe the iface's HasSymbol and the flat FTable.
+        Covers entries the per-unit cache hasn't seen yet (e.g.
+        symbols defined by the unit currently mid-analysis whose
+        AnalyseUnitForExport hasn't completed its Register*-equivalent
+        path). }
+      if Sym = nil then
+      begin
+        Iface := FindUnitIface(UnitName);
+        if (Iface <> nil) and Iface.HasSymbol(AName) then
+        begin
+          Sym := FTable.Lookup(AName);
+          if (Sym <> nil) and (Sym.OwningUnit <> '')
+             and not SameText(Sym.OwningUnit, UnitName) then
+            Sym := nil;
+        end;
+      end;
+
       if Sym = nil then Continue;
-      if Sym.OwningUnit <> '' then
-        if not SameText(Sym.OwningUnit, FCurrentUsesChain.Strings[I]) then
-          Continue;
 
       if IsVisibleFromUnit(Sym, FCurrentUnitName, FCurrentClass) then
       begin

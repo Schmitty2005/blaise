@@ -366,6 +366,12 @@ type
     function Define(ASymbol: TSymbol): Boolean;
     function LookupLocal(const AName: string): TSymbol;
     function Lookup(const AName: string): TSymbol;
+    { Iteration over symbols defined directly in this scope (no
+      parent walk).  Used by the analyser to harvest unit-imported
+      symbols into per-unit caches without threading semantic
+      references through every Register* helper. }
+    function SymbolCount: Integer;
+    function SymbolAt(AIdx: Integer): TSymbol;
   end;
 
   { ------------------------------------------------------------------ }
@@ -451,6 +457,7 @@ type
     procedure PopScope;
     property  CurrentScope: TScope read GetCurrentScope;
     property  ScopeDepth: Integer read GetScopeDepth;
+    function  GlobalScope: TScope;
 
     { Symbol management — owns ASymbol on success; caller must free on False }
     function Define(ASymbol: TSymbol): Boolean;
@@ -1136,6 +1143,16 @@ begin
   Result := nil;
 end;
 
+function TScope.SymbolCount: Integer;
+begin
+  Result := FSymbols.Count;
+end;
+
+function TScope.SymbolAt(AIdx: Integer): TSymbol;
+begin
+  Result := TSymbol(FSymbols.Items[AIdx]);
+end;
+
 { ------------------------------------------------------------------ }
 { TEnumTypeDesc                                                       }
 { ------------------------------------------------------------------ }
@@ -1642,6 +1659,11 @@ begin
   if (ASymbol.OwningUnit = '') and (FDefineOwningUnit <> '') then
     ASymbol.OwningUnit := FDefineOwningUnit;
   Result := TScope(FScopeStack.Items[0]).Define(ASymbol);
+end;
+
+function TSymbolTable.GlobalScope: TScope;
+begin
+  Result := TScope(FScopeStack.Items[0]);
 end;
 
 function TSymbolTable.GetCurrentScope: TScope;
