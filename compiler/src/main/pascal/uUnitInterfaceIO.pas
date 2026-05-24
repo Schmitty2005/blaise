@@ -70,6 +70,11 @@ function ReadUnitInterface(const AText: string): TUnitInterface;
 procedure WriteUnitInterfaceToFile(AIface: TUnitInterface; const APath: string);
 function  ReadUnitInterfaceFromFile(const APath: string): TUnitInterface;
 
+{ FNV-1a 64-bit content hash, lowercase hex.  Cheap, no crypto deps,
+  change-detection grade — sufficient for iface-vs-source freshness
+  checks but NOT suitable for adversarial integrity. }
+function ContentHashFnv1a64(const AContent: string): string;
+
 implementation
 
 { ----- Writer ----------------------------------------------------- }
@@ -581,7 +586,8 @@ begin
     SB.Add('META');
     SB.Add(EncodeLpstr(AIface.SourceFile) +
            EncodeLpstr(AIface.SourceHash) +
-           EncodeLpstr(AIface.CompilerVersion) +
+           EncodeLpstr(AIface.CompilerId) +
+           EncodeInt64(AIface.SourceModTime) +
            EncodeStringList(AIface.UsedUnits));
     SB.Add('END');
     Result := SB.Text;
@@ -1777,9 +1783,10 @@ procedure ReadMeta(const AText: string; var APos: Integer;
 var
   C, I: Integer;
 begin
-  AIface.SourceFile      := ReadLpstrAt(AText, APos);
-  AIface.SourceHash      := ReadLpstrAt(AText, APos);
-  AIface.CompilerVersion := ReadLpstrAt(AText, APos);
+  AIface.SourceFile    := ReadLpstrAt(AText, APos);
+  AIface.SourceHash    := ReadLpstrAt(AText, APos);
+  AIface.CompilerId    := ReadLpstrAt(AText, APos);
+  AIface.SourceModTime := ReadInt64At(AText, APos);
   C := DecodeCount(AText, APos);
   for I := 1 to C do
     AIface.UsedUnits.Add(ReadLpstrAt(AText, APos));
@@ -2066,11 +2073,67 @@ begin
   end;
 end;
 
+{ FNV-1a 64-bit content hash.  Cheap, no crypto deps, change-
+  detection grade.  Returned as a lowercase hex string for stable
+  text-format encoding.
+
+  Constants assembled from 32-bit halves because Blaise's literal
+  parser caps numeric literals at Int64 range; FNV_OFFSET is
+  >9.2e18 and doesn't fit. }
+function ContentHashFnv1a64(const AContent: string): string;
+var
+  I:    Integer;
+  H:    UInt64;
+  Lo:   Integer;
+  FnvOffset: UInt64;
+  FnvPrime:  UInt64;
+begin
+  FnvOffset := (UInt64($cbf29ce4) shl 32) or UInt64($84222325);
+  FnvPrime  := (UInt64($00000100) shl 32) or UInt64($000001b3);
+  H := FnvOffset;
+  for I := 0 to Length(AContent) - 1 do
+  begin
+    H := H xor UInt64(Byte(AContent[I + 1]));
+    H := H * FnvPrime;
+  end;
+  Result := '';
+  for I := 15 downto 0 do
+  begin
+    Lo := Integer((H shr (I * 4)) and $f);
+    if Lo < 10 then Result := Result + Chr(Ord('0') + Lo)
+              else Result := Result + Chr(Ord('a') + Lo - 10);
+  end;
+end;
+
 procedure WriteUnitInterfaceToFile(AIface: TUnitInterface; const APath: string);
 var
   Bytes: string;
+  Src:   string;
+  FIn:   TFileInputStream;
   FOut:  TFileOutputStream;
 begin
+  { Populate source-content hash from disk if SourceFile is set and
+    readable.  Empty hash on absent/unreadable source — at load time
+    that disables the source-match path and forces compiler-id-match
+    fallback. }
+  if (AIface.SourceFile <> '') and FileExists(AIface.SourceFile) then
+  begin
+    try
+      FIn := TFileInputStream.Create(AIface.SourceFile);
+      try
+        SetLength(Src, Integer(FIn.Size));
+        if Length(Src) > 0 then
+          FIn.Read(PChar(Src), Length(Src));
+      finally
+        FIn.Free;
+      end;
+      AIface.SourceHash := ContentHashFnv1a64(Src);
+    except
+      { Swallow IO failure — best-effort population. }
+      AIface.SourceHash := '';
+    end;
+  end;
+
   Bytes := WriteUnitInterface(AIface);
   FOut := TFileOutputStream.Create(APath);
   try

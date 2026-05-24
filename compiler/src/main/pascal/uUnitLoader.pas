@@ -21,7 +21,7 @@ interface
 uses
   SysUtils, Classes, contnrs,
   uLexer, uParser, uAST,
-  uUnitInterface, uUnitInterfaceIO, uIfaceObject;
+  uUnitInterface, uUnitInterfaceIO, uIfaceObject, uCompilerId;
 
 type
   EUnitNotFound       = class(Exception);
@@ -69,6 +69,11 @@ type
     function LoadIfaceFromObject(const APath: string): TUnitInterface;
     function LoadOne(const APath: string): TUnit;
     procedure LoadTransitive(const AName: string);
+    { Decide whether to trust a freshly-loaded .bif.  Hash-compares
+      against the source .pas if present on the search path; falls
+      back to a CompilerId match when source is unavailable. }
+    function ValidateIface(AIface: TUnitInterface;
+                           const AName: string): Boolean;
   end;
 
 implementation
@@ -122,6 +127,64 @@ begin
     if FileExists(Path) then begin Result := Path; Exit; end;
   end;
   Result := '';
+end;
+
+function TUnitLoader.ValidateIface(AIface: TUnitInterface;
+                                   const AName: string): Boolean;
+var
+  SrcPath: string;
+  Src:     TStringList;
+  Cur:     string;
+begin
+  Result := False;
+  if AIface = nil then Exit;
+  SrcPath := Locate(AName);
+  if SrcPath <> '' then
+  begin
+    { Source available — hash decides.  An empty SourceHash on the
+      iface means it was written before this format extension; treat
+      as a forced miss so the source-compile path takes over. }
+    if AIface.SourceHash = '' then
+    begin
+      WriteLn(StdErr,
+              'note: ', AName,
+              '.o iface has no source hash; recompiling from source');
+      Exit;
+    end;
+    Src := TStringList.Create;
+    try
+      try
+        Src.LoadFromFile(SrcPath);
+        Cur := ContentHashFnv1a64(Src.Text);
+      except
+        Cur := '';
+      end;
+    finally
+      Src.Free;
+    end;
+    if Cur = '' then Exit;
+    Result := SameText(Cur, AIface.SourceHash);
+    if not Result then
+      WriteLn(StdErr,
+              'note: ', AName,
+              '.o iface stale vs source on path; recompiling from source');
+    Exit;
+  end;
+  { No source available — CompilerId match is the only safe signal. }
+  if AIface.CompilerId = '' then
+  begin
+    WriteLn(StdErr,
+            'error: ', AName,
+            '.o iface has no compiler id and no source on path; cannot use');
+    Exit;
+  end;
+  Result := SameText(AIface.CompilerId, COMPILER_ID);
+  if not Result then
+    WriteLn(StdErr,
+            'error: ', AName,
+            '.o iface compiled by ''', AIface.CompilerId,
+            ''' (this compiler is ''', COMPILER_ID,
+            '''); source unavailable to rebuild');
 end;
 
 function TUnitLoader.LoadIfaceFromObject(const APath: string): TUnitInterface;
@@ -196,6 +259,20 @@ begin
   if ObjPath <> '' then
   begin
     Iface := LoadIfaceFromObject(ObjPath);
+    if Iface <> nil then
+    begin
+      { Validate before trusting.  Two outcomes:
+          - source .pas present on path: hash-compare.  Match →
+            accept iface.  Mismatch → discard, fall through to
+            source-compile path (the iface is stale).
+          - source not present: a CompilerId match is the only
+            signal the iface is safe; mismatch → discard. }
+      if not ValidateIface(Iface, AName) then
+      begin
+        Iface.Free;
+        Iface := nil;
+      end;
+    end;
     if Iface <> nil then
     begin
       FLoading.Add(AName);

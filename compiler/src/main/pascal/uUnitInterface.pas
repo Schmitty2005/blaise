@@ -175,9 +175,16 @@ type
     FGenericIndex: TStringList;   { Name → TGenericBody }
   public
     Name:            string;
-    SourceFile:      string;
-    SourceHash:      string;      { Phase 5+; empty for now }
-    CompilerVersion: string;      { Phase 5+; empty for now }
+    SourceFile:      string;      { absolute path the iface was compiled from }
+    SourceHash:      string;      { content hash of SourceFile at compile time;
+                                    used to detect "source edited since iface
+                                    written".  Empty => not populated. }
+    SourceModTime:   Int64;       { mtime of SourceFile (Unix epoch seconds) at
+                                    compile time.  0 => not populated. }
+    CompilerId:      string;      { identifier of the compiler that wrote this
+                                    iface.  When source is unavailable, an
+                                    exact CompilerId match is the only signal
+                                    that the iface is safe to trust. }
 
     UsedUnits:       TStringList; { owned — interface-section uses, in order }
 
