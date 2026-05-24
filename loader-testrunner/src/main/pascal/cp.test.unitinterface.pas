@@ -240,6 +240,9 @@ type
     procedure TestImport_FunctionRoutine_DefinedAsSkFunction;
     procedure TestImport_GlobalVar_MarkedIsGlobal;
     procedure TestImport_Record_FieldsImportedWithOffsets;
+    procedure TestImport_Class_ImplicitTObjectParent;
+    procedure TestImport_Class_FieldOffsetAfterParentVptr;
+    procedure TestImport_Class_ExplicitParentChain;
   end;
 
 implementation
@@ -2050,6 +2053,107 @@ begin
     AssertEquals('X offset', 0, Fx.Offset);
     AssertEquals('Y offset', 4, Fy.Offset);
     AssertTrue('X type Integer', Fx.TypeDesc = Tab.FindType('Integer'));
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TImportRoundTripTests.TestImport_Class_ImplicitTObjectParent;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TFoo = class end;' + #10 +
+    'implementation' + #10 +
+    'end.' + #10;
+var
+  Iface: TUnitInterface;
+  Tab:   TSymbolTable;
+  TyDesc: TTypeDesc;
+  Rec:   TRecordTypeDesc;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  Tab   := FreshTableWithBuiltins;
+  try
+    ImportUnitInterface(Iface, Tab);
+    TyDesc := Tab.FindType('TFoo');
+    AssertTrue('TFoo defined', TyDesc <> nil);
+    AssertTrue('is class (tyClass)', TyDesc.Kind = tyClass);
+    Rec := TRecordTypeDesc(TyDesc);
+    AssertTrue('parent TObject', Rec.Parent <> nil);
+    AssertEquals('parent name', 'TObject', Rec.Parent.Name);
+    AssertTrue('inherits TObject vtable', Rec.HasVTable);
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TImportRoundTripTests.TestImport_Class_FieldOffsetAfterParentVptr;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TFoo = class Counter: Integer; end;' + #10 +
+    'implementation' + #10 +
+    'end.' + #10;
+var
+  Iface: TUnitInterface;
+  Tab:   TSymbolTable;
+  Rec:   TRecordTypeDesc;
+  Fi:    TFieldInfo;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  Tab   := FreshTableWithBuiltins;
+  try
+    ImportUnitInterface(Iface, Tab);
+    Rec := TRecordTypeDesc(Tab.FindType('TFoo'));
+    AssertTrue('TFoo defined', Rec <> nil);
+    Fi := Rec.FindField('Counter');
+    AssertTrue('Counter found', Fi <> nil);
+    { Layout: vptr at offset 0 (8 bytes) + Counter at 8 — matches
+      what AnalyseTypeDecls produces for a TObject-derived class. }
+    AssertEquals('Counter offset', 8, Fi.Offset);
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TImportRoundTripTests.TestImport_Class_ExplicitParentChain;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type' + #10 +
+    '  TBase = class A: Integer; end;' + #10 +
+    '  TDerived = class(TBase) B: Integer; end;' + #10 +
+    'implementation' + #10 +
+    'end.' + #10;
+var
+  Iface: TUnitInterface;
+  Tab:   TSymbolTable;
+  Derived: TRecordTypeDesc;
+  Fa, Fb: TFieldInfo;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  Tab   := FreshTableWithBuiltins;
+  try
+    ImportUnitInterface(Iface, Tab);
+    Derived := TRecordTypeDesc(Tab.FindType('TDerived'));
+    AssertTrue('TDerived defined', Derived <> nil);
+    AssertTrue('parent TBase', Derived.Parent <> nil);
+    AssertEquals('parent name', 'TBase', Derived.Parent.Name);
+    { Inherited field A and own field B both reachable via FindField,
+      since FindField walks the chain (or, when our import inherits
+      parent fields into the child, finds locally). }
+    Fa := Derived.FindField('A');
+    Fb := Derived.FindField('B');
+    AssertTrue('A reachable', Fa <> nil);
+    AssertTrue('B reachable', Fb <> nil);
+    AssertEquals('A offset',  8,  Fa.Offset);  { after vptr }
+    AssertEquals('B offset', 12,  Fb.Offset);  { after A }
   finally
     Tab.Free;
     Iface.Free;

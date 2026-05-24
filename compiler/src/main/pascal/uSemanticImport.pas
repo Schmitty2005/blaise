@@ -103,6 +103,93 @@ begin
   if not ATable.Define(Sym) then Sym.Free;
 end;
 
+{ Resolve a class parent reference into the symbol table.  Returns nil
+  if AEntry has no parent (root) or if the parent name resolves to
+  something that is not a class. }
+function ResolveParentClassByName(const AParentName: string;
+                                  ATable: TSymbolTable): TRecordTypeDesc;
+var
+  Sym: TSymbol;
+begin
+  Result := nil;
+  if AParentName = '' then Exit;
+  Sym := ATable.Lookup(AParentName);
+  if (Sym = nil) or (Sym.Kind <> skType) then Exit;
+  if Sym.TypeDesc is TRecordTypeDesc then
+    Result := TRecordTypeDesc(Sym.TypeDesc);
+end;
+
+procedure RegisterClass(AEntry: TTypeEntry; ATable: TSymbolTable);
+var
+  ClassDef: TClassTypeDef;
+  RT:       TRecordTypeDesc;
+  ParentRT: TRecordTypeDesc;
+  ParentName: string;
+  Sym:      TSymbol;
+  FldSym:   TSymbol;
+  FldDecl:  TFieldDecl;
+  FldInfo:  TFieldInfo;
+  I, J:     Integer;
+begin
+  ClassDef := TClassTypeDef(AEntry.Def);
+  RT := ATable.NewClassType(AEntry.Name);
+
+  Sym := TSymbol.Create(AEntry.Name, skType, RT);
+  if not ATable.Define(Sym) then
+  begin
+    Sym.Free;
+    Exit;  { duplicate; skip — caller's responsibility }
+  end;
+
+  { Parent resolution mirrors uSemantic.AnalyseTypeDecls pass-2:
+    explicit ParentName → look it up; empty + not TObject → implicit
+    TObject.  The generic-interface-as-parent special case is not
+    handled here; that's a class-import edge case for 6c-C generics. }
+  ParentName := ClassDef.ParentName;
+  if ParentName <> '' then
+    ParentRT := ResolveParentClassByName(ParentName, ATable)
+  else if AEntry.Name <> 'TObject' then
+  begin
+    Sym := ATable.Lookup('TObject');
+    if (Sym <> nil) and (Sym.TypeDesc is TRecordTypeDesc) then
+      ParentRT := TRecordTypeDesc(Sym.TypeDesc)
+    else
+      ParentRT := nil;
+  end
+  else
+    ParentRT := nil;
+
+  if ParentRT <> nil then
+  begin
+    RT.Parent := ParentRT;
+    RT.CopyVTableFrom(ParentRT);
+    { Inherit parent fields so offsets continue past the parent. }
+    for I := 0 to ParentRT.Fields.Count - 1 do
+    begin
+      FldInfo := TFieldInfo(ParentRT.Fields.Items[I]);
+      RT.AddField(FldInfo.Name, FldInfo.TypeDesc);
+    end;
+  end;
+
+  { Own fields. }
+  for I := 0 to ClassDef.Fields.Count - 1 do
+  begin
+    FldDecl := TFieldDecl(ClassDef.Fields.Items[I]);
+    FldSym  := ATable.Lookup(FldDecl.TypeName);
+    if (FldSym = nil) or (FldSym.Kind <> skType) then
+      raise EImportError.CreateFmt(
+        'Class %s field type ''%s'' unresolved',
+        [AEntry.Name, FldDecl.TypeName]);
+    for J := 0 to FldDecl.Names.Count - 1 do
+      RT.AddField(FldDecl.Names.Strings[J], FldSym.TypeDesc);
+  end;
+
+  { TODO 6c-B-methods: TRoutineSig does not yet carry ImplName (the
+    QBE/LLVM symbol label).  Without it we cannot AddVTableSlot.
+    Imported classes therefore have no callable methods yet —
+    enough for layout-only consumers (typeinfo, field access). }
+end;
+
 procedure RegisterRecord(AEntry: TTypeEntry; ATable: TSymbolTable);
 var
   RecDef:   TRecordTypeDef;
@@ -178,9 +265,9 @@ begin
   for I := 0 to AIface.Types.Count - 1 do
   begin
     Entry := TTypeEntry(AIface.Types.Items[I]);
-    if Entry.IsClass or Entry.IsGeneric then
+    if Entry.IsGeneric then
       raise EImportError.CreateFmt(
-        'Class/generic import not implemented yet (6c-B/C): %s.%s',
+        'Generic import not implemented yet (6c-C): %s.%s',
         [AIface.Name, Entry.Name]);
 
     if Entry.Def is TEnumTypeDef then
@@ -189,6 +276,8 @@ begin
       RegisterSet(Entry, ATable)
     else if Entry.Def is TTypeAliasDef then
       RegisterAlias(Entry, ATable)
+    else if Entry.Def is TClassTypeDef then
+      RegisterClass(Entry, ATable)
     else if Entry.Def is TRecordTypeDef then
       RegisterRecord(Entry, ATable)
     else
