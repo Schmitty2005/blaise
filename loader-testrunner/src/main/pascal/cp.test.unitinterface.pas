@@ -258,6 +258,9 @@ type
     procedure TestDiskPath_Class_ImportsCleanly;
     procedure TestDiskPath_GenericClass_ImportsCleanly;
     procedure TestDiskPath_GenericRoutine_ImportsCleanly;
+    { Body survives the disk path — the AST body serialiser
+      preserves statements/expressions through write+read. }
+    procedure TestDiskPath_GenericRoutine_BodyPreserved;
   end;
 
   { ----- ImportUnitInterface round-trip (Phase 6c-A) -------------- }
@@ -3233,6 +3236,50 @@ begin
     AssertTrue('is TMethodDecl', Templ is TMethodDecl);
     AssertEquals('one type param', 1,
       TMethodDecl(Templ).TypeParams.Count);
+  finally
+    Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestDiskPath_GenericRoutine_BodyPreserved;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'function Identity<T>(V: T): T;' + #10 +
+    'implementation' + #10 +
+    'function Identity<T>(V: T): T;' + #10 +
+    'begin Result := V; end;' + #10 +
+    'end.' + #10;
+var
+  Tab:   TSymbolTable;
+  Iface: TUnitInterface;
+  MD:    TMethodDecl;
+  Comp:  TCompoundStmt;
+  Asn:   TAssignment;
+begin
+  DiskPathImport(SRC, Tab, Iface);
+  try
+    MD := TMethodDecl(Tab.FindGenericRoutine('Identity'));
+    AssertTrue('template registered', MD <> nil);
+    AssertTrue('body preserved through disk', MD.Body <> nil);
+    AssertTrue('at least one stmt', MD.Body.Stmts.Count >= 1);
+    { Walk past any wrapping TCompoundStmt nodes the parser produces
+      around 'begin … end;' to get at the actual assignment. }
+    Asn := nil;
+    if MD.Body.Stmts.Items[0] is TAssignment then
+      Asn := TAssignment(MD.Body.Stmts.Items[0])
+    else if MD.Body.Stmts.Items[0] is TCompoundStmt then
+    begin
+      Comp := TCompoundStmt(MD.Body.Stmts.Items[0]);
+      if (Comp.Stmts.Count >= 1) and (Comp.Stmts.Items[0] is TAssignment) then
+        Asn := TAssignment(Comp.Stmts.Items[0]);
+    end;
+    AssertTrue('found assignment somewhere', Asn <> nil);
+    AssertEquals('lhs Result', 'Result', Asn.Name);
+    AssertTrue('rhs is ident V', Asn.Expr is TIdentExpr);
+    AssertEquals('rhs name V', 'V', TIdentExpr(Asn.Expr).Name);
   finally
     Tab.Free;
     Iface.Free;

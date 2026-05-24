@@ -590,6 +590,250 @@ begin
   end;
 end;
 
+{ ----- AST body serialiser ---------------------------------------
+
+  Encodes TASTExpr / TASTStmt / TBlock trees inline within the
+  surrounding lpstr stream.  Each node is a sequence of lpstrs:
+    <kind lpstr>(<field>…)*
+  where kind is a short string tag and the field set depends on
+  the kind.  nil children are encoded as the kind 'nil'.
+
+  Scope: every node TASTSerializer.CloneExpr / CloneStmt accepts.
+  Anything new added to uAST will compile clean here but trip the
+  format-error fallback at read time — a structural change in the
+  AST needs a matching version bump in the wire format. }
+
+function EncodeExpr(AE: TASTExpr): string; forward;
+function EncodeStmt(AStmt: TASTStmt): string; forward;
+function EncodeBlock(AB: TBlock): string; forward;
+
+function EncodeExprList(AList: TObjectList): string;
+var
+  I: Integer;
+begin
+  Result := EncodeCount(AList.Count);
+  for I := 0 to AList.Count - 1 do
+    Result := Result + EncodeExpr(TASTExpr(AList.Items[I]));
+end;
+
+function EncodeStmtList(AList: TObjectList): string;
+var
+  I: Integer;
+begin
+  Result := EncodeCount(AList.Count);
+  for I := 0 to AList.Count - 1 do
+    Result := Result + EncodeStmt(TASTStmt(AList.Items[I]));
+end;
+
+function EncodeExpr(AE: TASTExpr): string;
+begin
+  if AE = nil then begin Result := EncodeLpstr('nil'); Exit; end;
+
+  if AE is TIntLiteral then
+    Result := EncodeLpstr('int') +
+              EncodeLpstr(IntToStr(TIntLiteral(AE).Value))
+  else if AE is TFloatLiteral then
+    Result := EncodeLpstr('float') +
+              EncodeLpstr(TFloatLiteral(AE).Value)
+  else if AE is TStringLiteral then
+    Result := EncodeLpstr('str') +
+              EncodeLpstr(TStringLiteral(AE).Value)
+  else if AE is TNilLiteral then
+    Result := EncodeLpstr('nillit')
+  else if AE is TIdentExpr then
+    Result := EncodeLpstr('id') +
+              EncodeLpstr(TIdentExpr(AE).Name)
+  else if AE is TBinaryExpr then
+    Result := EncodeLpstr('bin') +
+              EncodeLpstr(IntToStr(Ord(TBinaryExpr(AE).Op))) +
+              EncodeExpr(TBinaryExpr(AE).Left) +
+              EncodeExpr(TBinaryExpr(AE).Right)
+  else if AE is TNotExpr then
+    Result := EncodeLpstr('not') +
+              EncodeExpr(TNotExpr(AE).Expr)
+  else if AE is TFuncCallExpr then
+    Result := EncodeLpstr('call') +
+              EncodeLpstr(TFuncCallExpr(AE).Name) +
+              EncodeExprList(TFuncCallExpr(AE).Args)
+  else if AE is TMethodCallExpr then
+    Result := EncodeLpstr('mcall') +
+              EncodeLpstr(TMethodCallExpr(AE).ObjectName) +
+              EncodeLpstr(TMethodCallExpr(AE).Name) +
+              EncodeExpr(TMethodCallExpr(AE).ObjExpr) +
+              EncodeExprList(TMethodCallExpr(AE).Args)
+  else if AE is TFieldAccessExpr then
+    Result := EncodeLpstr('field') +
+              EncodeLpstr(TFieldAccessExpr(AE).RecordName) +
+              EncodeLpstr(TFieldAccessExpr(AE).FieldName) +
+              EncodeExpr(TFieldAccessExpr(AE).Base) +
+              EncodeExpr(TFieldAccessExpr(AE).PropIndexExpr)
+  else if AE is TDerefExpr then
+    Result := EncodeLpstr('deref') +
+              EncodeExpr(TDerefExpr(AE).Expr)
+  else if AE is TAddrOfExpr then
+    Result := EncodeLpstr('addr') +
+              EncodeExpr(TAddrOfExpr(AE).Expr)
+  else if AE is TStringSubscriptExpr then
+    Result := EncodeLpstr('ssub') +
+              EncodeExpr(TStringSubscriptExpr(AE).StrExpr) +
+              EncodeExpr(TStringSubscriptExpr(AE).IndexExpr)
+  else if AE is TArrayLiteralExpr then
+    Result := EncodeLpstr('alit') +
+              EncodeExprList(TArrayLiteralExpr(AE).Elements)
+  else if AE is TIsExpr then
+    Result := EncodeLpstr('isop') +
+              EncodeExpr(TIsExpr(AE).Obj) +
+              EncodeLpstr(TIsExpr(AE).TypeName)
+  else if AE is TAsExpr then
+    Result := EncodeLpstr('asop') +
+              EncodeExpr(TAsExpr(AE).Obj) +
+              EncodeLpstr(TAsExpr(AE).TypeName)
+  else if AE is TSupportsExpr then
+    Result := EncodeLpstr('supp') +
+              EncodeExpr(TSupportsExpr(AE).Obj) +
+              EncodeLpstr(TSupportsExpr(AE).IntfTypeName) +
+              EncodeLpstr(TSupportsExpr(AE).OutVarName)
+  else
+    raise EIfaceFormatError.Create(
+      'EncodeExpr: unhandled expression node ' + AE.ClassName);
+end;
+
+function EncodeExceptHandler(AH: TExceptHandlerClause): string;
+begin
+  Result := EncodeLpstr(AH.VarName) +
+            EncodeLpstr(AH.TypeName) +
+            EncodeStmt(AH.Body);
+end;
+
+function EncodeCaseBranch(AB: TCaseBranch): string;
+begin
+  Result := EncodeExprList(AB.Values) +
+            EncodeStmt(AB.Stmt);
+end;
+
+function EncodeStmt(AStmt: TASTStmt): string;
+var
+  I: Integer;
+  TES: TTryExceptStmt;
+  CS:  TCaseStmt;
+begin
+  if AStmt = nil then begin Result := EncodeLpstr('nil'); Exit; end;
+
+  if AStmt is TAssignment then
+    Result := EncodeLpstr('asn') +
+              EncodeLpstr(TAssignment(AStmt).Name) +
+              EncodeExpr(TAssignment(AStmt).Expr)
+  else if AStmt is TCompoundStmt then
+    Result := EncodeLpstr('comp') +
+              EncodeStmtList(TCompoundStmt(AStmt).Stmts)
+  else if AStmt is TIfStmt then
+    Result := EncodeLpstr('if') +
+              EncodeExpr(TIfStmt(AStmt).Condition) +
+              EncodeStmt(TIfStmt(AStmt).ThenStmt) +
+              EncodeStmt(TIfStmt(AStmt).ElseStmt)
+  else if AStmt is TWhileStmt then
+    Result := EncodeLpstr('while') +
+              EncodeExpr(TWhileStmt(AStmt).Condition) +
+              EncodeStmt(TWhileStmt(AStmt).Body)
+  else if AStmt is TRepeatStmt then
+    Result := EncodeLpstr('rep') +
+              EncodeStmt(TRepeatStmt(AStmt).Body) +
+              EncodeExpr(TRepeatStmt(AStmt).Condition)
+  else if AStmt is TForStmt then
+    Result := EncodeLpstr('for') +
+              EncodeLpstr(TForStmt(AStmt).VarName) +
+              EncodeExpr (TForStmt(AStmt).StartExpr) +
+              EncodeExpr (TForStmt(AStmt).EndExpr) +
+              EncodeBool (TForStmt(AStmt).IsDownTo) +
+              EncodeStmt (TForStmt(AStmt).Body)
+  else if AStmt is TForInStmt then
+    Result := EncodeLpstr('forin') +
+              EncodeLpstr(TForInStmt(AStmt).VarName) +
+              EncodeExpr (TForInStmt(AStmt).CollExpr) +
+              EncodeStmt (TForInStmt(AStmt).Body)
+  else if AStmt is TTryFinallyStmt then
+    Result := EncodeLpstr('tryfin') +
+              EncodeStmt(TTryFinallyStmt(AStmt).TryBody) +
+              EncodeStmt(TTryFinallyStmt(AStmt).FinallyBody)
+  else if AStmt is TTryExceptStmt then
+  begin
+    TES := TTryExceptStmt(AStmt);
+    Result := EncodeLpstr('tryex') +
+              EncodeStmt (TES.TryBody) +
+              EncodeCount(TES.Handlers.Count);
+    for I := 0 to TES.Handlers.Count - 1 do
+      Result := Result + EncodeExceptHandler(
+        TExceptHandlerClause(TES.Handlers.Items[I]));
+    Result := Result + EncodeStmt(TES.ElseBody) +
+                       EncodeStmt(TES.ExceptBody);
+  end
+  else if AStmt is TRaiseStmt then
+    Result := EncodeLpstr('raise') +
+              EncodeExpr(TRaiseStmt(AStmt).Expr)
+  else if AStmt is TExitStmt then
+    Result := EncodeLpstr('exit')
+  else if AStmt is TBreakStmt then
+    Result := EncodeLpstr('brk')
+  else if AStmt is TContinueStmt then
+    Result := EncodeLpstr('cont')
+  else if AStmt is TCaseStmt then
+  begin
+    CS := TCaseStmt(AStmt);
+    Result := EncodeLpstr('case') +
+              EncodeExpr (CS.Selector) +
+              EncodeCount(CS.Branches.Count);
+    for I := 0 to CS.Branches.Count - 1 do
+      Result := Result + EncodeCaseBranch(TCaseBranch(CS.Branches.Items[I]));
+    Result := Result + EncodeStmt(CS.ElseStmt);
+  end
+  else if AStmt is TFieldAssignment then
+    Result := EncodeLpstr('fasn') +
+              EncodeLpstr(TFieldAssignment(AStmt).RecordName) +
+              EncodeLpstr(TFieldAssignment(AStmt).FieldName) +
+              EncodeExpr (TFieldAssignment(AStmt).Expr) +
+              EncodeExpr (TFieldAssignment(AStmt).ObjExpr) +
+              EncodeExpr (TFieldAssignment(AStmt).PropIndexExpr)
+  else if AStmt is TStaticSubscriptAssign then
+    Result := EncodeLpstr('ssasn') +
+              EncodeLpstr(TStaticSubscriptAssign(AStmt).ArrayName) +
+              EncodeExpr (TStaticSubscriptAssign(AStmt).IndexExpr) +
+              EncodeExpr (TStaticSubscriptAssign(AStmt).ValueExpr)
+  else if AStmt is TPointerWriteStmt then
+    Result := EncodeLpstr('pw') +
+              EncodeExpr(TPointerWriteStmt(AStmt).PtrExpr) +
+              EncodeExpr(TPointerWriteStmt(AStmt).ValExpr)
+  else if AStmt is TProcCall then
+    Result := EncodeLpstr('pcall') +
+              EncodeLpstr(TProcCall(AStmt).Name) +
+              EncodeExprList(TProcCall(AStmt).Args)
+  else if AStmt is TMethodCallStmt then
+    Result := EncodeLpstr('mcs') +
+              EncodeLpstr(TMethodCallStmt(AStmt).ObjectName) +
+              EncodeLpstr(TMethodCallStmt(AStmt).Name) +
+              EncodeExpr (TMethodCallStmt(AStmt).ObjExpr) +
+              EncodeExprList(TMethodCallStmt(AStmt).Args)
+  else if AStmt is TInheritedCallStmt then
+    Result := EncodeLpstr('inh') +
+              EncodeLpstr(TInheritedCallStmt(AStmt).Name) +
+              EncodeExprList(TInheritedCallStmt(AStmt).Args)
+  else
+    raise EIfaceFormatError.Create(
+      'EncodeStmt: unhandled statement node ' + AStmt.ClassName);
+end;
+
+{ Block payload: flag, then a flattened list of statements.  Local
+  decls (type/const/var/proc) inside the block are NOT serialised
+  yet — bodies of generic free routines typically don't declare
+  nested types, and the importer doesn't currently re-emit nested
+  proc decls.  Add as needed; nil ABlock encodes as a single
+  'nil' lpstr. }
+function EncodeBlock(AB: TBlock): string;
+begin
+  if AB = nil then
+  begin Result := EncodeLpstr('nil'); Exit; end;
+  Result := EncodeLpstr('block') + EncodeStmtList(AB.Stmts);
+end;
+
 { Emit only generic free routines.  Generic class/interface
   templates are already in the TYPE block under 'generic-class' /
   'generic-interface' kinds — including those here would
@@ -620,7 +864,8 @@ begin
       SB.Add(
         EncodeLpstr(G.Name) +
         EncodeTypeParamList(G.TypeParams, G.Constraints) +
-        EncodeMethodDecl(G.MethodDecl));
+        EncodeMethodDecl(G.MethodDecl) +
+        EncodeBlock(G.MethodDecl.Body));
     end;
     SB.Add('END');
     Result := SB.Text;
@@ -912,6 +1157,393 @@ begin
   end;
 end;
 
+function ReadExpr(const AText: string; var APos: Integer): TASTExpr; forward;
+function ReadStmt(const AText: string; var APos: Integer): TASTStmt; forward;
+function ReadBlock(const AText: string; var APos: Integer): TBlock; forward;
+
+procedure ReadExprList(const AText: string; var APos: Integer;
+                       ATarget: TObjectList);
+var
+  C, I: Integer;
+begin
+  C := StrToInt(ReadLpstrAt(AText, APos));
+  for I := 1 to C do ATarget.Add(ReadExpr(AText, APos));
+end;
+
+procedure ReadStmtList(const AText: string; var APos: Integer;
+                       ATarget: TObjectList);
+var
+  C, I: Integer;
+begin
+  C := StrToInt(ReadLpstrAt(AText, APos));
+  for I := 1 to C do ATarget.Add(ReadStmt(AText, APos));
+end;
+
+function ReadExceptHandler(const AText: string; var APos: Integer):
+  TExceptHandlerClause;
+var
+  Body: TASTStmt;
+begin
+  Result := TExceptHandlerClause.Create;
+  Result.VarName  := ReadLpstrAt(AText, APos);
+  Result.TypeName := ReadLpstrAt(AText, APos);
+  Body := ReadStmt(AText, APos);
+  if Body is TCompoundStmt then
+    Result.Body := TCompoundStmt(Body)
+  else
+  begin
+    { Body always encoded via EncodeStmt of a TCompoundStmt — should
+      never see anything else.  Defensive: wrap. }
+    Result.Body := TCompoundStmt.Create;
+    if Body <> nil then Result.Body.Stmts.Add(Body);
+  end;
+end;
+
+function ReadCaseBranch(const AText: string; var APos: Integer): TCaseBranch;
+begin
+  Result := TCaseBranch.Create;
+  ReadExprList(AText, APos, Result.Values);
+  Result.Stmt := ReadStmt(AText, APos);
+end;
+
+function ReadExpr(const AText: string; var APos: Integer): TASTExpr;
+var
+  Kind: string;
+  IL:   TIntLiteral;
+  FL:   TFloatLiteral;
+  SL:   TStringLiteral;
+  IE:   TIdentExpr;
+  BE:   TBinaryExpr;
+  NE:   TNotExpr;
+  FCE:  TFuncCallExpr;
+  MCE:  TMethodCallExpr;
+  FA:   TFieldAccessExpr;
+  DE:   TDerefExpr;
+  AoE:  TAddrOfExpr;
+  SS:   TStringSubscriptExpr;
+  AL:   TArrayLiteralExpr;
+  IsE:  TIsExpr;
+  AsE:  TAsExpr;
+  SuE:  TSupportsExpr;
+begin
+  Kind := ReadLpstrAt(AText, APos);
+  if Kind = 'nil' then begin Result := nil; Exit; end;
+
+  if Kind = 'int' then
+  begin
+    IL := TIntLiteral.Create;
+    IL.Value := StrToInt64(ReadLpstrAt(AText, APos));
+    Result := IL;
+  end
+  else if Kind = 'float' then
+  begin
+    FL := TFloatLiteral.Create;
+    FL.Value := ReadLpstrAt(AText, APos);
+    Result := FL;
+  end
+  else if Kind = 'str' then
+  begin
+    SL := TStringLiteral.Create;
+    SL.Value := ReadLpstrAt(AText, APos);
+    Result := SL;
+  end
+  else if Kind = 'nillit' then
+    Result := TNilLiteral.Create
+  else if Kind = 'id' then
+  begin
+    IE := TIdentExpr.Create;
+    IE.Name := ReadLpstrAt(AText, APos);
+    Result := IE;
+  end
+  else if Kind = 'bin' then
+  begin
+    BE := TBinaryExpr.Create;
+    BE.Op    := TBinaryOp(StrToInt(ReadLpstrAt(AText, APos)));
+    BE.Left  := ReadExpr(AText, APos);
+    BE.Right := ReadExpr(AText, APos);
+    Result := BE;
+  end
+  else if Kind = 'not' then
+  begin
+    NE := TNotExpr.Create;
+    NE.Expr := ReadExpr(AText, APos);
+    Result := NE;
+  end
+  else if Kind = 'call' then
+  begin
+    FCE := TFuncCallExpr.Create;
+    FCE.Name := ReadLpstrAt(AText, APos);
+    ReadExprList(AText, APos, FCE.Args);
+    Result := FCE;
+  end
+  else if Kind = 'mcall' then
+  begin
+    MCE := TMethodCallExpr.Create;
+    MCE.ObjectName := ReadLpstrAt(AText, APos);
+    MCE.Name       := ReadLpstrAt(AText, APos);
+    MCE.ObjExpr    := ReadExpr(AText, APos);
+    ReadExprList(AText, APos, MCE.Args);
+    Result := MCE;
+  end
+  else if Kind = 'field' then
+  begin
+    FA := TFieldAccessExpr.Create;
+    FA.RecordName    := ReadLpstrAt(AText, APos);
+    FA.FieldName     := ReadLpstrAt(AText, APos);
+    FA.Base          := ReadExpr(AText, APos);
+    FA.PropIndexExpr := ReadExpr(AText, APos);
+    Result := FA;
+  end
+  else if Kind = 'deref' then
+  begin
+    DE := TDerefExpr.Create;
+    DE.Expr := ReadExpr(AText, APos);
+    Result := DE;
+  end
+  else if Kind = 'addr' then
+  begin
+    AoE := TAddrOfExpr.Create;
+    AoE.Expr := ReadExpr(AText, APos);
+    Result := AoE;
+  end
+  else if Kind = 'ssub' then
+  begin
+    SS := TStringSubscriptExpr.Create;
+    SS.StrExpr   := ReadExpr(AText, APos);
+    SS.IndexExpr := ReadExpr(AText, APos);
+    Result := SS;
+  end
+  else if Kind = 'alit' then
+  begin
+    AL := TArrayLiteralExpr.Create;
+    ReadExprList(AText, APos, AL.Elements);
+    Result := AL;
+  end
+  else if Kind = 'isop' then
+  begin
+    IsE := TIsExpr.Create;
+    IsE.Obj      := ReadExpr(AText, APos);
+    IsE.TypeName := ReadLpstrAt(AText, APos);
+    Result := IsE;
+  end
+  else if Kind = 'asop' then
+  begin
+    AsE := TAsExpr.Create;
+    AsE.Obj      := ReadExpr(AText, APos);
+    AsE.TypeName := ReadLpstrAt(AText, APos);
+    Result := AsE;
+  end
+  else if Kind = 'supp' then
+  begin
+    SuE := TSupportsExpr.Create;
+    SuE.Obj          := ReadExpr(AText, APos);
+    SuE.IntfTypeName := ReadLpstrAt(AText, APos);
+    SuE.OutVarName   := ReadLpstrAt(AText, APos);
+    Result := SuE;
+  end
+  else
+    raise EIfaceFormatError.Create(
+      'ReadExpr: unknown expression kind ''' + Kind + '''');
+end;
+
+function ReadStmt(const AText: string; var APos: Integer): TASTStmt;
+var
+  Kind: string;
+  ASn:  TAssignment;
+  CSn:  TCompoundStmt;
+  IFn:  TIfStmt;
+  WSn:  TWhileStmt;
+  RSn:  TRepeatStmt;
+  FSn:  TForStmt;
+  FISn: TForInStmt;
+  TFSn: TTryFinallyStmt;
+  TESn: TTryExceptStmt;
+  RaSn: TRaiseStmt;
+  CSSn: TCaseStmt;
+  FASn: TFieldAssignment;
+  SSAn: TStaticSubscriptAssign;
+  PWSn: TPointerWriteStmt;
+  PCn:  TProcCall;
+  MCSn: TMethodCallStmt;
+  ICSn: TInheritedCallStmt;
+  C, I: Integer;
+  Body: TASTStmt;
+begin
+  Kind := ReadLpstrAt(AText, APos);
+  if Kind = 'nil' then begin Result := nil; Exit; end;
+
+  if Kind = 'asn' then
+  begin
+    ASn := TAssignment.Create;
+    ASn.Name := ReadLpstrAt(AText, APos);
+    ASn.Expr := ReadExpr(AText, APos);
+    Result := ASn;
+  end
+  else if Kind = 'comp' then
+  begin
+    CSn := TCompoundStmt.Create;
+    ReadStmtList(AText, APos, CSn.Stmts);
+    Result := CSn;
+  end
+  else if Kind = 'if' then
+  begin
+    IFn := TIfStmt.Create;
+    IFn.Condition := ReadExpr(AText, APos);
+    IFn.ThenStmt  := ReadStmt(AText, APos);
+    IFn.ElseStmt  := ReadStmt(AText, APos);
+    Result := IFn;
+  end
+  else if Kind = 'while' then
+  begin
+    WSn := TWhileStmt.Create;
+    WSn.Condition := ReadExpr(AText, APos);
+    WSn.Body      := ReadStmt(AText, APos);
+    Result := WSn;
+  end
+  else if Kind = 'rep' then
+  begin
+    RSn := TRepeatStmt.Create;
+    Body := ReadStmt(AText, APos);
+    if Body is TCompoundStmt then
+      RSn.Body := TCompoundStmt(Body)
+    else
+    begin
+      RSn.Body := TCompoundStmt.Create;
+      if Body <> nil then RSn.Body.Stmts.Add(Body);
+    end;
+    RSn.Condition := ReadExpr(AText, APos);
+    Result := RSn;
+  end
+  else if Kind = 'for' then
+  begin
+    FSn := TForStmt.Create;
+    FSn.VarName   := ReadLpstrAt(AText, APos);
+    FSn.StartExpr := ReadExpr(AText, APos);
+    FSn.EndExpr   := ReadExpr(AText, APos);
+    FSn.IsDownTo  := DecodeBool(AText, APos);
+    FSn.Body      := ReadStmt(AText, APos);
+    Result := FSn;
+  end
+  else if Kind = 'forin' then
+  begin
+    FISn := TForInStmt.Create;
+    FISn.VarName  := ReadLpstrAt(AText, APos);
+    FISn.CollExpr := ReadExpr(AText, APos);
+    FISn.Body     := ReadStmt(AText, APos);
+    Result := FISn;
+  end
+  else if Kind = 'tryfin' then
+  begin
+    TFSn := TTryFinallyStmt.Create;
+    Body := ReadStmt(AText, APos);
+    if Body is TCompoundStmt then TFSn.TryBody := TCompoundStmt(Body)
+                              else TFSn.TryBody := TCompoundStmt.Create;
+    Body := ReadStmt(AText, APos);
+    if Body is TCompoundStmt then TFSn.FinallyBody := TCompoundStmt(Body)
+                              else TFSn.FinallyBody := TCompoundStmt.Create;
+    Result := TFSn;
+  end
+  else if Kind = 'tryex' then
+  begin
+    TESn := TTryExceptStmt.Create;
+    Body := ReadStmt(AText, APos);
+    if Body is TCompoundStmt then TESn.TryBody := TCompoundStmt(Body)
+                              else TESn.TryBody := TCompoundStmt.Create;
+    C := StrToInt(ReadLpstrAt(AText, APos));
+    for I := 1 to C do
+      TESn.Handlers.Add(ReadExceptHandler(AText, APos));
+    Body := ReadStmt(AText, APos);
+    if Body is TCompoundStmt then TESn.ElseBody := TCompoundStmt(Body)
+                              else TESn.ElseBody := nil;
+    Body := ReadStmt(AText, APos);
+    if Body is TCompoundStmt then TESn.ExceptBody := TCompoundStmt(Body)
+                              else TESn.ExceptBody := nil;
+    Result := TESn;
+  end
+  else if Kind = 'raise' then
+  begin
+    RaSn := TRaiseStmt.Create;
+    RaSn.Expr := ReadExpr(AText, APos);
+    Result := RaSn;
+  end
+  else if Kind = 'exit' then Result := TExitStmt.Create
+  else if Kind = 'brk'  then Result := TBreakStmt.Create
+  else if Kind = 'cont' then Result := TContinueStmt.Create
+  else if Kind = 'case' then
+  begin
+    CSSn := TCaseStmt.Create;
+    CSSn.Selector := ReadExpr(AText, APos);
+    C := StrToInt(ReadLpstrAt(AText, APos));
+    for I := 1 to C do
+      CSSn.Branches.Add(ReadCaseBranch(AText, APos));
+    CSSn.ElseStmt := ReadStmt(AText, APos);
+    Result := CSSn;
+  end
+  else if Kind = 'fasn' then
+  begin
+    FASn := TFieldAssignment.Create;
+    FASn.RecordName    := ReadLpstrAt(AText, APos);
+    FASn.FieldName     := ReadLpstrAt(AText, APos);
+    FASn.Expr          := ReadExpr(AText, APos);
+    FASn.ObjExpr       := ReadExpr(AText, APos);
+    FASn.PropIndexExpr := ReadExpr(AText, APos);
+    Result := FASn;
+  end
+  else if Kind = 'ssasn' then
+  begin
+    SSAn := TStaticSubscriptAssign.Create;
+    SSAn.ArrayName := ReadLpstrAt(AText, APos);
+    SSAn.IndexExpr := ReadExpr(AText, APos);
+    SSAn.ValueExpr := ReadExpr(AText, APos);
+    Result := SSAn;
+  end
+  else if Kind = 'pw' then
+  begin
+    PWSn := TPointerWriteStmt.Create;
+    PWSn.PtrExpr := ReadExpr(AText, APos);
+    PWSn.ValExpr := ReadExpr(AText, APos);
+    Result := PWSn;
+  end
+  else if Kind = 'pcall' then
+  begin
+    PCn := TProcCall.Create;
+    PCn.Name := ReadLpstrAt(AText, APos);
+    ReadExprList(AText, APos, PCn.Args);
+    Result := PCn;
+  end
+  else if Kind = 'mcs' then
+  begin
+    MCSn := TMethodCallStmt.Create;
+    MCSn.ObjectName := ReadLpstrAt(AText, APos);
+    MCSn.Name       := ReadLpstrAt(AText, APos);
+    MCSn.ObjExpr    := ReadExpr(AText, APos);
+    ReadExprList(AText, APos, MCSn.Args);
+    Result := MCSn;
+  end
+  else if Kind = 'inh' then
+  begin
+    ICSn := TInheritedCallStmt.Create;
+    ICSn.Name := ReadLpstrAt(AText, APos);
+    ReadExprList(AText, APos, ICSn.Args);
+    Result := ICSn;
+  end
+  else
+    raise EIfaceFormatError.Create(
+      'ReadStmt: unknown statement kind ''' + Kind + '''');
+end;
+
+function ReadBlock(const AText: string; var APos: Integer): TBlock;
+var
+  Kind: string;
+begin
+  Kind := ReadLpstrAt(AText, APos);
+  if Kind = 'nil' then begin Result := nil; Exit; end;
+  if Kind <> 'block' then
+    raise EIfaceFormatError.Create('ReadBlock: expected ''block'' got ''' + Kind + '''');
+  Result := TBlock.Create;
+  ReadStmtList(AText, APos, Result.Stmts);
+end;
+
 function DecodeCount(const AText: string; var APos: Integer): Integer;
 begin
   Result := StrToInt(ReadLpstrAt(AText, APos));
@@ -1091,6 +1723,8 @@ begin
     MD.TypeParams := TStringList.Create;
     for J := 0 to G.TypeParams.Count - 1 do
       MD.TypeParams.Add(G.TypeParams.Strings[J]);
+    MD.Body := ReadBlock(AText, APos);
+    if MD.Body <> nil then MD.OwnBody := True;
     G.MethodDecl := MD;
     AIface.AddGenericBody(G);
   end;
