@@ -176,14 +176,16 @@ end;
   belong in follow-up commits along with inline + generic bodies. }
 function TypeEntryKind(AEntry: TTypeEntry): string;
 begin
-  if      AEntry.Def is TEnumTypeDef       then Result := 'enum'
-  else if AEntry.Def is TSetTypeDef        then Result := 'set'
-  else if AEntry.Def is TTypeAliasDef      then Result := 'alias'
-  else if AEntry.Def is TRecordTypeDef     then Result := 'record'
-  else if AEntry.Def is TClassTypeDef      then Result := 'class'
-  else if AEntry.Def is TInterfaceTypeDef  then Result := 'interface'
-  else if AEntry.Def is TProceduralTypeDef then Result := 'proc'
-  else                                          Result := '';
+  if      AEntry.Def is TEnumTypeDef         then Result := 'enum'
+  else if AEntry.Def is TSetTypeDef          then Result := 'set'
+  else if AEntry.Def is TTypeAliasDef        then Result := 'alias'
+  else if AEntry.Def is TRecordTypeDef       then Result := 'record'
+  else if AEntry.Def is TClassTypeDef        then Result := 'class'
+  else if AEntry.Def is TInterfaceTypeDef    then Result := 'interface'
+  else if AEntry.Def is TProceduralTypeDef   then Result := 'proc'
+  else if AEntry.Def is TGenericTypeDef      then Result := 'generic-class'
+  else if AEntry.Def is TGenericInterfaceDef then Result := 'generic-interface'
+  else                                            Result := '';
 end;
 
 { ----- TYPE-block payload helpers --------------------------------
@@ -338,6 +340,85 @@ begin
     Result := Result + EncodeMethodDecl(TMethodDecl(AList.Items[I]));
 end;
 
+{ Encode <count> followed by <count> (name, constraint) pairs.  Used
+  by both generic-class and generic-interface payloads. }
+function EncodeTypeParamList(ANames, AConstraints: TStringList): string;
+var
+  I: Integer;
+  Constraint: string;
+begin
+  Result := EncodeCount(ANames.Count);
+  for I := 0 to ANames.Count - 1 do
+  begin
+    if (AConstraints <> nil) and (I < AConstraints.Count) then
+      Constraint := AConstraints.Strings[I]
+    else
+      Constraint := '';
+    Result := Result + EncodeLpstr(ANames.Strings[I]) + EncodeLpstr(Constraint);
+  end;
+end;
+
+function WriteGenericClassPayload(AEntry: TTypeEntry): string;
+var
+  Def:      TGenericTypeDef;
+  ClassDef: TClassTypeDef;
+  J:        Integer;
+  M:        TMethodDecl;
+begin
+  Def := TGenericTypeDef(AEntry.Def);
+  ClassDef := Def.ClassDef;
+  Result := EncodeTypeParamList(Def.ParamNames, Def.ParamConstraints);
+  if ClassDef <> nil then
+  begin
+    { Same payload shape as a regular class — uSemanticExport ran
+      PopulateClassEntry on the inner ClassDef, so the AEntry-level
+      ParentClass / Implements / Attributes / Methods are already
+      populated.  InstanceSize stays 0 for the template (no
+      concrete layout until instantiation). }
+    Result := Result +
+              EncodeQualRefParts(AEntry.ParentClass.UnitName,
+                                 AEntry.ParentClass.TypeName) +
+              EncodeLpstr(IntToStr(AEntry.InstanceSize)) +
+              EncodeStringList(AEntry.Attributes) +
+              EncodeStringList(AEntry.Implements) +
+              EncodeFieldList(ClassDef.Fields) +
+              EncodeMethodList(AEntry.Methods);
+    { Method bodies, parallel to the method list.  Consumers need
+      these to instantiate the template against a concrete type
+      argument (the body gets cloned and re-analysed with T bound
+      to the concrete type). }
+    for J := 0 to ClassDef.Methods.Count - 1 do
+    begin
+      M := TMethodDecl(ClassDef.Methods.Items[J]);
+      Result := Result + EncodeBlock(M.Body);
+    end;
+  end
+  else
+    { Defensive: encode "has-body" flag = false so the reader can
+      detect a templates-without-bodies case without throwing. }
+    Result := Result +
+              EncodeQualRefParts('', '') +
+              EncodeLpstr('0') +
+              EncodeCount(0) + EncodeCount(0) +
+              EncodeCount(0) + EncodeCount(0);
+end;
+
+function WriteGenericInterfacePayload(AEntry: TTypeEntry): string;
+var
+  Def:     TGenericInterfaceDef;
+  IntfDef: TInterfaceTypeDef;
+begin
+  Def := TGenericInterfaceDef(AEntry.Def);
+  IntfDef := Def.IntfDef;
+  Result := EncodeTypeParamList(Def.ParamNames, Def.ParamConstraints);
+  if IntfDef <> nil then
+    Result := Result +
+              EncodeLpstr(IntfDef.ParentName) +
+              EncodeMethodDeclList(IntfDef.Methods)
+  else
+    Result := Result + EncodeLpstr('') + EncodeCount(0);
+end;
+
 function WriteProcPayload(AEntry: TTypeEntry): string;
 var
   Def: TProceduralTypeDef;
@@ -416,10 +497,18 @@ begin
         SB.Add(EncodeLpstr('interface') +
                EncodeLpstr(E.Name) +
                WriteInterfacePayload(E))
-      else { proc }
+      else if Kind = 'proc' then
         SB.Add(EncodeLpstr('proc') +
                EncodeLpstr(E.Name) +
-               WriteProcPayload(E));
+               WriteProcPayload(E))
+      else if Kind = 'generic-class' then
+        SB.Add(EncodeLpstr('generic-class') +
+               EncodeLpstr(E.Name) +
+               WriteGenericClassPayload(E))
+      else { generic-interface }
+        SB.Add(EncodeLpstr('generic-interface') +
+               EncodeLpstr(E.Name) +
+               WriteGenericInterfacePayload(E));
     end;
     SB.Add('END');
     Result := SB.Text;
@@ -912,6 +1001,101 @@ begin
     raise EIfaceFormatError.Create('META block: missing END marker');
 end;
 
+procedure ReadTypeParamList(const AText: string; var APos: Integer;
+                            ANames, AConstraints: TStringList);
+var
+  C, I: Integer;
+begin
+  C := DecodeCount(AText, APos);
+  for I := 1 to C do
+  begin
+    ANames.Add(ReadLpstrAt(AText, APos));
+    AConstraints.Add(ReadLpstrAt(AText, APos));
+  end;
+end;
+
+procedure ReadGenericClassPayload(const AText: string; var APos: Integer;
+                                  AEntry: TTypeEntry);
+var
+  Def:      TGenericTypeDef;
+  ClassDef: TClassTypeDef;
+  RefStr:   string;
+  RefUnit:  string;
+  RefType:  string;
+  J, K:     Integer;
+  Sig:      TRoutineSig;
+  MD:       TMethodDecl;
+  SrcPar:   TMethodParam;
+  NewPar:   TMethodParam;
+begin
+  Def := TGenericTypeDef.Create;
+  ReadTypeParamList(AText, APos, Def.ParamNames, Def.ParamConstraints);
+
+  { Inner ClassDef: the ctor already created an empty one — free
+    it and rebuild from the wire. }
+  Def.ClassDef.Free;
+  ClassDef := TClassTypeDef.Create;
+  Def.ClassDef := ClassDef;
+
+  RefStr := ReadLpstrAt(AText, APos);
+  DecodeQualRef(RefStr, RefUnit, RefType);
+  AEntry.ParentClass  := MakeQualRef(RefUnit, RefType);
+  ClassDef.ParentName := RefType;
+  AEntry.InstanceSize := StrToInt64(ReadLpstrAt(AText, APos));
+  ReadStringListBlock(AText, APos, AEntry.Attributes);
+  ReadStringListBlock(AText, APos, AEntry.Implements);
+  ReadFieldList(AText, APos, ClassDef.Fields);
+  ReadMethodList(AText, APos, AEntry.Methods);
+
+  { Method bodies — parallel to AEntry.Methods, attached to
+    ClassDef.Methods as full TMethodDecl objects so InstantiateGeneric
+    can clone + substitute when the consumer references this template. }
+  for J := 0 to AEntry.Methods.Count - 1 do
+  begin
+    Sig := TRoutineSig(AEntry.Methods.Items[J]);
+    MD := TMethodDecl.Create;
+    MD.Name           := Sig.Name;
+    MD.OwnerTypeName  := AEntry.Name;
+    MD.IsVirtual      := Sig.IsVirtual;
+    MD.IsOverride     := Sig.IsOverride;
+    MD.ReturnTypeName := Sig.ReturnType.TypeName;
+    for K := 0 to Sig.Params.Count - 1 do
+    begin
+      SrcPar := TMethodParam(Sig.Params.Items[K]);
+      NewPar := TMethodParam.Create;
+      NewPar.ParamName    := SrcPar.ParamName;
+      NewPar.TypeName     := SrcPar.TypeName;
+      NewPar.IsVarParam   := SrcPar.IsVarParam;
+      NewPar.IsConstParam := SrcPar.IsConstParam;
+      NewPar.IsOpenArray  := SrcPar.IsOpenArray;
+      MD.Params.Add(NewPar);
+    end;
+    MD.Body := ReadBlock(AText, APos);
+    MD.OwnBody := MD.Body <> nil;
+    ClassDef.Methods.Add(MD);
+  end;
+
+  AEntry.IsGeneric := True;
+  AEntry.Def       := Def;
+end;
+
+procedure ReadGenericInterfacePayload(const AText: string; var APos: Integer;
+                                      AEntry: TTypeEntry);
+var
+  Def:     TGenericInterfaceDef;
+  IntfDef: TInterfaceTypeDef;
+begin
+  Def := TGenericInterfaceDef.Create;
+  ReadTypeParamList(AText, APos, Def.ParamNames, Def.ParamConstraints);
+  Def.IntfDef.Free;
+  IntfDef := TInterfaceTypeDef.Create;
+  Def.IntfDef := IntfDef;
+  IntfDef.ParentName := ReadLpstrAt(AText, APos);
+  ReadMethodDeclList(AText, APos, IntfDef.Methods);
+  AEntry.IsGeneric := True;
+  AEntry.Def       := Def;
+end;
+
 procedure ReadProcPayload(const AText: string; var APos: Integer;
                           AEntry: TTypeEntry);
 var
@@ -998,6 +1182,10 @@ begin
       ReadInterfacePayload(AText, APos, Entry)
     else if Kind = 'proc' then
       ReadProcPayload(AText, APos, Entry)
+    else if Kind = 'generic-class' then
+      ReadGenericClassPayload(AText, APos, Entry)
+    else if Kind = 'generic-interface' then
+      ReadGenericInterfacePayload(AText, APos, Entry)
     else
     begin
       Entry.Free;

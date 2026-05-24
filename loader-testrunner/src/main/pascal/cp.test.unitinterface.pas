@@ -248,6 +248,8 @@ type
     procedure TestRoundTrip_Interface;
     procedure TestRoundTrip_ProceduralType;
     procedure TestRoundTrip_Metadata_UsedUnits_SourceFile;
+    procedure TestRoundTrip_GenericClass_TemplateParams;
+    procedure TestRoundTrip_GenericInterface_TemplateParams;
   end;
 
   { ----- ImportUnitInterface round-trip (Phase 6c-A) -------------- }
@@ -2994,6 +2996,76 @@ begin
     end;
   finally
     Src.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_GenericClass_TemplateParams;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TBox<T> = class V: T; end;' + #10 +
+    'implementation end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  E:            TTypeEntry;
+  Def:          TGenericTypeDef;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      E := Round.FindType('TBox');
+      AssertTrue('TBox present', E <> nil);
+      AssertTrue('IsGeneric flagged', E.IsGeneric);
+      AssertTrue('Def is TGenericTypeDef', E.Def is TGenericTypeDef);
+      Def := TGenericTypeDef(E.Def);
+      AssertEquals('1 type param', 1, Def.ParamNames.Count);
+      AssertEquals('param name', 'T', Def.ParamNames.Strings[0]);
+      AssertTrue('inner ClassDef present', Def.ClassDef <> nil);
+      AssertEquals('1 field on template', 1, Def.ClassDef.Fields.Count);
+    finally
+      Round.Free;
+    end;
+  finally
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_GenericInterface_TemplateParams;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type IBox<T> = interface' + #10 +
+    '  function Get: T;' + #10 +
+    'end;' + #10 +
+    'implementation end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  E:            TTypeEntry;
+  Def:          TGenericInterfaceDef;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      E := Round.FindType('IBox');
+      AssertTrue('IBox present', E <> nil);
+      AssertTrue('Def is TGenericInterfaceDef', E.Def is TGenericInterfaceDef);
+      Def := TGenericInterfaceDef(E.Def);
+      AssertEquals('1 type param', 1, Def.ParamNames.Count);
+      AssertTrue('inner IntfDef present', Def.IntfDef <> nil);
+      AssertEquals('1 method on template', 1, Def.IntfDef.Methods.Count);
+    finally
+      Round.Free;
+    end;
+  finally
+    Iface.Free;
   end;
 end;
 
