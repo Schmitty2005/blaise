@@ -128,9 +128,14 @@ begin
   U := nil;
   try
     U := LoadOne(Path);
-    { Post-order DFS: process dependencies before this unit }
+    { Post-order DFS: process dependencies before this unit.
+      Both interface- and implementation-section uses are loaded —
+      they are stored on separate lists since the parser was
+      taught to split them, but the loader still needs both. }
     for I := 0 to U.UsedUnits.Count - 1 do
       LoadTransitive(U.UsedUnits.Strings[I]);
+    for I := 0 to U.ImplUsedUnits.Count - 1 do
+      LoadTransitive(U.ImplUsedUnits.Strings[I]);
     { Append this unit after all its dependencies }
     FResult.Add(U);
     FLoadedNames.Add(AName);

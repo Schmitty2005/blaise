@@ -647,6 +647,7 @@ type
       enclosing standalone proc/function (nil for top-level decls). }
     CapturedVars:  TStringList; { owned; nil when no captures }
     [Unretained] EnclosingDecl: TMethodDecl; { not owned — enclosing standalone proc, or nil }
+    IsInline: Boolean; { set by uParser — 'inline' directive present }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -831,7 +832,9 @@ type
   public
     Name:        string;
     SourceFile:  string;       { absolute path of the .pas file this unit was loaded from }
-    UsedUnits:   TStringList; { owned — unit names from the interface uses clause }
+    UsedUnits:     TStringList; { owned — unit names from the interface uses clause }
+    ImplUsedUnits: TStringList; { owned — unit names from the implementation
+                                  uses clause (loaded but not re-exported) }
     IntfBlock:   TBlock;      { owned — forward decls + type decls }
     ImplBlock:   TBlock;      { owned — full implementations }
     InitStmts:   TObjectList; { owned — statements in the initialization section (may be nil) }
@@ -857,6 +860,16 @@ function IsComparisonOp(AOp: TBinaryOp): Boolean;
 function CloneExpr(AExpr: TASTExpr): TASTExpr;
 function CloneStmt(AStmt: TASTStmt): TASTStmt;
 function CloneBlock(ABlock: TBlock): TBlock;
+
+{ Granular clone helpers — exposed for uSemanticExport to assemble
+  TUnitInterface entries without re-implementing the cloning logic.
+  Same deep-copy semantics as CloneBlock: structural + raw textual
+  fields are copied, semantic Resolved* annotations are NOT. }
+function CloneTypeDecl(ASrc: TTypeDecl): TTypeDecl;
+function CloneConstDecl(ASrc: TConstDecl): TConstDecl;
+function CloneMethodDecl(ASrc: TMethodDecl): TMethodDecl;
+function CloneMethodParam(ASrc: TMethodParam): TMethodParam;
+function CloneTypeDef(ASrc: TASTTypeDef): TASTTypeDef;
 
 implementation
 
@@ -1493,7 +1506,8 @@ end;
 constructor TUnit.Create;
 begin
   inherited Create;
-  UsedUnits  := TStringList.Create;
+  UsedUnits     := TStringList.Create;
+  ImplUsedUnits := TStringList.Create;
   IntfBlock  := TBlock.Create;
   ImplBlock  := TBlock.Create;
   InitStmts  := nil;
@@ -1515,11 +1529,12 @@ end;
 
 function CloneVarDecl(ASrc: TVarDecl): TVarDecl; forward;
 function CloneFieldDecl(ASrc: TFieldDecl): TFieldDecl; forward;
-function CloneTypeDecl(ASrc: TTypeDecl): TTypeDecl; forward;
-function CloneConstDecl(ASrc: TConstDecl): TConstDecl; forward;
-function CloneMethodParam(ASrc: TMethodParam): TMethodParam; forward;
-function CloneMethodDecl(ASrc: TMethodDecl): TMethodDecl; forward;
-function CloneTypeDef(ASrc: TASTTypeDef): TASTTypeDef; forward;
+{ CloneTypeDecl, CloneConstDecl, CloneMethodDecl, CloneMethodParam,
+  CloneTypeDef are now declared in the interface section. }
+function CloneClassTypeDef(ASrc: TClassTypeDef): TClassTypeDef; forward;
+function CloneGenericTypeDef(ASrc: TGenericTypeDef): TGenericTypeDef; forward;
+function CloneInterfaceTypeDef(ASrc: TInterfaceTypeDef): TInterfaceTypeDef; forward;
+function CloneProceduralTypeDef(ASrc: TProceduralTypeDef): TProceduralTypeDef; forward;
 function CloneExceptHandler(ASrc: TExceptHandlerClause): TExceptHandlerClause; forward;
 function CloneCaseBranch(ASrc: TCaseBranch): TCaseBranch; forward;
 function CloneCompound(ASrc: TCompoundStmt): TCompoundStmt; forward;
@@ -2088,14 +2103,94 @@ begin
       RT.Methods.Add(CloneMethodDecl(TMethodDecl(TRecordTypeDef(ASrc).Methods.Items[I])));
     Result := RT;
   end
+  else if ASrc is TClassTypeDef then
+  begin
+    Result := CloneClassTypeDef(TClassTypeDef(ASrc));
+  end
+  else if ASrc is TGenericTypeDef then
+  begin
+    Result := CloneGenericTypeDef(TGenericTypeDef(ASrc));
+  end
+  else if ASrc is TInterfaceTypeDef then
+  begin
+    Result := CloneInterfaceTypeDef(TInterfaceTypeDef(ASrc));
+  end
+  else if ASrc is TProceduralTypeDef then
+  begin
+    Result := CloneProceduralTypeDef(TProceduralTypeDef(ASrc));
+  end
   else
-    { Class, generic, interface, procedural defs do not legally appear nested
-      inside a method body — fail loudly so we notice if that changes. }
     raise Exception.CreateFmt(
-      'CloneTypeDef: unsupported nested type def %s', [ASrc.ClassName]);
+      'CloneTypeDef: unsupported type def %s', [ASrc.ClassName]);
 
   Result.Line := ASrc.Line;
   Result.Col  := ASrc.Col;
+end;
+
+function CloneClassTypeDef(ASrc: TClassTypeDef): TClassTypeDef;
+var
+  I: Integer;
+begin
+  if ASrc = nil then begin Result := nil; Exit; end;
+  Result := TClassTypeDef.Create;
+  Result.ParentName := ASrc.ParentName;
+  for I := 0 to ASrc.ImplementsNames.Count - 1 do
+    Result.ImplementsNames.Add(ASrc.ImplementsNames.Strings[I]);
+  for I := 0 to ASrc.ConstDecls.Count - 1 do
+    Result.ConstDecls.Add(CloneConstDecl(TConstDecl(ASrc.ConstDecls.Items[I])));
+  for I := 0 to ASrc.Fields.Count - 1 do
+    Result.Fields.Add(CloneFieldDecl(TFieldDecl(ASrc.Fields.Items[I])));
+  for I := 0 to ASrc.Methods.Count - 1 do
+    Result.Methods.Add(CloneMethodDecl(TMethodDecl(ASrc.Methods.Items[I])));
+  for I := 0 to ASrc.Attributes.Count - 1 do
+    Result.Attributes.Add(ASrc.Attributes.Strings[I]);
+  { Properties intentionally NOT cloned in this Phase 2 cut —
+    TPropertyDecl is plain data with no owned subtrees, but no
+    current consumer requires it; revisit when Phase 3 wires class
+    member export. }
+end;
+
+function CloneGenericTypeDef(ASrc: TGenericTypeDef): TGenericTypeDef;
+var
+  I: Integer;
+begin
+  if ASrc = nil then begin Result := nil; Exit; end;
+  Result := TGenericTypeDef.Create;
+  for I := 0 to ASrc.ParamNames.Count - 1 do
+  begin
+    Result.ParamNames.Add(ASrc.ParamNames.Strings[I]);
+    if I < ASrc.ParamConstraints.Count then
+      Result.ParamConstraints.Add(ASrc.ParamConstraints.Strings[I])
+    else
+      Result.ParamConstraints.Add('');
+  end;
+  { Replace the autoctor's blank ClassDef with a real clone. }
+  Result.ClassDef.Free;
+  Result.ClassDef := CloneClassTypeDef(ASrc.ClassDef);
+end;
+
+function CloneInterfaceTypeDef(ASrc: TInterfaceTypeDef): TInterfaceTypeDef;
+var
+  I: Integer;
+begin
+  if ASrc = nil then begin Result := nil; Exit; end;
+  Result := TInterfaceTypeDef.Create;
+  Result.ParentName := ASrc.ParentName;
+  for I := 0 to ASrc.Methods.Count - 1 do
+    Result.Methods.Add(CloneMethodDecl(TMethodDecl(ASrc.Methods.Items[I])));
+end;
+
+function CloneProceduralTypeDef(ASrc: TProceduralTypeDef): TProceduralTypeDef;
+var
+  I: Integer;
+begin
+  if ASrc = nil then begin Result := nil; Exit; end;
+  Result := TProceduralTypeDef.Create;
+  Result.ReturnTypeName := ASrc.ReturnTypeName;
+  Result.IsFunction     := ASrc.IsFunction;
+  Result.IsMethodPtr    := ASrc.IsMethodPtr;
+  for I := 0 to ASrc.Params.Count - 1 do
+    Result.Params.Add(CloneMethodParam(TMethodParam(ASrc.Params.Items[I])));
 end;
 
 function CloneBlock(ABlock: TBlock): TBlock;

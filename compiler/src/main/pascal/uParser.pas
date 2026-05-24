@@ -1527,6 +1527,8 @@ begin
                SameText(FCurrent.Value, 'platform')    or
                SameText(FCurrent.Value, 'experimental')) then
       begin
+        if SameText(FCurrent.Value, 'inline') then
+          Result.IsInline := True;
         Advance;
         if Check(tkSemicolon) then Advance;
       end
@@ -2899,6 +2901,8 @@ begin
                SameText(FCurrent.Value, 'platform')    or
                SameText(FCurrent.Value, 'experimental')) then
       begin
+        if SameText(FCurrent.Value, 'inline') then
+          Result.IsInline := True;
         Advance;
         if Check(tkSemicolon) then Advance;
       end
@@ -2961,7 +2965,7 @@ begin
     { Implementation section }
     Expect(tkImplementation);
     if Check(tkUses) then
-      ParseUsesList(Result.UsedUnits);  { implementation-only deps — loaded but not re-exported }
+      ParseUsesList(Result.ImplUsedUnits);  { implementation-only deps — loaded but not re-exported }
     while Check(tkProcedure) or Check(tkFunction) or
           Check(tkConstructor) or Check(tkDestructor) or
           Check(tkVar) or Check(tkConst) or Check(tkType) do
