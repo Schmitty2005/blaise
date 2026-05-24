@@ -243,6 +243,9 @@ type
     procedure TestRoundTrip_RealSource_AllSimpleKinds;
     { File wrappers. }
     procedure TestRoundTrip_ViaFile;
+    procedure TestRoundTrip_Record;
+    procedure TestRoundTrip_Class_WithVirtualMethod;
+    procedure TestRoundTrip_Interface;
   end;
 
   { ----- ImportUnitInterface round-trip (Phase 6c-A) -------------- }
@@ -2794,6 +2797,132 @@ begin
     try
       AssertEquals('K value',
         Int64(7), Round.FindConst('K').Decl.IntVal);
+    finally
+      Round.Free;
+    end;
+  finally
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_Record;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TPoint = record X, Y: Integer; end;' + #10 +
+    'implementation end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  E:            TTypeEntry;
+  Def:          TRecordTypeDef;
+  F0, F1:       TFieldDecl;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      E := Round.FindType('TPoint');
+      AssertTrue('TPoint present', E <> nil);
+      AssertTrue('is record', E.Def is TRecordTypeDef);
+      Def := TRecordTypeDef(E.Def);
+      { Multi-name decl 'X, Y: Integer' was flattened to one
+        TFieldDecl per name on the wire — reader produces two
+        single-name TFieldDecls in order. }
+      AssertEquals('2 fields', 2, Def.Fields.Count);
+      F0 := TFieldDecl(Def.Fields.Items[0]);
+      F1 := TFieldDecl(Def.Fields.Items[1]);
+      AssertEquals('X name', 'X', F0.Names.Strings[0]);
+      AssertEquals('Y name', 'Y', F1.Names.Strings[0]);
+      AssertEquals('X type', 'Integer', F0.TypeName);
+    finally
+      Round.Free;
+    end;
+  finally
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_Class_WithVirtualMethod;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TFoo = class' + #10 +
+    '  Counter: Integer;' + #10 +
+    '  procedure Speak; virtual;' + #10 +
+    'end;' + #10 +
+    'implementation' + #10 +
+    'procedure TFoo.Speak; begin end;' + #10 +
+    'end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  E:            TTypeEntry;
+  M:            TRoutineSig;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      E := Round.FindType('TFoo');
+      AssertTrue('TFoo present', E <> nil);
+      AssertTrue('IsClass flagged', E.IsClass);
+      { Implicit TObject parent: uSemanticExport.PopulateClassEntry
+        emits ParentClass via ResolveTypeRef on the source's empty
+        ParentName, which produces the ('', '') sentinel.  The
+        importer treats an empty ParentName as the implicit-TObject
+        signal — round-tripping that sentinel exactly is what we
+        verify here. }
+      AssertEquals('parent unit empty', '', E.ParentClass.UnitName);
+      AssertEquals('parent type empty', '', E.ParentClass.TypeName);
+      AssertTrue('InstanceSize > 0', E.InstanceSize > 0);
+      AssertEquals('1 field', 1,
+        TClassTypeDef(E.Def).Fields.Count);
+      AssertEquals('1 method', 1, E.Methods.Count);
+      M := TRoutineSig(E.Methods.Items[0]);
+      AssertEquals('method name', 'Speak', M.Name);
+      AssertTrue('IsVirtual', M.IsVirtual);
+      AssertEquals('ResolvedQbeName', 'TFoo_Speak', M.ResolvedQbeName);
+      AssertTrue('VTableSlot assigned', M.VTableSlot >= 0);
+    finally
+      Round.Free;
+    end;
+  finally
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_Interface;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type IGreeter = interface' + #10 +
+    '  function Hello: string;' + #10 +
+    '  procedure Quit;' + #10 +
+    'end;' + #10 +
+    'implementation end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  E:            TTypeEntry;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      E := Round.FindType('IGreeter');
+      AssertTrue('IGreeter present', E <> nil);
+      AssertTrue('is interface', E.Def is TInterfaceTypeDef);
+      { Interface methods live on the AST (Def.Methods) — that's
+        what uSemanticImport.RegisterInterface walks. }
+      AssertEquals('2 methods', 2,
+        TInterfaceTypeDef(E.Def).Methods.Count);
     finally
       Round.Free;
     end;

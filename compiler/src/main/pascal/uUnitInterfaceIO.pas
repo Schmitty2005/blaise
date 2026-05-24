@@ -170,19 +170,181 @@ begin
   Result := EncodeLpstr(Acc);
 end;
 
-{ Tag a TTypeEntry by what its Def is.  Only the simple cases are
-  serialised in this commit: enum / set / alias.  Records, classes,
-  interfaces, procedurals, generics need richer payloads (fields
-  with offsets, vtable slots, attribute lists, ...) and land in
-  follow-up commits.  Unrecognised kinds are silently skipped on
-  write — the reader only knows how to consume what the writer
-  emits. }
+{ Tag a TTypeEntry by what its Def is.  Procedural, generic, and
+  generic-interface kinds are still skipped on write — they need
+  richer payloads (param resolution / template parameter lists) and
+  belong in follow-up commits along with inline + generic bodies. }
 function TypeEntryKind(AEntry: TTypeEntry): string;
 begin
   if      AEntry.Def is TEnumTypeDef      then Result := 'enum'
   else if AEntry.Def is TSetTypeDef       then Result := 'set'
   else if AEntry.Def is TTypeAliasDef     then Result := 'alias'
+  else if AEntry.Def is TRecordTypeDef    then Result := 'record'
+  else if AEntry.Def is TClassTypeDef     then Result := 'class'
+  else if AEntry.Def is TInterfaceTypeDef then Result := 'interface'
   else                                         Result := '';
+end;
+
+{ ----- TYPE-block payload helpers --------------------------------
+
+  Every value emitted into the TYPE block is an lpstr.  Numeric
+  counts and boolean flags are stringified into lpstrs too, which
+  costs a few extra bytes but keeps the reader's primitive set
+  trivially small (only ReadLpstrAt).  Sequences (attributes,
+  implements, fields, methods) are emitted as a count lpstr
+  followed by `count` records. }
+
+function EncodeCount(N: Integer): string;
+begin
+  Result := EncodeLpstr(IntToStr(N));
+end;
+
+function EncodeBool(B: Boolean): string;
+begin
+  if B then Result := EncodeLpstr('1')
+       else Result := EncodeLpstr('0');
+end;
+
+function EncodeStringList(ASL: TStringList): string;
+var
+  I: Integer;
+begin
+  Result := EncodeCount(ASL.Count);
+  for I := 0 to ASL.Count - 1 do
+    Result := Result + EncodeLpstr(ASL.Strings[I]);
+end;
+
+function EncodeFieldList(AFields: TObjectList): string;
+var
+  I, J: Integer;
+  F:    TFieldDecl;
+  TotalNames: Integer;
+begin
+  { TFieldDecl carries Names: TStringList (multi-name fields like
+    'X, Y: Integer').  Flatten to one record per name for symmetry
+    with how TSymbolTable.AddField is called. }
+  TotalNames := 0;
+  for I := 0 to AFields.Count - 1 do
+    Inc(TotalNames, TFieldDecl(AFields.Items[I]).Names.Count);
+
+  Result := EncodeCount(TotalNames);
+  for I := 0 to AFields.Count - 1 do
+  begin
+    F := TFieldDecl(AFields.Items[I]);
+    for J := 0 to F.Names.Count - 1 do
+      Result := Result +
+                EncodeLpstr(F.Names.Strings[J]) +
+                EncodeLpstr(F.TypeName) +
+                EncodeBool(F.IsWeak);
+  end;
+end;
+
+{ Per-method routine sig including class-method extras
+  (VTableSlot, ResolvedQbeName, IsVirtual, IsOverride).  Used by
+  class + interface payloads. }
+function EncodeMethodSig(AR: TRoutineSig): string;
+var
+  J: Integer;
+  P: TMethodParam;
+begin
+  Result :=
+    EncodeLpstr(AR.Name) +
+    EncodeBool (AR.IsFunction) +
+    EncodeQualRefParts(AR.ReturnType.UnitName, AR.ReturnType.TypeName) +
+    EncodeBool (AR.IsVirtual) +
+    EncodeBool (AR.IsOverride) +
+    EncodeLpstr(AR.ResolvedQbeName) +
+    EncodeLpstr(IntToStr(AR.VTableSlot)) +
+    EncodeCount(AR.Params.Count);
+  for J := 0 to AR.Params.Count - 1 do
+  begin
+    P := TMethodParam(AR.Params.Items[J]);
+    Result := Result +
+              EncodeLpstr(P.ParamName) +
+              EncodeLpstr(P.TypeName) +
+              EncodeParamFlags(P);
+  end;
+end;
+
+function EncodeMethodList(AMethods: TObjectList): string;
+var
+  I: Integer;
+begin
+  Result := EncodeCount(AMethods.Count);
+  for I := 0 to AMethods.Count - 1 do
+    Result := Result + EncodeMethodSig(TRoutineSig(AMethods.Items[I]));
+end;
+
+function WriteRecordPayload(AEntry: TTypeEntry): string;
+var
+  Def: TRecordTypeDef;
+begin
+  Def := TRecordTypeDef(AEntry.Def);
+  Result := EncodeBool(Def.IsPacked) +
+            EncodeFieldList(Def.Fields);
+end;
+
+function WriteClassPayload(AEntry: TTypeEntry): string;
+var
+  Def: TClassTypeDef;
+begin
+  Def := TClassTypeDef(AEntry.Def);
+  Result :=
+    EncodeQualRefParts(AEntry.ParentClass.UnitName, AEntry.ParentClass.TypeName) +
+    EncodeLpstr(IntToStr(AEntry.InstanceSize)) +
+    EncodeStringList(AEntry.Attributes) +
+    EncodeStringList(AEntry.Implements) +
+    EncodeFieldList(Def.Fields) +
+    EncodeMethodList(AEntry.Methods);
+end;
+
+{ Encode a TMethodDecl (AST) using the same per-method payload shape
+  as EncodeMethodSig, but pulling fields off the AST node.  Interface
+  methods live in Def.Methods (TInterfaceTypeDef carries them
+  natively), not in AEntry.Methods.  This keeps the writer and the
+  importer (uSemanticImport.RegisterInterface, which walks
+  Def.Methods) symmetric. }
+function EncodeMethodDecl(AM: TMethodDecl): string;
+var
+  J: Integer;
+  P: TMethodParam;
+begin
+  Result :=
+    EncodeLpstr(AM.Name) +
+    EncodeBool (AM.ReturnTypeName <> '') +
+    EncodeLpstr(AM.ReturnTypeName) +  { stored raw, not a qualref —
+                                         interfaces don't carry
+                                         resolved cross-unit refs }
+    EncodeBool (AM.IsVirtual) +
+    EncodeBool (AM.IsOverride) +
+    EncodeCount(AM.Params.Count);
+  for J := 0 to AM.Params.Count - 1 do
+  begin
+    P := TMethodParam(AM.Params.Items[J]);
+    Result := Result +
+              EncodeLpstr(P.ParamName) +
+              EncodeLpstr(P.TypeName) +
+              EncodeParamFlags(P);
+  end;
+end;
+
+function EncodeMethodDeclList(AList: TObjectList): string;
+var
+  I: Integer;
+begin
+  Result := EncodeCount(AList.Count);
+  for I := 0 to AList.Count - 1 do
+    Result := Result + EncodeMethodDecl(TMethodDecl(AList.Items[I]));
+end;
+
+function WriteInterfacePayload(AEntry: TTypeEntry): string;
+var
+  Def: TInterfaceTypeDef;
+begin
+  Def := TInterfaceTypeDef(AEntry.Def);
+  Result :=
+    EncodeLpstr(Def.ParentName) +
+    EncodeMethodDeclList(Def.Methods);
 end;
 
 function WriteTypes(AIface: TUnitInterface): string;
@@ -193,9 +355,6 @@ var
   Kind:   string;
   Eligible: TObjectList;
 begin
-  { Two passes: first collect entries we know how to serialise, then
-    emit a count + record per entry.  Keeps the wire format honest
-    about its current scope. }
   Eligible := TObjectList.Create(False);
   SB := TStringList.Create;
   try
@@ -218,10 +377,22 @@ begin
         SB.Add(EncodeLpstr('set') +
                EncodeLpstr(E.Name) +
                EncodeLpstr(TSetTypeDef(E.Def).BaseTypeName))
-      else { alias }
+      else if Kind = 'alias' then
         SB.Add(EncodeLpstr('alias') +
                EncodeLpstr(E.Name) +
-               EncodeLpstr(TTypeAliasDef(E.Def).TypeName));
+               EncodeLpstr(TTypeAliasDef(E.Def).TypeName))
+      else if Kind = 'record' then
+        SB.Add(EncodeLpstr('record') +
+               EncodeLpstr(E.Name) +
+               WriteRecordPayload(E))
+      else if Kind = 'class' then
+        SB.Add(EncodeLpstr('class') +
+               EncodeLpstr(E.Name) +
+               WriteClassPayload(E))
+      else { interface }
+        SB.Add(EncodeLpstr('interface') +
+               EncodeLpstr(E.Name) +
+               WriteInterfacePayload(E));
     end;
     SB.Add('END');
     Result := SB.Text;
@@ -525,6 +696,172 @@ begin
   if Length(Cur) > 0 then ATarget.Add(Cur);
 end;
 
+function DecodeCount(const AText: string; var APos: Integer): Integer;
+begin
+  Result := StrToInt(ReadLpstrAt(AText, APos));
+end;
+
+function DecodeBool(const AText: string; var APos: Integer): Boolean;
+begin
+  Result := ReadLpstrAt(AText, APos) = '1';
+end;
+
+procedure ReadStringListBlock(const AText: string; var APos: Integer;
+                              ATarget: TStringList);
+var
+  C, I: Integer;
+begin
+  C := DecodeCount(AText, APos);
+  for I := 1 to C do ATarget.Add(ReadLpstrAt(AText, APos));
+end;
+
+{ Read a flattened field list into a TRecordTypeDef's Fields list.
+  Each field is emitted with a single Name (the writer flattened
+  multi-name decls); the reader rebuilds one TFieldDecl per name. }
+procedure ReadFieldList(const AText: string; var APos: Integer;
+                        ATarget: TObjectList);
+var
+  C, I:    Integer;
+  FldName: string;
+  FldType: string;
+  IsWeak:  Boolean;
+  F:       TFieldDecl;
+begin
+  C := DecodeCount(AText, APos);
+  for I := 1 to C do
+  begin
+    FldName := ReadLpstrAt(AText, APos);
+    FldType := ReadLpstrAt(AText, APos);
+    IsWeak  := DecodeBool(AText, APos);
+    F := TFieldDecl.Create;
+    F.Names.Add(FldName);
+    F.TypeName := FldType;
+    F.IsWeak   := IsWeak;
+    ATarget.Add(F);
+  end;
+end;
+
+{ Inverse of EncodeMethodSig — builds a TRoutineSig from the
+  per-method payload. }
+function ReadMethodSig(const AText: string; var APos: Integer): TRoutineSig;
+var
+  RefStr:   string;
+  RefUnit:  string;
+  RefType:  string;
+  Pc, J:    Integer;
+  Param:    TMethodParam;
+  FlagsStr: string;
+begin
+  Result := TRoutineSig.Create;
+  Result.Name        := ReadLpstrAt(AText, APos);
+  Result.IsFunction  := DecodeBool(AText, APos);
+  RefStr             := ReadLpstrAt(AText, APos);
+  DecodeQualRef(RefStr, RefUnit, RefType);
+  Result.ReturnType  := MakeQualRef(RefUnit, RefType);
+  Result.IsVirtual   := DecodeBool(AText, APos);
+  Result.IsOverride  := DecodeBool(AText, APos);
+  Result.ResolvedQbeName := ReadLpstrAt(AText, APos);
+  Result.VTableSlot  := StrToInt(ReadLpstrAt(AText, APos));
+  Pc := DecodeCount(AText, APos);
+  for J := 1 to Pc do
+  begin
+    Param := TMethodParam.Create;
+    Param.ParamName := ReadLpstrAt(AText, APos);
+    Param.TypeName  := ReadLpstrAt(AText, APos);
+    FlagsStr := ReadLpstrAt(AText, APos);
+    DecodeParamFlags(StrToInt(FlagsStr), Param);
+    Result.Params.Add(Param);
+  end;
+end;
+
+procedure ReadMethodList(const AText: string; var APos: Integer;
+                         ATarget: TObjectList);
+var
+  C, I: Integer;
+begin
+  C := DecodeCount(AText, APos);
+  for I := 1 to C do ATarget.Add(ReadMethodSig(AText, APos));
+end;
+
+procedure ReadRecordPayload(const AText: string; var APos: Integer;
+                            AEntry: TTypeEntry);
+var
+  Def: TRecordTypeDef;
+begin
+  Def := TRecordTypeDef.Create;
+  Def.IsPacked := DecodeBool(AText, APos);
+  ReadFieldList(AText, APos, Def.Fields);
+  AEntry.Def := Def;
+end;
+
+procedure ReadClassPayload(const AText: string; var APos: Integer;
+                           AEntry: TTypeEntry);
+var
+  Def:     TClassTypeDef;
+  RefStr:  string;
+  RefUnit: string;
+  RefType: string;
+begin
+  Def := TClassTypeDef.Create;
+  RefStr := ReadLpstrAt(AText, APos);
+  DecodeQualRef(RefStr, RefUnit, RefType);
+  AEntry.ParentClass  := MakeQualRef(RefUnit, RefType);
+  Def.ParentName      := RefType;
+  AEntry.InstanceSize := StrToInt64(ReadLpstrAt(AText, APos));
+  ReadStringListBlock(AText, APos, AEntry.Attributes);
+  ReadStringListBlock(AText, APos, AEntry.Implements);
+  ReadFieldList(AText, APos, Def.Fields);
+  ReadMethodList(AText, APos, AEntry.Methods);
+  AEntry.IsClass := True;
+  AEntry.Def     := Def;
+end;
+
+function ReadMethodDecl(const AText: string; var APos: Integer): TMethodDecl;
+var
+  HasReturn: Boolean;
+  Pc, J:     Integer;
+  Param:     TMethodParam;
+  FlagsStr:  string;
+begin
+  Result := TMethodDecl.Create;
+  Result.Name           := ReadLpstrAt(AText, APos);
+  HasReturn             := DecodeBool(AText, APos);
+  Result.ReturnTypeName := ReadLpstrAt(AText, APos);
+  if not HasReturn then Result.ReturnTypeName := '';
+  Result.IsVirtual      := DecodeBool(AText, APos);
+  Result.IsOverride     := DecodeBool(AText, APos);
+  Pc := DecodeCount(AText, APos);
+  for J := 1 to Pc do
+  begin
+    Param := TMethodParam.Create;
+    Param.ParamName := ReadLpstrAt(AText, APos);
+    Param.TypeName  := ReadLpstrAt(AText, APos);
+    FlagsStr := ReadLpstrAt(AText, APos);
+    DecodeParamFlags(StrToInt(FlagsStr), Param);
+    Result.Params.Add(Param);
+  end;
+end;
+
+procedure ReadMethodDeclList(const AText: string; var APos: Integer;
+                             ATarget: TObjectList);
+var
+  C, I: Integer;
+begin
+  C := DecodeCount(AText, APos);
+  for I := 1 to C do ATarget.Add(ReadMethodDecl(AText, APos));
+end;
+
+procedure ReadInterfacePayload(const AText: string; var APos: Integer;
+                               AEntry: TTypeEntry);
+var
+  Def: TInterfaceTypeDef;
+begin
+  Def := TInterfaceTypeDef.Create;
+  Def.ParentName := ReadLpstrAt(AText, APos);
+  ReadMethodDeclList(AText, APos, Def.Methods);
+  AEntry.Def := Def;
+end;
+
 procedure ReadTypes(const AText: string; var APos: Integer;
                     AIface: TUnitInterface);
 var
@@ -541,30 +878,38 @@ begin
   Count := ReadDecimalAt(AText, APos);
   for I := 1 to Count do
   begin
-    Kind    := ReadLpstrAt(AText, APos);
-    Name    := ReadLpstrAt(AText, APos);
-    Payload := ReadLpstrAt(AText, APos);
-
+    Kind  := ReadLpstrAt(AText, APos);
+    Name  := ReadLpstrAt(AText, APos);
     Entry := TTypeEntry.Create;
     Entry.Name := Name;
+
     if Kind = 'enum' then
     begin
+      Payload := ReadLpstrAt(AText, APos);
       EnumDef := TEnumTypeDef.Create;
       SplitMembers(Payload, EnumDef.Members);
       Entry.Def := EnumDef;
     end
     else if Kind = 'set' then
     begin
+      Payload := ReadLpstrAt(AText, APos);
       SetDef := TSetTypeDef.Create;
       SetDef.BaseTypeName := Payload;
       Entry.Def := SetDef;
     end
     else if Kind = 'alias' then
     begin
+      Payload := ReadLpstrAt(AText, APos);
       AliasDef := TTypeAliasDef.Create;
       AliasDef.TypeName := Payload;
       Entry.Def := AliasDef;
     end
+    else if Kind = 'record' then
+      ReadRecordPayload(AText, APos, Entry)
+    else if Kind = 'class' then
+      ReadClassPayload(AText, APos, Entry)
+    else if Kind = 'interface' then
+      ReadInterfacePayload(AText, APos, Entry)
     else
     begin
       Entry.Free;
