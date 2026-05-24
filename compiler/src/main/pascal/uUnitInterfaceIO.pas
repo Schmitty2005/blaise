@@ -176,13 +176,14 @@ end;
   belong in follow-up commits along with inline + generic bodies. }
 function TypeEntryKind(AEntry: TTypeEntry): string;
 begin
-  if      AEntry.Def is TEnumTypeDef      then Result := 'enum'
-  else if AEntry.Def is TSetTypeDef       then Result := 'set'
-  else if AEntry.Def is TTypeAliasDef     then Result := 'alias'
-  else if AEntry.Def is TRecordTypeDef    then Result := 'record'
-  else if AEntry.Def is TClassTypeDef     then Result := 'class'
-  else if AEntry.Def is TInterfaceTypeDef then Result := 'interface'
-  else                                         Result := '';
+  if      AEntry.Def is TEnumTypeDef       then Result := 'enum'
+  else if AEntry.Def is TSetTypeDef        then Result := 'set'
+  else if AEntry.Def is TTypeAliasDef      then Result := 'alias'
+  else if AEntry.Def is TRecordTypeDef     then Result := 'record'
+  else if AEntry.Def is TClassTypeDef      then Result := 'class'
+  else if AEntry.Def is TInterfaceTypeDef  then Result := 'interface'
+  else if AEntry.Def is TProceduralTypeDef then Result := 'proc'
+  else                                          Result := '';
 end;
 
 { ----- TYPE-block payload helpers --------------------------------
@@ -337,6 +338,28 @@ begin
     Result := Result + EncodeMethodDecl(TMethodDecl(AList.Items[I]));
 end;
 
+function WriteProcPayload(AEntry: TTypeEntry): string;
+var
+  Def: TProceduralTypeDef;
+  J:   Integer;
+  P:   TMethodParam;
+begin
+  Def := TProceduralTypeDef(AEntry.Def);
+  Result :=
+    EncodeBool (Def.IsFunction) +
+    EncodeBool (Def.IsMethodPtr) +
+    EncodeLpstr(Def.ReturnTypeName) +
+    EncodeCount(Def.Params.Count);
+  for J := 0 to Def.Params.Count - 1 do
+  begin
+    P := TMethodParam(Def.Params.Items[J]);
+    Result := Result +
+              EncodeLpstr(P.ParamName) +
+              EncodeLpstr(P.TypeName) +
+              EncodeParamFlags(P);
+  end;
+end;
+
 function WriteInterfacePayload(AEntry: TTypeEntry): string;
 var
   Def: TInterfaceTypeDef;
@@ -389,10 +412,14 @@ begin
         SB.Add(EncodeLpstr('class') +
                EncodeLpstr(E.Name) +
                WriteClassPayload(E))
-      else { interface }
+      else if Kind = 'interface' then
         SB.Add(EncodeLpstr('interface') +
                EncodeLpstr(E.Name) +
-               WriteInterfacePayload(E));
+               WriteInterfacePayload(E))
+      else { proc }
+        SB.Add(EncodeLpstr('proc') +
+               EncodeLpstr(E.Name) +
+               WriteProcPayload(E));
     end;
     SB.Add('END');
     Result := SB.Text;
@@ -453,11 +480,30 @@ begin
   end;
 end;
 
+function WriteMeta(AIface: TUnitInterface): string;
+var
+  SB: TStringList;
+begin
+  SB := TStringList.Create;
+  try
+    SB.Add('META');
+    SB.Add(EncodeLpstr(AIface.SourceFile) +
+           EncodeLpstr(AIface.SourceHash) +
+           EncodeLpstr(AIface.CompilerVersion) +
+           EncodeStringList(AIface.UsedUnits));
+    SB.Add('END');
+    Result := SB.Text;
+  finally
+    SB.Free;
+  end;
+end;
+
 function WriteUnitInterface(AIface: TUnitInterface): string;
 begin
   Result :=
     IFACE_MAGIC + ' ' + IntToStr(IFACE_VERSION) + #10 +
     EncodeLpstr(AIface.Name) + #10 +
+    WriteMeta    (AIface) +
     WriteTypes   (AIface) +
     WriteConsts  (AIface) +
     WriteVars    (AIface) +
@@ -851,6 +897,46 @@ begin
   for I := 1 to C do ATarget.Add(ReadMethodDecl(AText, APos));
 end;
 
+procedure ReadMeta(const AText: string; var APos: Integer;
+                   AIface: TUnitInterface);
+var
+  C, I: Integer;
+begin
+  AIface.SourceFile      := ReadLpstrAt(AText, APos);
+  AIface.SourceHash      := ReadLpstrAt(AText, APos);
+  AIface.CompilerVersion := ReadLpstrAt(AText, APos);
+  C := DecodeCount(AText, APos);
+  for I := 1 to C do
+    AIface.UsedUnits.Add(ReadLpstrAt(AText, APos));
+  if ReadTag(AText, APos) <> 'END' then
+    raise EIfaceFormatError.Create('META block: missing END marker');
+end;
+
+procedure ReadProcPayload(const AText: string; var APos: Integer;
+                          AEntry: TTypeEntry);
+var
+  Def:      TProceduralTypeDef;
+  Pc, J:    Integer;
+  Param:    TMethodParam;
+  FlagsStr: string;
+begin
+  Def := TProceduralTypeDef.Create;
+  Def.IsFunction     := DecodeBool(AText, APos);
+  Def.IsMethodPtr    := DecodeBool(AText, APos);
+  Def.ReturnTypeName := ReadLpstrAt(AText, APos);
+  Pc := DecodeCount(AText, APos);
+  for J := 1 to Pc do
+  begin
+    Param := TMethodParam.Create;
+    Param.ParamName := ReadLpstrAt(AText, APos);
+    Param.TypeName  := ReadLpstrAt(AText, APos);
+    FlagsStr := ReadLpstrAt(AText, APos);
+    DecodeParamFlags(StrToInt(FlagsStr), Param);
+    Def.Params.Add(Param);
+  end;
+  AEntry.Def := Def;
+end;
+
 procedure ReadInterfacePayload(const AText: string; var APos: Integer;
                                AEntry: TTypeEntry);
 var
@@ -910,6 +996,8 @@ begin
       ReadClassPayload(AText, APos, Entry)
     else if Kind = 'interface' then
       ReadInterfacePayload(AText, APos, Entry)
+    else if Kind = 'proc' then
+      ReadProcPayload(AText, APos, Entry)
     else
     begin
       Entry.Free;
@@ -990,6 +1078,7 @@ begin
       else if Tag = 'VAR'   then ReadVars    (AText, Cur, Result)
       else if Tag = 'TYPE'  then ReadTypes   (AText, Cur, Result)
       else if Tag = 'ROUT'  then ReadRoutines(AText, Cur, Result)
+      else if Tag = 'META'  then ReadMeta    (AText, Cur, Result)
       else if Tag = ''      then Break
       else
         raise EIfaceFormatError.Create(Format(

@@ -246,6 +246,8 @@ type
     procedure TestRoundTrip_Record;
     procedure TestRoundTrip_Class_WithVirtualMethod;
     procedure TestRoundTrip_Interface;
+    procedure TestRoundTrip_ProceduralType;
+    procedure TestRoundTrip_Metadata_UsedUnits_SourceFile;
   end;
 
   { ----- ImportUnitInterface round-trip (Phase 6c-A) -------------- }
@@ -2928,6 +2930,70 @@ begin
     end;
   finally
     Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_ProceduralType;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type TCallback = procedure(N: Integer) of object;' + #10 +
+    'implementation end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  E:            TTypeEntry;
+  Def:          TProceduralTypeDef;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      E := Round.FindType('TCallback');
+      AssertTrue('TCallback present', E <> nil);
+      AssertTrue('is procedural', E.Def is TProceduralTypeDef);
+      Def := TProceduralTypeDef(E.Def);
+      AssertTrue('not a function', not Def.IsFunction);
+      AssertTrue('is method ptr', Def.IsMethodPtr);
+      AssertEquals('1 param', 1, Def.Params.Count);
+      AssertEquals('param name', 'N',
+        TMethodParam(Def.Params.Items[0]).ParamName);
+    finally
+      Round.Free;
+    end;
+  finally
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_Metadata_UsedUnits_SourceFile;
+var
+  Src, Round: TUnitInterface;
+  Buf:        string;
+begin
+  Src := TUnitInterface.Create('U');
+  Src.SourceFile      := '/a/b/U.pas';
+  Src.SourceHash      := 'deadbeef';
+  Src.CompilerVersion := '0.8.0-test';
+  Src.UsedUnits.Add('SysUtils');
+  Src.UsedUnits.Add('Classes');
+  try
+    Buf   := WriteUnitInterface(Src);
+    Round := ReadUnitInterface(Buf);
+    try
+      AssertEquals('source file', '/a/b/U.pas', Round.SourceFile);
+      AssertEquals('source hash', 'deadbeef',   Round.SourceHash);
+      AssertEquals('version',     '0.8.0-test', Round.CompilerVersion);
+      AssertEquals('2 used units', 2, Round.UsedUnits.Count);
+      AssertEquals('first used',   'SysUtils', Round.UsedUnits.Strings[0]);
+      AssertEquals('second used',  'Classes',  Round.UsedUnits.Strings[1]);
+    finally
+      Round.Free;
+    end;
+  finally
+    Src.Free;
   end;
 end;
 
