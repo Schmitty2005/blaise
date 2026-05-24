@@ -49,7 +49,7 @@ unit uUnitInterfaceIO;
 interface
 
 uses
-  Classes, SysUtils, uAST, uUnitInterface;
+  Classes, SysUtils, streams, uAST, uUnitInterface;
 
 const
   IFACE_MAGIC   = 'BLAISE-IFACE';
@@ -65,6 +65,10 @@ function WriteUnitInterface(AIface: TUnitInterface): string;
   the returned interface.  Raises EIfaceFormatError on a malformed
   input or version mismatch. }
 function ReadUnitInterface(const AText: string): TUnitInterface;
+
+{ File wrappers.  Caller owns the returned interface. }
+procedure WriteUnitInterfaceToFile(AIface: TUnitInterface; const APath: string);
+function  ReadUnitInterfaceFromFile(const APath: string): TUnitInterface;
 
 implementation
 
@@ -127,12 +131,166 @@ begin
   end;
 end;
 
+function WriteVars(AIface: TUnitInterface): string;
+var
+  I:  Integer;
+  V:  TVarEntry;
+  SB: TStringList;
+begin
+  SB := TStringList.Create;
+  try
+    SB.Add('VAR ' + IntToStr(AIface.Vars.Count));
+    for I := 0 to AIface.Vars.Count - 1 do
+    begin
+      V := TVarEntry(AIface.Vars.Items[I]);
+      SB.Add(
+        EncodeLpstr(V.Name) +
+        EncodeQualRefParts(V.TypeRef.UnitName, V.TypeRef.TypeName));
+    end;
+    SB.Add('END');
+    Result := SB.Text;
+  finally
+    SB.Free;
+  end;
+end;
+
+{ Encode an enum's member list as comma-joined names within an lpstr.
+  Commas are safe inside lpstr since the outer length drives parsing. }
+function EncodeEnumMembers(AEnum: TEnumTypeDef): string;
+var
+  I:    Integer;
+  Acc:  string;
+begin
+  Acc := '';
+  for I := 0 to AEnum.Members.Count - 1 do
+  begin
+    if I > 0 then Acc := Acc + ',';
+    Acc := Acc + AEnum.Members.Strings[I];
+  end;
+  Result := EncodeLpstr(Acc);
+end;
+
+{ Tag a TTypeEntry by what its Def is.  Only the simple cases are
+  serialised in this commit: enum / set / alias.  Records, classes,
+  interfaces, procedurals, generics need richer payloads (fields
+  with offsets, vtable slots, attribute lists, ...) and land in
+  follow-up commits.  Unrecognised kinds are silently skipped on
+  write — the reader only knows how to consume what the writer
+  emits. }
+function TypeEntryKind(AEntry: TTypeEntry): string;
+begin
+  if      AEntry.Def is TEnumTypeDef      then Result := 'enum'
+  else if AEntry.Def is TSetTypeDef       then Result := 'set'
+  else if AEntry.Def is TTypeAliasDef     then Result := 'alias'
+  else                                         Result := '';
+end;
+
+function WriteTypes(AIface: TUnitInterface): string;
+var
+  I:      Integer;
+  E:      TTypeEntry;
+  SB:     TStringList;
+  Kind:   string;
+  Eligible: TObjectList;
+begin
+  { Two passes: first collect entries we know how to serialise, then
+    emit a count + record per entry.  Keeps the wire format honest
+    about its current scope. }
+  Eligible := TObjectList.Create(False);
+  SB := TStringList.Create;
+  try
+    for I := 0 to AIface.Types.Count - 1 do
+    begin
+      E := TTypeEntry(AIface.Types.Items[I]);
+      if TypeEntryKind(E) <> '' then Eligible.Add(E);
+    end;
+
+    SB.Add('TYPE ' + IntToStr(Eligible.Count));
+    for I := 0 to Eligible.Count - 1 do
+    begin
+      E := TTypeEntry(Eligible.Items[I]);
+      Kind := TypeEntryKind(E);
+      if Kind = 'enum' then
+        SB.Add(EncodeLpstr('enum') +
+               EncodeLpstr(E.Name) +
+               EncodeEnumMembers(TEnumTypeDef(E.Def)))
+      else if Kind = 'set' then
+        SB.Add(EncodeLpstr('set') +
+               EncodeLpstr(E.Name) +
+               EncodeLpstr(TSetTypeDef(E.Def).BaseTypeName))
+      else { alias }
+        SB.Add(EncodeLpstr('alias') +
+               EncodeLpstr(E.Name) +
+               EncodeLpstr(TTypeAliasDef(E.Def).TypeName));
+    end;
+    SB.Add('END');
+    Result := SB.Text;
+  finally
+    SB.Free;
+    Eligible.Free;
+  end;
+end;
+
+{ Param flags pack: bit 0 = IsVar, bit 1 = IsConst, bit 2 = IsOpenArray.
+  Render as a single decimal-digit lpstr for symmetry with the rest
+  of the format. }
+function EncodeParamFlags(AParam: TMethodParam): string;
+var
+  B: Integer;
+begin
+  B := 0;
+  if AParam.IsVarParam   then B := B or 1;
+  if AParam.IsConstParam then B := B or 2;
+  if AParam.IsOpenArray  then B := B or 4;
+  Result := EncodeLpstr(IntToStr(B));
+end;
+
+function WriteRoutines(AIface: TUnitInterface): string;
+var
+  I, J:   Integer;
+  R:      TRoutineSig;
+  P:      TMethodParam;
+  SB:     TStringList;
+  Line:   string;
+begin
+  SB := TStringList.Create;
+  try
+    SB.Add('ROUT ' + IntToStr(AIface.Routines.Count));
+    for I := 0 to AIface.Routines.Count - 1 do
+    begin
+      R := TRoutineSig(AIface.Routines.Items[I]);
+      Line :=
+        EncodeLpstr(R.Name) +
+        EncodeLpstr(IntToStr(Ord(R.IsFunction))) +
+        EncodeQualRefParts(R.ReturnType.UnitName, R.ReturnType.TypeName) +
+        EncodeLpstr(R.ResolvedQbeName) +
+        EncodeLpstr(IntToStr(R.Params.Count));
+      for J := 0 to R.Params.Count - 1 do
+      begin
+        P    := TMethodParam(R.Params.Items[J]);
+        Line := Line +
+                EncodeLpstr(P.ParamName) +
+                EncodeLpstr(P.TypeName) +
+                EncodeParamFlags(P);
+      end;
+      SB.Add(Line);
+    end;
+    SB.Add('END');
+    Result := SB.Text;
+  finally
+    SB.Free;
+  end;
+end;
+
 function WriteUnitInterface(AIface: TUnitInterface): string;
 begin
   Result :=
     IFACE_MAGIC + ' ' + IntToStr(IFACE_VERSION) + #10 +
     EncodeLpstr(AIface.Name) + #10 +
-    WriteConsts(AIface);
+    WriteTypes   (AIface) +
+    WriteConsts  (AIface) +
+    WriteVars    (AIface) +
+    WriteRoutines(AIface);
 end;
 
 { ----- Reader ----------------------------------------------------- }
@@ -325,6 +483,148 @@ begin
     raise EIfaceFormatError.Create('CONST block: missing END marker');
 end;
 
+procedure ReadVars(const AText: string; var APos: Integer;
+                   AIface: TUnitInterface);
+var
+  Count:   Integer;
+  I:       Integer;
+  Entry:   TVarEntry;
+  RefStr:  string;
+  RefUnit: string;
+  RefType: string;
+begin
+  Count := ReadDecimalAt(AText, APos);
+  for I := 1 to Count do
+  begin
+    Entry := TVarEntry.Create;
+    Entry.Name := ReadLpstrAt(AText, APos);
+    RefStr     := ReadLpstrAt(AText, APos);
+    DecodeQualRef(RefStr, RefUnit, RefType);
+    Entry.TypeRef := MakeQualRef(RefUnit, RefType);
+    AIface.AddVar(Entry);
+  end;
+  if ReadTag(AText, APos) <> 'END' then
+    raise EIfaceFormatError.Create('VAR block: missing END marker');
+end;
+
+{ Split a comma-joined member list back into a TStringList.  Empty
+  input ⇒ empty list. }
+procedure SplitMembers(const ASrc: string; ATarget: TStringList);
+var
+  Cur: string;
+  P:   Integer;
+begin
+  Cur := ASrc;
+  P   := Pos(',', Cur);
+  while P >= 0 do
+  begin
+    ATarget.Add(Copy(Cur, 0, P));
+    Cur := Copy(Cur, P + 1, Length(Cur) - P - 1);
+    P   := Pos(',', Cur);
+  end;
+  if Length(Cur) > 0 then ATarget.Add(Cur);
+end;
+
+procedure ReadTypes(const AText: string; var APos: Integer;
+                    AIface: TUnitInterface);
+var
+  Count:    Integer;
+  I:        Integer;
+  Kind:     string;
+  Name:     string;
+  Payload:  string;
+  Entry:    TTypeEntry;
+  EnumDef:  TEnumTypeDef;
+  SetDef:   TSetTypeDef;
+  AliasDef: TTypeAliasDef;
+begin
+  Count := ReadDecimalAt(AText, APos);
+  for I := 1 to Count do
+  begin
+    Kind    := ReadLpstrAt(AText, APos);
+    Name    := ReadLpstrAt(AText, APos);
+    Payload := ReadLpstrAt(AText, APos);
+
+    Entry := TTypeEntry.Create;
+    Entry.Name := Name;
+    if Kind = 'enum' then
+    begin
+      EnumDef := TEnumTypeDef.Create;
+      SplitMembers(Payload, EnumDef.Members);
+      Entry.Def := EnumDef;
+    end
+    else if Kind = 'set' then
+    begin
+      SetDef := TSetTypeDef.Create;
+      SetDef.BaseTypeName := Payload;
+      Entry.Def := SetDef;
+    end
+    else if Kind = 'alias' then
+    begin
+      AliasDef := TTypeAliasDef.Create;
+      AliasDef.TypeName := Payload;
+      Entry.Def := AliasDef;
+    end
+    else
+    begin
+      Entry.Free;
+      raise EIfaceFormatError.Create('TYPE block: unknown kind ''' + Kind + '''');
+    end;
+    AIface.AddType(Entry);
+  end;
+  if ReadTag(AText, APos) <> 'END' then
+    raise EIfaceFormatError.Create('TYPE block: missing END marker');
+end;
+
+{ Inverse of EncodeParamFlags. }
+procedure DecodeParamFlags(AFlags: Integer; AParam: TMethodParam);
+begin
+  AParam.IsVarParam   := (AFlags and 1) <> 0;
+  AParam.IsConstParam := (AFlags and 2) <> 0;
+  AParam.IsOpenArray  := (AFlags and 4) <> 0;
+end;
+
+procedure ReadRoutines(const AText: string; var APos: Integer;
+                       AIface: TUnitInterface);
+var
+  Count:    Integer;
+  I, J:     Integer;
+  PCount:   Integer;
+  R:        TRoutineSig;
+  RefStr:   string;
+  RefUnit:  string;
+  RefType:  string;
+  IsFnStr:  string;
+  Param:    TMethodParam;
+  FlagsStr: string;
+begin
+  Count := ReadDecimalAt(AText, APos);
+  for I := 1 to Count do
+  begin
+    R := TRoutineSig.Create;
+    R.Name        := ReadLpstrAt(AText, APos);
+    IsFnStr       := ReadLpstrAt(AText, APos);
+    R.IsFunction  := IsFnStr <> '0';
+    RefStr        := ReadLpstrAt(AText, APos);
+    DecodeQualRef(RefStr, RefUnit, RefType);
+    R.ReturnType  := MakeQualRef(RefUnit, RefType);
+    R.ResolvedQbeName := ReadLpstrAt(AText, APos);
+    PCount := StrToInt(ReadLpstrAt(AText, APos));
+    for J := 1 to PCount do
+    begin
+      Param := TMethodParam.Create;
+      Param.ParamName := ReadLpstrAt(AText, APos);
+      Param.TypeName  := ReadLpstrAt(AText, APos);
+      FlagsStr := ReadLpstrAt(AText, APos);
+      DecodeParamFlags(StrToInt(FlagsStr), Param);
+      R.Params.Add(Param);
+    end;
+    AIface.AddRoutine(R);
+  end;
+  if ReadTag(AText, APos) <> 'END' then
+    raise EIfaceFormatError.Create('ROUT block: missing END marker');
+end;
+
 function ReadUnitInterface(const AText: string): TUnitInterface;
 var
   Cur:    Integer;
@@ -341,7 +641,10 @@ begin
       SkipWhitespace(AText, Cur);
       if Cur >= Length(AText) then Break;
       Tag := ReadTag(AText, Cur);
-      if      Tag = 'CONST' then ReadConsts(AText, Cur, Result)
+      if      Tag = 'CONST' then ReadConsts  (AText, Cur, Result)
+      else if Tag = 'VAR'   then ReadVars    (AText, Cur, Result)
+      else if Tag = 'TYPE'  then ReadTypes   (AText, Cur, Result)
+      else if Tag = 'ROUT'  then ReadRoutines(AText, Cur, Result)
       else if Tag = ''      then Break
       else
         raise EIfaceFormatError.Create(Format(
@@ -351,6 +654,38 @@ begin
     Result.Free;
     raise;
   end;
+end;
+
+procedure WriteUnitInterfaceToFile(AIface: TUnitInterface; const APath: string);
+var
+  Bytes: string;
+  FOut:  TFileOutputStream;
+begin
+  Bytes := WriteUnitInterface(AIface);
+  FOut := TFileOutputStream.Create(APath);
+  try
+    if Length(Bytes) > 0 then
+      FOut.Write(PChar(Bytes), Length(Bytes));
+  finally
+    FOut.Close;
+    FOut.Free;
+  end;
+end;
+
+function ReadUnitInterfaceFromFile(const APath: string): TUnitInterface;
+var
+  Bytes: string;
+  FIn:   TFileInputStream;
+begin
+  FIn := TFileInputStream.Create(APath);
+  try
+    SetLength(Bytes, Integer(FIn.Size));
+    if Length(Bytes) > 0 then
+      FIn.Read(PChar(Bytes), Length(Bytes));
+  finally
+    FIn.Free;
+  end;
+  Result := ReadUnitInterface(Bytes);
 end;
 
 end.

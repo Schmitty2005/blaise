@@ -238,6 +238,11 @@ type
     procedure TestRoundTrip_EmptyInterface;
     { Version mismatch is rejected. }
     procedure TestRead_VersionMismatch_Raises;
+    { Whole-pipeline round-trip via the export machinery on a real
+      source — exercises types/consts/vars/routines together. }
+    procedure TestRoundTrip_RealSource_AllSimpleKinds;
+    { File wrappers. }
+    procedure TestRoundTrip_ViaFile;
   end;
 
   { ----- ImportUnitInterface round-trip (Phase 6c-A) -------------- }
@@ -2718,6 +2723,82 @@ begin
     end;
   finally
     Src.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_RealSource_AllSimpleKinds;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'const K = 42;' + #10 +
+    'var Counter: Integer;' + #10 +
+    'type' + #10 +
+    '  TColor  = (Red, Green, Blue);' + #10 +
+    '  TColors = set of TColor;' + #10 +
+    '  TMyInt  = Integer;' + #10 +
+    'function Add(A, B: Integer): Integer;' + #10 +
+    'implementation' + #10 +
+    'function Add(A, B: Integer): Integer; begin Result := A + B; end;' + #10 +
+    'end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  Enum:         TTypeEntry;
+  Sig:          TRoutineSig;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      AssertEquals('unit name',    'U', Round.Name);
+      AssertTrue('K present',      Round.FindConst('K') <> nil);
+      AssertEquals('K value',      Int64(42), Round.FindConst('K').Decl.IntVal);
+      AssertEquals('1 var',        1, Round.Vars.Count);
+      AssertEquals('Counter name', 'Counter', TVarEntry(Round.Vars.Items[0]).Name);
+      AssertEquals('3 types',      3, Round.Types.Count);
+      Enum := Round.FindType('TColor');
+      AssertTrue('TColor type', Enum <> nil);
+      AssertTrue('TColor is enum', Enum.Def is TEnumTypeDef);
+      AssertEquals('3 members', 3, TEnumTypeDef(Enum.Def).Members.Count);
+      Sig := Round.FindRoutine('Add');
+      AssertTrue('Add routine', Sig <> nil);
+      AssertTrue('Add IsFunction', Sig.IsFunction);
+      AssertEquals('Add params', 2, Sig.Params.Count);
+      AssertEquals('Add param 0 name', 'A',
+        TMethodParam(Sig.Params.Items[0]).ParamName);
+    finally
+      Round.Free;
+    end;
+  finally
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_ViaFile;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'const K = 7;' + #10 +
+    'implementation end.' + #10;
+  PATH = '/tmp/blaise-iface-roundtrip-test.bif';
+var
+  Iface, Round: TUnitInterface;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    WriteUnitInterfaceToFile(Iface, PATH);
+    Round := ReadUnitInterfaceFromFile(PATH);
+    try
+      AssertEquals('K value',
+        Int64(7), Round.FindConst('K').Decl.IntVal);
+    finally
+      Round.Free;
+    end;
+  finally
+    Iface.Free;
   end;
 end;
 
