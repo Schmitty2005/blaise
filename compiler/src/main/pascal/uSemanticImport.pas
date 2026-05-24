@@ -72,7 +72,8 @@ end;
 
 { ----- Type-entry registration ---------------------------------- }
 
-procedure RegisterEnum(AEntry: TTypeEntry; ATable: TSymbolTable);
+procedure RegisterEnum(AEntry: TTypeEntry; ATable: TSymbolTable;
+                       const AUnitName: string);
 var
   EnumDef:  TEnumTypeDef;
   EnumDesc: TEnumTypeDesc;
@@ -88,13 +89,16 @@ begin
     EnumDesc.Members.Add(MName);
     MSym  := TSymbol.Create(MName, skConstant, EnumDesc);
     MSym.ConstValue := EnumDef.OrdinalAt(K);
+    MSym.OwningUnit := AUnitName;
     if not ATable.Define(MSym) then MSym.Free;
   end;
   Sym := TSymbol.Create(AEntry.Name, skType, EnumDesc);
+  Sym.OwningUnit := AUnitName;
   if not ATable.Define(Sym) then Sym.Free;
 end;
 
-procedure RegisterSet(AEntry: TTypeEntry; ATable: TSymbolTable);
+procedure RegisterSet(AEntry: TTypeEntry; ATable: TSymbolTable;
+                      const AUnitName: string);
 var
   SetDef:   TSetTypeDef;
   BaseSym:  TSymbol;
@@ -110,6 +114,7 @@ begin
       [AEntry.Name, SetDef.BaseTypeName]);
   SetDesc := ATable.NewSetType(AEntry.Name, TEnumTypeDesc(BaseSym.TypeDesc));
   Sym := TSymbol.Create(AEntry.Name, skType, SetDesc);
+  Sym.OwningUnit := AUnitName;
   if not ATable.Define(Sym) then Sym.Free;
 end;
 
@@ -172,7 +177,8 @@ begin
   end;
 end;
 
-procedure RegisterInterface(AEntry: TTypeEntry; ATable: TSymbolTable);
+procedure RegisterInterface(AEntry: TTypeEntry; ATable: TSymbolTable;
+                            const AUnitName: string);
 var
   IntfDef:  TInterfaceTypeDef;
   IntfDesc: TInterfaceTypeDesc;
@@ -185,6 +191,7 @@ begin
   IntfDesc := ATable.NewInterfaceType(AEntry.Name);
 
   Sym := TSymbol.Create(AEntry.Name, skType, IntfDesc);
+  Sym.OwningUnit := AUnitName;
   if not ATable.Define(Sym) then
   begin
     Sym.Free;
@@ -213,7 +220,8 @@ begin
   end;
 end;
 
-procedure RegisterClass(AEntry: TTypeEntry; ATable: TSymbolTable);
+procedure RegisterClass(AEntry: TTypeEntry; ATable: TSymbolTable;
+                        const AUnitName: string);
 var
   ClassDef: TClassTypeDef;
   RT:       TRecordTypeDesc;
@@ -229,6 +237,7 @@ begin
   RT := ATable.NewClassType(AEntry.Name);
 
   Sym := TSymbol.Create(AEntry.Name, skType, RT);
+  Sym.OwningUnit := AUnitName;
   if not ATable.Define(Sym) then
   begin
     Sym.Free;
@@ -320,7 +329,8 @@ begin
   end;
 end;
 
-procedure RegisterRecord(AEntry: TTypeEntry; ATable: TSymbolTable);
+procedure RegisterRecord(AEntry: TTypeEntry; ATable: TSymbolTable;
+                         const AUnitName: string);
 var
   RecDef:   TRecordTypeDef;
   RecDesc:  TRecordTypeDesc;
@@ -336,6 +346,7 @@ begin
   { Pre-register so self-referential pointer fields (rare in records,
     common in classes) can resolve against the in-progress type. }
   Sym := TSymbol.Create(AEntry.Name, skType, RecDesc);
+  Sym.OwningUnit := AUnitName;
   if not ATable.Define(Sym) then
   begin
     Sym.Free;
@@ -356,7 +367,8 @@ begin
   end;
 end;
 
-procedure RegisterAlias(AEntry: TTypeEntry; ATable: TSymbolTable);
+procedure RegisterAlias(AEntry: TTypeEntry; ATable: TSymbolTable;
+                        const AUnitName: string);
 var
   AliasDef:   TTypeAliasDef;
   AliasName:  string;
@@ -384,6 +396,7 @@ begin
     AliasDesc := BaseSym.TypeDesc;
   end;
   Sym := TSymbol.Create(AEntry.Name, skType, AliasDesc);
+  Sym.OwningUnit := AUnitName;
   if not ATable.Define(Sym) then Sym.Free;
 end;
 
@@ -407,17 +420,17 @@ begin
     end;
 
     if Entry.Def is TEnumTypeDef then
-      RegisterEnum(Entry, ATable)
+      RegisterEnum(Entry, ATable, AIface.Name)
     else if Entry.Def is TSetTypeDef then
-      RegisterSet(Entry, ATable)
+      RegisterSet(Entry, ATable, AIface.Name)
     else if Entry.Def is TTypeAliasDef then
-      RegisterAlias(Entry, ATable)
+      RegisterAlias(Entry, ATable, AIface.Name)
     else if Entry.Def is TInterfaceTypeDef then
-      RegisterInterface(Entry, ATable)
+      RegisterInterface(Entry, ATable, AIface.Name)
     else if Entry.Def is TClassTypeDef then
-      RegisterClass(Entry, ATable)
+      RegisterClass(Entry, ATable, AIface.Name)
     else if Entry.Def is TRecordTypeDef then
-      RegisterRecord(Entry, ATable)
+      RegisterRecord(Entry, ATable, AIface.Name)
     else
       raise EImportError.CreateFmt(
         'Type %s.%s: import of %s not yet implemented',
@@ -454,6 +467,7 @@ begin
     Sym := TSymbol.Create(Entry.Decl.Name, skConstant, TypeDesc);
     Sym.ConstValue  := Entry.Decl.IntVal;
     Sym.ConstString := Entry.Decl.StrVal;
+    Sym.OwningUnit  := AIface.Name;
     if not ATable.Define(Sym) then
       Sym.Free;  { duplicate — silently skip }
   end;
@@ -478,6 +492,7 @@ begin
         [AIface.Name, Entry.Name, Entry.TypeRef.TypeName]);
     Sym := TSymbol.Create(Entry.Name, skVariable, TypeDesc);
     Sym.IsGlobal := True;
+    Sym.OwningUnit := AIface.Name;
     if not ATable.Define(Sym) then
       Sym.Free;
   end;
@@ -582,6 +597,7 @@ begin
       ASemantic.RegisterImportedRoutine(Sig.Name, MDecl);
     end;
 
+    Sym.OwningUnit := AIface.Name;
     if not ATable.Define(Sym) then
       Sym.Free;
   end;

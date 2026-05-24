@@ -339,9 +339,12 @@ type
     [Unretained] Decl:         TObject;    { not owned — TMethodDecl backing this proc/func symbol;
                                 nil for non-callable symbols }
     OwningUnit:   string;     { name of the unit that exported this symbol; empty
-                                for program-scope globals and builtins.  Set by
-                                semantic analysis; consumed by codegen to apply
-                                unit-prefix mangling on cross-unit references. }
+                                for builtins, program-local symbols, and locals.
+                                Populated by uSemanticImport when registering an
+                                imported iface, and by AnalyseUnitForExport for
+                                symbols owned by the unit being analysed.  Read
+                                by per-unit visibility and by unit-prefix
+                                mangling on cross-unit references. }
     constructor Create(const AName: string; AKind: TSymbolKind; AType: TTypeDesc);
     destructor Destroy; override;
   end;
