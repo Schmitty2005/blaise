@@ -875,6 +875,27 @@ begin
   end;
 end;
 
+function WriteInlineBodies(AIface: TUnitInterface): string;
+var
+  I:  Integer;
+  B:  TInlineBody;
+  SB: TStringList;
+begin
+  SB := TStringList.Create;
+  try
+    SB.Add('INLINE ' + IntToStr(AIface.InlineBodies.Count));
+    for I := 0 to AIface.InlineBodies.Count - 1 do
+    begin
+      B := TInlineBody(AIface.InlineBodies.Items[I]);
+      SB.Add(EncodeLpstr(B.RoutineName) + EncodeBlock(B.Block));
+    end;
+    SB.Add('END');
+    Result := SB.Text;
+  finally
+    SB.Free;
+  end;
+end;
+
 function WriteUnitInterface(AIface: TUnitInterface): string;
 begin
   Result :=
@@ -885,7 +906,8 @@ begin
     WriteConsts         (AIface) +
     WriteVars           (AIface) +
     WriteRoutines       (AIface) +
-    WriteGenericRoutines(AIface);
+    WriteGenericRoutines(AIface) +
+    WriteInlineBodies   (AIface);
 end;
 
 { ----- Reader ----------------------------------------------------- }
@@ -1699,6 +1721,24 @@ begin
   for I := 1 to C do ATarget.Add(ReadMethodDecl(AText, APos));
 end;
 
+procedure ReadInlineBodies(const AText: string; var APos: Integer;
+                           AIface: TUnitInterface);
+var
+  Count, I: Integer;
+  B:        TInlineBody;
+begin
+  Count := ReadDecimalAt(AText, APos);
+  for I := 1 to Count do
+  begin
+    B := TInlineBody.Create;
+    B.RoutineName := ReadLpstrAt(AText, APos);
+    B.Block       := ReadBlock(AText, APos);
+    AIface.AddInlineBody(B);
+  end;
+  if ReadTag(AText, APos) <> 'END' then
+    raise EIfaceFormatError.Create('INLINE block: missing END marker');
+end;
+
 procedure ReadGenericRoutines(const AText: string; var APos: Integer;
                               AIface: TUnitInterface);
 var
@@ -2014,6 +2054,7 @@ begin
       else if Tag = 'ROUT'    then ReadRoutines       (AText, Cur, Result)
       else if Tag = 'META'    then ReadMeta           (AText, Cur, Result)
       else if Tag = 'GENROUT' then ReadGenericRoutines(AText, Cur, Result)
+      else if Tag = 'INLINE'  then ReadInlineBodies   (AText, Cur, Result)
       else if Tag = ''        then Break
       else
         raise EIfaceFormatError.Create(Format(

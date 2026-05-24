@@ -261,6 +261,7 @@ type
     { Body survives the disk path — the AST body serialiser
       preserves statements/expressions through write+read. }
     procedure TestDiskPath_GenericRoutine_BodyPreserved;
+    procedure TestRoundTrip_InlineBody_Preserved;
   end;
 
   { ----- ImportUnitInterface round-trip (Phase 6c-A) -------------- }
@@ -3282,6 +3283,38 @@ begin
     AssertEquals('rhs name V', 'V', TIdentExpr(Asn.Expr).Name);
   finally
     Tab.Free;
+    Iface.Free;
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_InlineBody_Preserved;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'function Square(N: Integer): Integer; inline;' + #10 +
+    'implementation' + #10 +
+    'function Square(N: Integer): Integer; inline;' + #10 +
+    'begin Result := N * N; end;' + #10 +
+    'end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  IB:           TInlineBody;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      IB := Round.FindInlineBody('Square');
+      AssertTrue('Square inline body present', IB <> nil);
+      AssertTrue('block carried', IB.Block <> nil);
+      AssertTrue('has at least one stmt', IB.Block.Stmts.Count >= 1);
+    finally
+      Round.Free;
+    end;
+  finally
     Iface.Free;
   end;
 end;
