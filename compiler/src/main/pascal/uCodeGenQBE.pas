@@ -279,6 +279,13 @@ type
       migrated.  ATypeName/AMethodName are the fallback components. }
     function  MethodEmitName(AMDecl: TMethodDecl;
       const ATypeName, AMethodName: string): string;
+    { Normalise the result of an external (cdecl) call to its declared
+      width.  C calling conventions leave the upper bits of %eax
+      unspecified for sub-int returns (Byte/Boolean/Word/SmallInt), so
+      callers that hold the value as a full word would otherwise see
+      garbage in those bits — `if Foo() <> 0 then` mis-fires silently. }
+    function  MaybeNormalizeExtReturn(const ASrcTemp: string;
+      AMDecl: TMethodDecl): string;
   public
     FDebugMode: Boolean;
     constructor Create;
@@ -679,6 +686,38 @@ begin
   end;
 end;
 
+{ For an external (cdecl) call returning a sub-int type, emit a mask
+  (Byte/Boolean/Word) or low-16 sign-extend (SmallInt) to clear the
+  ABI-undefined upper bits before the value enters the i32 SSA domain. }
+function TCodeGenQBE.MaybeNormalizeExtReturn(const ASrcTemp: string;
+  AMDecl: TMethodDecl): string;
+var NewT: string;
+begin
+  Result := ASrcTemp;
+  if (AMDecl = nil) or (not AMDecl.IsExternal) or
+     (AMDecl.ResolvedReturnType = nil) then Exit;
+  case AMDecl.ResolvedReturnType.Kind of
+    tyByte, tyBoolean:
+      begin
+        NewT := AllocTemp;
+        EmitLine(Format('  %s =w and %s, 255', [NewT, ASrcTemp]));
+        Result := NewT;
+      end;
+    tyWord:
+      begin
+        NewT := AllocTemp;
+        EmitLine(Format('  %s =w and %s, 65535', [NewT, ASrcTemp]));
+        Result := NewT;
+      end;
+    tySmallInt:
+      begin
+        NewT := AllocTemp;
+        EmitLine(Format('  %s =w shl %s, 16', [NewT, ASrcTemp]));
+        EmitLine(Format('  %s =w sar %s, 16', [NewT, NewT]));
+        Result := NewT;
+      end;
+  end;
+end;
 
 function TCodeGenQBE.CountTryStmts(AStmt: TASTStmt): Integer;
 var
@@ -7734,7 +7773,7 @@ begin
         end;
         T := AllocTemp;
         EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
-        Result := T;
+        Result := MaybeNormalizeExtReturn(T, MDecl);
         Exit;
       end;
       if MDecl.IsExternal and (MDecl.ExternalName <> '') then
@@ -7802,7 +7841,7 @@ begin
         T := AllocTemp;
         EmitLine(Format('  %s =%s call %s(%s)', [T, QType, FuncName, ArgLine]));
         EmitOwnedArgReleases(FC.Args, ArgTemps);
-        Result := T;
+        Result := MaybeNormalizeExtReturn(T, MDecl);
       finally
         ArgTemps.Free();
       end;

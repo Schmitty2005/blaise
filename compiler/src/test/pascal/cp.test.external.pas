@@ -40,6 +40,15 @@ type
     procedure TestCodegen_ExternalProc_CallEmitted;
     { Codegen — call uses C symbol name when 'external name' is given }
     procedure TestCodegen_ExternalProcNamed_UsesExternalName;
+    { Codegen — narrow-int FFI returns must be normalised to their
+      declared width at the call site.  C ABI leaves the upper bits of
+      the return register undefined for sub-int returns, so a caller
+      observing the value as a full word (e.g. `if Foo() <> 0 then`)
+      would otherwise see garbage upper bits and mis-fire silently. }
+    procedure TestCodegen_ExternalByteReturn_MaskedToLowByte;
+    procedure TestCodegen_ExternalWordReturn_MaskedToLow16;
+    procedure TestCodegen_ExternalSmallIntReturn_SignExtendedFromLow16;
+    procedure TestCodegen_ExternalIntegerReturn_NoNormalisation;
   end;
 
 implementation
@@ -350,6 +359,80 @@ begin
     IRContains(IR, 'call $c_foo'));
   AssertFalse('Call must not use Pascal name when external name is given',
     IRContains(IR, 'call $Foo'));
+end;
+
+procedure TExternalTests.TestCodegen_ExternalByteReturn_MaskedToLowByte;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+        program Test;
+        function Foo: Byte; external;
+        var b: Byte;
+        begin
+          b := Foo;
+          if Foo <> 0 then
+            b := 1;
+        end.
+        '''
+  );
+  AssertTrue('Byte FFI return must be masked to 8 bits',
+    IRContains(IR, 'and ') and IRContains(IR, ', 255'));
+end;
+
+procedure TExternalTests.TestCodegen_ExternalWordReturn_MaskedToLow16;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+        program Test;
+        function Foo: Word; external;
+        var w: Word;
+        begin
+          w := Foo;
+        end.
+        '''
+  );
+  AssertTrue('Word FFI return must be masked to 16 bits',
+    IRContains(IR, 'and ') and IRContains(IR, ', 65535'));
+end;
+
+procedure TExternalTests.TestCodegen_ExternalSmallIntReturn_SignExtendedFromLow16;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+        program Test;
+        function Foo: SmallInt; external;
+        var s: SmallInt;
+        begin
+          s := Foo;
+        end.
+        '''
+  );
+  { Sign-extend low 16 bits: shl 16 then sar 16 }
+  AssertTrue('SmallInt FFI return must shl 16 to set up sign-extend',
+    IRContains(IR, 'shl ') and IRContains(IR, ', 16'));
+  AssertTrue('SmallInt FFI return must sar 16 to complete sign-extend',
+    IRContains(IR, 'sar '));
+end;
+
+procedure TExternalTests.TestCodegen_ExternalIntegerReturn_NoNormalisation;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+        program Test;
+        function Foo: Integer; external;
+        var i: Integer;
+        begin
+          i := Foo;
+        end.
+        '''
+  );
+  { Full-width returns need no fix-up — must not emit a stray mask. }
+  AssertFalse('Integer FFI return must not be masked',
+    IRContains(IR, ', 255') or IRContains(IR, ', 65535'));
 end;
 
 initialization
