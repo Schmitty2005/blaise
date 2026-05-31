@@ -4137,6 +4137,7 @@ var
   ArgType: TTypeDesc;
   I:       Integer;
   ObjType: TTypeDesc;
+  FldInfo: TFieldInfo;
 begin
   { Call on a receiver expression: AProg.UsedUnits.Add(UName) }
   if ACall.ObjExpr <> nil then
@@ -4252,6 +4253,27 @@ begin
 
   for I := 0 to ACall.Args.Count - 1 do
     AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+
+  { Direct invocation of a procedural-typed field (e.g. an event-handler
+    field): F.Handler; or F.Handler();.  Resolve this before reporting a
+    missing method so the call dispatches through the (Code, Data) pair
+    stored in the field, mirroring the indirect-call path used for a
+    procedural-typed local variable. }
+  FldInfo := RT.FindField(ACall.Name);
+  if (FldInfo <> nil) and (FldInfo.TypeDesc <> nil) and
+     (FldInfo.TypeDesc.Kind = tyProcedural) and
+     (FindMethodDecl(RT.Name, ACall.Name) = nil) then
+  begin
+    ACall.IsProcFieldCall   := True;
+    ACall.ProcFieldInfo     := FldInfo;
+    ACall.ResolvedProcType  := FldInfo.TypeDesc;
+    ACall.ResolvedClassType := RT;
+    ACall.ResolvedMethod    := nil;
+    ACall.IsGlobal          := ObjSym.IsGlobal;
+    ACall.IsVarParam        := (ObjSym.Kind = skVarParameter);
+    Exit;
+  end;
+
   MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
     ACall.Line, ACall.Col);
   if MDecl = nil then

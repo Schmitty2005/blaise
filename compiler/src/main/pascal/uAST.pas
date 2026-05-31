@@ -434,6 +434,12 @@ type
     IsGlobal:           Boolean;     { set by uSemantic — ObjectName is a program-level global }
     IsVarParam:         Boolean;     { set by uSemantic — ObjectName is a var/out parameter }
     IsBuiltinToString:  Boolean;     { set by uSemantic — built-in TObject.ToString virtual dispatch }
+    IsProcFieldCall:    Boolean;     { set by uSemantic — Name is a procedural-typed field of
+                                       the receiver, invoked directly (F.Handler;).  Codegen
+                                       loads the (Code, Data) pair from the field slot and
+                                       dispatches indirectly instead of calling a method. }
+    ProcFieldInfo:      TFieldInfo;  { not owned — the procedural field, when IsProcFieldCall }
+    ResolvedProcType:   TObject;     { TProceduralTypeDesc — not owned; the field's signature }
     constructor Create;
     destructor Destroy; override;
   end;

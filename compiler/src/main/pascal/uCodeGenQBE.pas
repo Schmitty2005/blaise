@@ -4204,6 +4204,9 @@ var
   FPtrTemp: string;
   SlotOff:  Integer;
   IntfDesc: TInterfaceTypeDesc;
+  PT:       TProceduralTypeDesc;
+  SlotAddr: string;
+  DataTemp: string;
 begin
   { Interface method dispatch: load obj + itab, index by method slot }
   if (ACall.ResolvedClassType <> nil) and
@@ -4371,6 +4374,47 @@ begin
   begin
     EmitLine(Format('  %s =l loadl %s', [SelfTemp, VarRef(ACall.ObjectName, ACall.IsGlobal)]));
     EmitLine(Format('  call $_CheckNil(l %s)', [SelfTemp]));
+  end;
+
+  { Direct invocation of a procedural-typed field (F.Handler; / F.Handler();).
+    The field slot lives at Self + Offset.  For a method-pointer field it is a
+    16-byte (Code, Data) block — Code at slot+0, Data at slot+8; the loaded
+    Data is passed as the implicit first argument so the callee sees its Self.
+    A bare procedural field (not 'of object') holds a single function pointer
+    and takes no implicit Self.  Mirrors EmitProcCall's indirect-call path. }
+  if ACall.IsProcFieldCall then
+  begin
+    PT := TProceduralTypeDesc(ACall.ResolvedProcType);
+    if ACall.ProcFieldInfo.Offset > 0 then
+    begin
+      SlotAddr := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d',
+        [SlotAddr, SelfTemp, ACall.ProcFieldInfo.Offset]));
+    end
+    else
+      SlotAddr := SelfTemp;
+    FPtrTemp := AllocTemp;
+    EmitLine(Format('  %s =l loadl %s', [FPtrTemp, SlotAddr]));
+    if PT.IsMethodPtr then
+    begin
+      ArgTemp := AllocTemp;
+      EmitLine(Format('  %s =l add %s, 8', [ArgTemp, SlotAddr]));
+      DataTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [DataTemp, ArgTemp]));
+      ArgLine := Format('l %s', [DataTemp]);
+    end
+    else
+      ArgLine := '';
+    for I := 0 to ACall.Args.Count - 1 do
+    begin
+      if ArgLine <> '' then ArgLine := ArgLine + ', ';
+      ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+      QType   := QbeTypeOf(TProcParamInfo(PT.Params.Items[I]).TypeDesc);
+      ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
+      ArgLine := ArgLine + Format('%s %s', [QType, ArgTemp]);
+    end;
+    EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+    Exit;
   end;
 
   { Build argument string: l Self, then each explicit arg }

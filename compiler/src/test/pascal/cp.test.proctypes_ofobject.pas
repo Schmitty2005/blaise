@@ -53,11 +53,14 @@ type
     procedure TestCodegen_MethodPtrField_AssignUsesMemcpy16;
     procedure TestCodegen_MethodPtrField_RecordTotalSizeIncludes16;
 
+    procedure TestCodegen_MethodPtrField_DirectCall_LoadsCodeAndData;
+
     { End-to-end }
     procedure TestE2E_MethodPtr_NoArgs;
     procedure TestE2E_MethodPtr_WithArgs;
     procedure TestE2E_MethodPtr_PreservesSelf;
     procedure TestE2E_MethodPtrField_RoundTrip;
+    procedure TestE2E_MethodPtrField_DirectCall_StmtForm;
   end;
 
 implementation
@@ -654,6 +657,65 @@ const
 begin
   AssertEquals('method-ptr stored in a class field survives across statements',
     'field-ok', CompileAndRun(Src));
+end;
+
+procedure TProcTypesOfObjectTests.TestCodegen_MethodPtrField_DirectCall_LoadsCodeAndData;
+const
+  Src =
+    '''
+        program P;
+        type
+          TGreet = procedure of object;
+          THolder = class(TObject)
+            Handler: TGreet;
+          end;
+        var H: THolder;
+        begin
+          H := THolder.Create;
+          H.Handler;
+          H.Free
+        end.
+        ''';
+var IR: string;
+begin
+  IR := GenIR(Src);
+  { Direct field call emits: load Code from slot, load Data from slot+8,
+    then call %Code(l %Data, ...).  There must be NO static '$THolder_Handler'
+    symbol — it dispatches indirectly through the field. }
+  AssertTrue('IR contains indirect call pattern (call %',
+    StrPos('call %', IR) >= 0);
+  AssertFalse('IR does not static-dispatch $THolder_Handler',
+    StrPos('$THolder_Handler', IR) >= 0);
+end;
+
+procedure TProcTypesOfObjectTests.TestE2E_MethodPtrField_DirectCall_StmtForm;
+const
+  Src =
+    '''
+        program P;
+        type
+          TGreet = procedure of object;
+          TFoo = class(TObject)
+            Handler: TGreet;
+          published
+            procedure SayHi;
+          end;
+        procedure TFoo.SayHi;
+        begin WriteLn('field-direct') end;
+        var F: TFoo; M: TMethod;
+        begin
+          F := TFoo.Create;
+          M.Code := MethodAddress(F, 'SayHi');
+          M.Data := F;
+          F.Handler := TGreet(M);
+          F.Handler;
+          F.Handler();
+          F.Free
+        end.
+        ''';
+begin
+  AssertEquals('direct proc-field call (bare and with parens) invokes the method',
+    'field-direct' + #10 + 'field-direct', CompileAndRun(Src));
 end;
 
 initialization
