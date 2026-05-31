@@ -50,6 +50,26 @@ type
     procedure TestRun_ConstructorOverload_PicksCorrectArity;
     procedure TestRun_MethodReadsProgramGlobal;
     procedure TestRun_VarParam_ClassFields_WritebackVisible;
+    { Name-resolution priority for unqualified calls inside a class
+      method.  Adjacent-level distinctions, top wins:
+        1. local vars / parameters
+        2. implicit Self.member (incl. inherited via class chain)
+        3. program-level / uses-clause unit exports
+      Sub-distinctions inside level 2 (own vs parent), and level 3
+      (program vs uses-clause), depend on orthogonal mechanisms
+      (virtual dispatch; Blaise's duplicate-identifier rule for
+      program-level shadowing of unit exports).  They're worth
+      pinning separately when their own bugs surface.
+
+      Cross-unit visibility (private skipped, protected accessible to
+      subclasses) is a follow-up commit. }
+    procedure TestRun_LocalVar_ShadowsOwnMethod;
+    procedure TestRun_ParentMethod_ShadowsProgramProc;
+    { Explicit qualifiers are unambiguous paths — the priority order
+      does not apply.  Self.X must hit a class member; inherited X
+      must hit a parent method.  Neither falls through to unit-level. }
+    procedure TestRun_ExplicitSelf_AlwaysClassMember;
+    procedure TestRun_InheritedCall_AlwaysParent;
   end;
 
 implementation
@@ -508,6 +528,130 @@ const
         end.
         ''';
 
+  { ----- Name-resolution priority (Option A: single-program tests).
+    Visibility (private / protected across units) is a follow-up. ----- }
+
+  { Level 1 beats level 2: a local procedural-typed variable shadows a
+    class method of the same name.  This is the use case in
+    blaise.testing.TTestCase.RunTest (`var Run: TRunMethod`). }
+  SrcResolve_LocalVar_OverOwnMethod =
+    '''
+        program ResLocalVar;
+        function Helper: Integer;
+        begin Result := 42 end;
+        type
+          TFn  = function: Integer;
+          TFoo = class
+            function Compute: Integer;
+            function Run: Integer;
+          end;
+        function TFoo.Compute: Integer;
+        begin Result := 100 end;
+        function TFoo.Run: Integer;
+        var Compute: TFn;
+        begin
+          Compute := @Helper;
+          Result  := Compute()
+        end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          WriteLn(F.Run);
+          F.Free
+        end.
+        ''';
+
+  { Level 2 beats level 3: a class method shadows a program-level
+    proc.  A subclass with no own method X but with an inherited X
+    (and a program-level proc X also in scope) — the unqualified call
+    inside the subclass binds to the inherited method, not the
+    program-level proc.  Pre-fix, the global lookup ran first and
+    bound to the program-level Tag (output '1'); post-fix the
+    implicit-Self check finds parent.Tag and wins (output '2'). }
+  SrcResolve_ParentMethod_OverProgramProc =
+    '''
+        program ResParentOverProgram;
+        function Tag: Integer;
+        begin Result := 1 end;
+        type
+          TParent = class
+            function Tag: Integer;
+            function Echo: Integer;
+          end;
+          TChild = class(TParent)
+          end;
+        function TParent.Tag: Integer;
+        begin Result := 2 end;
+        function TParent.Echo: Integer;
+        begin Result := Tag end;
+        var C: TChild;
+        begin
+          C := TChild.Create;
+          WriteLn(C.Echo);
+          C.Free
+        end.
+        ''';
+
+  { `inherited X;` is an explicit qualifier that calls the parent's X
+    statically — does NOT go through subclass override, does NOT fall
+    through to any program-level X.  Statement form is used because
+    Blaise doesn't yet parse `inherited X` in expression context;
+    parent's body sets Result, which Child.FromInh returns. }
+  SrcResolve_InheritedAlwaysParent =
+    '''
+        program ResInherited;
+        type
+          TParent = class
+            function Tag: Integer;
+          end;
+          TChild = class(TParent)
+            function Tag: Integer;
+            function FromInh: Integer;
+          end;
+        function TParent.Tag: Integer;
+        begin Result := 1 end;
+        function TChild.Tag: Integer;
+        begin Result := 2 end;
+        function TChild.FromInh: Integer;
+        begin
+          inherited Tag
+        end;
+        var C: TChild;
+        begin
+          C := TChild.Create;
+          WriteLn(C.FromInh);
+          C.Free
+        end.
+        ''';
+
+  { Self.X is an explicit path: it MUST resolve to a member of Self's
+    class hierarchy, regardless of any same-named local var that
+    would otherwise win in the unqualified priority order. }
+  SrcResolve_ExplicitSelf_AlwaysClassMember =
+    '''
+        program ResExplicitSelf;
+        type
+          TFoo = class
+            function Compute: Integer;
+            function Run: Integer;
+          end;
+        function TFoo.Compute: Integer;
+        begin Result := 200 end;
+        function TFoo.Run: Integer;
+        var Compute: Integer;
+        begin
+          Compute := 7;
+          Result  := Self.Compute
+        end;
+        var F: TFoo;
+        begin
+          F := TFoo.Create;
+          WriteLn(F.Run);
+          F.Free
+        end.
+        ''';
+
+
   SrcCtorOverloadArity =
     '''
         program P;
@@ -888,6 +1032,42 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcVarParamClassFields, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('var-param writeback visible through class field', '4096' + LE + '1' + LE, Output);
+end;
+
+procedure TE2EClasses2Tests.TestRun_LocalVar_ShadowsOwnMethod;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcResolve_LocalVar_OverOwnMethod, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('local var wins over class method', '42' + LE, Output);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ParentMethod_ShadowsProgramProc;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcResolve_ParentMethod_OverProgramProc, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('inherited method wins over program-level proc', '2' + LE, Output);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ExplicitSelf_AlwaysClassMember;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcResolve_ExplicitSelf_AlwaysClassMember, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('Self.X reaches class method despite local var X', '200' + LE, Output);
+end;
+
+procedure TE2EClasses2Tests.TestRun_InheritedCall_AlwaysParent;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcResolve_InheritedAlwaysParent, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('inherited Tag reaches parent despite subclass override', '1' + LE, Output);
 end;
 
 initialization

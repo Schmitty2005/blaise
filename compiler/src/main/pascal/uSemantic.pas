@@ -5184,56 +5184,66 @@ var
   PT:      TProceduralTypeDesc;
   PPar:    TProcParamInfo;
 begin
+  { Resolution order matches Delphi/FPC:
+      1. Local variables / parameters / var-parameters — a `var Run:
+         TRunMethod` shadows an inherited method of the same name
+         (called via the variable, not the method).
+      2. Implicit Self.member (incl. inherited via class chain) —
+         shadows a unit-level proc of the same name.  Was the bug:
+         a `uses strutils` in scope used to bind unqualified
+         CountOccurrences inside a class method to strutils's
+         version, even when the enclosing class declared its own.
+      3. Unit-level proc / function (program-level or uses-clause). }
   Sym := FTable.Lookup(ACall.Name);
-  if Sym = nil then
+  if (FCurrentClass <> nil) and
+     ((Sym = nil) or
+      not (Sym.Kind in [skVariable, skParameter, skVarParameter])) then
   begin
-    { Implicit Self.Method() — name is a method of the current class }
-    if FCurrentClass <> nil then
+    MDecl := FindMethodDecl(FCurrentClass.Name, ACall.Name);
+    if MDecl <> nil then
     begin
-      MDecl := FindMethodDecl(FCurrentClass.Name, ACall.Name);
-      if MDecl <> nil then
+      { Analyse args first so overload resolution can score by type. }
+      for I := 0 to ACall.Args.Count - 1 do
+        AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+      { Use overload resolution so the correct variant is chosen when
+        multiple overloads exist (e.g. AssertEquals(string,string,string)
+        vs AssertEquals(string,Integer,Integer)). }
+      MDecl := ResolveMethodOverload(FCurrentClass.Name, ACall.Name,
+        ACall.Args, ACall.Line, ACall.Col);
+      if MDecl = nil then
+        SemanticError(
+          Format('No matching overload for ''%s.%s'' with %d argument(s)',
+            [FCurrentClass.Name, ACall.Name, ACall.Args.Count]),
+          ACall.Line, ACall.Col);
+      { Validate only var-param arguments (non-var compatibility was
+        verified by the overload scorer). }
+      for I := 0 to ACall.Args.Count - 1 do
       begin
-        { Analyse args first so overload resolution can score by type. }
-        for I := 0 to ACall.Args.Count - 1 do
-          AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
-        { Use overload resolution so the correct variant is chosen when
-          multiple overloads exist (e.g. AssertEquals(string,string,string)
-          vs AssertEquals(string,Integer,Integer)). }
-        MDecl := ResolveMethodOverload(FCurrentClass.Name, ACall.Name,
-          ACall.Args, ACall.Line, ACall.Col);
-        if MDecl = nil then
-          SemanticError(
-            Format('No matching overload for ''%s.%s'' with %d argument(s)',
-              [FCurrentClass.Name, ACall.Name, ACall.Args.Count]),
-            ACall.Line, ACall.Col);
-        { Validate only var-param arguments (non-var compatibility was
-          verified by the overload scorer). }
-        for I := 0 to ACall.Args.Count - 1 do
+        Par := TMethodParam(MDecl.Params.Items[I]);
+        if Par.IsVarParam then
         begin
-          Par := TMethodParam(MDecl.Params.Items[I]);
-          if Par.IsVarParam then
-          begin
-            ArgType := TASTExpr(ACall.Args.Items[I]).ResolvedType;
-            CheckTypesMatch(Par.ResolvedType, ArgType,
-              Format('var argument %d of ''%s''', [I + 1, ACall.Name]),
-              ACall.Line, ACall.Col);
-          end;
+          ArgType := TASTExpr(ACall.Args.Items[I]).ResolvedType;
+          CheckTypesMatch(Par.ResolvedType, ArgType,
+            Format('var argument %d of ''%s''', [I + 1, ACall.Name]),
+            ACall.Line, ACall.Col);
         end;
-        AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
-        ACall.ResolvedDecl         := MDecl;
-        ACall.IsImplicitSelfMethod := True;
-        Exit;
       end;
+      AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
+      ACall.ResolvedDecl         := MDecl;
+      ACall.IsImplicitSelfMethod := True;
+      Exit;
     end;
-    { Try on-demand instantiation of a generic function }
-    if StrPos('<', ACall.Name) >= 0 then
-      InstantiateGenericFunc(ACall.Name);
-    Sym := FTable.Lookup(ACall.Name);
-    if Sym = nil then
-      SemanticError(
-        Format('Undeclared procedure ''%s''', [ACall.Name]),
-        ACall.Line, ACall.Col);
   end;
+  { Try on-demand instantiation of a generic function }
+  if StrPos('<', ACall.Name) >= 0 then
+  begin
+    InstantiateGenericFunc(ACall.Name);
+    Sym := FTable.Lookup(ACall.Name);
+  end;
+  if Sym = nil then
+    SemanticError(
+      Format('Undeclared procedure ''%s''', [ACall.Name]),
+      ACall.Line, ACall.Col);
   ACall.Name := Sym.Name;  { normalise to declared casing }
   { Indirect call through a procedural-typed variable used as a statement:
     e.g. 'MyHandler(Arg1, Arg2)' where MyHandler is 'var MyHandler: TMyProc'. }
@@ -5562,53 +5572,56 @@ begin
       AExpr.Line, AExpr.Col);
   end;
 
+  { Resolution order: see AnalyseProcCall for the matching pattern.
+    Local vars/parameters win over implicit-Self method, which wins
+    over unit-level. }
   Sym := FTable.Lookup(AExpr.Name);
-  if Sym = nil then
+  if (FCurrentClass <> nil) and
+     ((Sym = nil) or
+      not (Sym.Kind in [skVariable, skParameter, skVarParameter])) then
   begin
-    { Implicit Self.Method() on a function method of the current class }
-    if FCurrentClass <> nil then
+    MDecl := FindMethodDecl(FCurrentClass.Name, AExpr.Name);
+    if MDecl <> nil then
     begin
-      MDecl := FindMethodDecl(FCurrentClass.Name, AExpr.Name);
-      if MDecl <> nil then
+      { Analyse args first so overload resolution can score by type. }
+      for I := 0 to AExpr.Args.Count - 1 do
+        AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+      MDecl := ResolveMethodOverload(FCurrentClass.Name, AExpr.Name,
+        AExpr.Args, AExpr.Line, AExpr.Col);
+      if MDecl = nil then
+        SemanticError(
+          Format('No matching overload for ''%s.%s'' with %d argument(s)',
+            [FCurrentClass.Name, AExpr.Name, AExpr.Args.Count]),
+          AExpr.Line, AExpr.Col);
+      for I := 0 to AExpr.Args.Count - 1 do
       begin
-        { Analyse args first so overload resolution can score by type. }
-        for I := 0 to AExpr.Args.Count - 1 do
-          AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
-        MDecl := ResolveMethodOverload(FCurrentClass.Name, AExpr.Name,
-          AExpr.Args, AExpr.Line, AExpr.Col);
-        if MDecl = nil then
-          SemanticError(
-            Format('No matching overload for ''%s.%s'' with %d argument(s)',
-              [FCurrentClass.Name, AExpr.Name, AExpr.Args.Count]),
-            AExpr.Line, AExpr.Col);
-        for I := 0 to AExpr.Args.Count - 1 do
+        Par := TMethodParam(MDecl.Params.Items[I]);
+        if Par.IsVarParam then
         begin
-          Par := TMethodParam(MDecl.Params.Items[I]);
-          if Par.IsVarParam then
-          begin
-            ArgType := TASTExpr(AExpr.Args.Items[I]).ResolvedType;
-            CheckTypesMatch(Par.ResolvedType, ArgType,
-              Format('var argument %d of ''%s''', [I + 1, AExpr.Name]),
-              AExpr.Line, AExpr.Col);
-          end;
+          ArgType := TASTExpr(AExpr.Args.Items[I]).ResolvedType;
+          CheckTypesMatch(Par.ResolvedType, ArgType,
+            Format('var argument %d of ''%s''', [I + 1, AExpr.Name]),
+            AExpr.Line, AExpr.Col);
         end;
-        AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
-        AExpr.ResolvedDecl         := MDecl;
-        AExpr.IsImplicitSelfMethod := True;
-        Result := MDecl.ResolvedReturnType;
-        AExpr.ResolvedType := Result;
-        Exit;
       end;
+      AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
+      AExpr.ResolvedDecl         := MDecl;
+      AExpr.IsImplicitSelfMethod := True;
+      Result := MDecl.ResolvedReturnType;
+      AExpr.ResolvedType := Result;
+      Exit;
     end;
-    { Try on-demand instantiation of a generic function }
-    if StrPos('<', AExpr.Name) >= 0 then
-      InstantiateGenericFunc(AExpr.Name);
-    Sym := FTable.Lookup(AExpr.Name);
-    if Sym = nil then
-      SemanticError(
-        Format('Undeclared function ''%s''', [AExpr.Name]),
-        AExpr.Line, AExpr.Col);
   end;
+  { Try on-demand instantiation of a generic function }
+  if StrPos('<', AExpr.Name) >= 0 then
+  begin
+    InstantiateGenericFunc(AExpr.Name);
+    Sym := FTable.Lookup(AExpr.Name);
+  end;
+  if Sym = nil then
+    SemanticError(
+      Format('Undeclared function ''%s''', [AExpr.Name]),
+      AExpr.Line, AExpr.Col);
   AExpr.Name := Sym.Name;  { normalise to declared casing }
   { Type cast: TypeName(Expr) — single-argument call to a type name }
   if Sym.Kind = skType then
@@ -6634,70 +6647,71 @@ begin
     Result := FTable.TypeString
   else if AExpr is TIdentExpr then
   begin
+    { Resolution order (matches AnalyseProcCall / AnalyseFuncCall):
+      local vars/params > implicit Self.member > unit-level.  Without
+      this priority, a bare identifier inside a method binds to the
+      same-named unit-level symbol even when the enclosing class has
+      a field / zero-arg method / property of that name. }
     Sym := FTable.Lookup(TIdentExpr(AExpr).Name);
-    if Sym = nil then
+    if (FCurrentClass <> nil) and
+       ((Sym = nil) or
+        not (Sym.Kind in [skVariable, skParameter, skVarParameter])) then
     begin
-      { Not in scope — try implicit Self.Field when inside a method }
-      if FCurrentClass <> nil then
+      FldInfo := FCurrentClass.FindField(TIdentExpr(AExpr).Name);
+      if FldInfo <> nil then
       begin
-        FldInfo := FCurrentClass.FindField(TIdentExpr(AExpr).Name);
-        if FldInfo <> nil then
+        TIdentExpr(AExpr).IsImplicitSelf    := True;
+        TIdentExpr(AExpr).ImplicitFieldInfo := FldInfo;
+        Result := FldInfo.TypeDesc;
+        AExpr.ResolvedType := Result;
+        Exit;
+      end;
+      { Bare zero-arg method reference: e.g. `TokenText` inside a method }
+      TIdentExpr(AExpr).ImplicitMethodDecl :=
+        FindMethodDecl(FCurrentClass.Name, TIdentExpr(AExpr).Name);
+      if TIdentExpr(AExpr).ImplicitMethodDecl <> nil then
+      begin
+        TIdentExpr(AExpr).IsImplicitSelfMethod := True;
+        Result :=
+          TMethodDecl(TIdentExpr(AExpr).ImplicitMethodDecl).ResolvedReturnType;
+        AExpr.ResolvedType := Result;
+        Exit;
+      end;
+      { Property of current class, method-backed: rewrite to the read method }
+      PropInfo := FCurrentClass.FindProperty(TIdentExpr(AExpr).Name);
+      if PropInfo <> nil then
+      begin
+        if PropInfo.ReadMethod <> '' then
         begin
-          TIdentExpr(AExpr).IsImplicitSelf   := True;
-          TIdentExpr(AExpr).ImplicitFieldInfo := FldInfo;
-          Result := FldInfo.TypeDesc;
-          AExpr.ResolvedType := Result;
-          Exit;
-        end;
-        { Bare zero-arg method call: e.g. TokenText inside a method }
-        TIdentExpr(AExpr).ImplicitMethodDecl :=
-          FindMethodDecl(FCurrentClass.Name, TIdentExpr(AExpr).Name);
-        if TIdentExpr(AExpr).ImplicitMethodDecl <> nil then
-        begin
-          TIdentExpr(AExpr).IsImplicitSelfMethod := True;
-          Result :=
-            TMethodDecl(TIdentExpr(AExpr).ImplicitMethodDecl).ResolvedReturnType;
-          AExpr.ResolvedType := Result;
-          Exit;
-        end;
-        { Property of current class, method-backed: rewrite to the read method }
-        FldInfo := nil;  { reuse PropInfo via local }
-        begin
-          PropInfo := FCurrentClass.FindProperty(TIdentExpr(AExpr).Name);
-          if PropInfo <> nil then
+          TIdentExpr(AExpr).ImplicitMethodDecl :=
+            FindMethodDecl(FCurrentClass.Name, PropInfo.ReadMethod);
+          if TIdentExpr(AExpr).ImplicitMethodDecl <> nil then
           begin
-            if PropInfo.ReadMethod <> '' then
-            begin
-              TIdentExpr(AExpr).ImplicitMethodDecl :=
-                FindMethodDecl(FCurrentClass.Name, PropInfo.ReadMethod);
-              if TIdentExpr(AExpr).ImplicitMethodDecl <> nil then
-              begin
-                TIdentExpr(AExpr).IsImplicitSelfMethod := True;
-                TIdentExpr(AExpr).Name := PropInfo.ReadMethod;
-                Result := PropInfo.TypeDesc;
-                AExpr.ResolvedType := Result;
-                Exit;
-              end;
-            end
-            else if PropInfo.ReadField <> '' then
-            begin
-              FldInfo := FCurrentClass.FindField(PropInfo.ReadField);
-              if FldInfo <> nil then
-              begin
-                TIdentExpr(AExpr).IsImplicitSelf := True;
-                TIdentExpr(AExpr).ImplicitFieldInfo := FldInfo;
-                Result := FldInfo.TypeDesc;
-                AExpr.ResolvedType := Result;
-                Exit;
-              end;
-            end;
+            TIdentExpr(AExpr).IsImplicitSelfMethod := True;
+            TIdentExpr(AExpr).Name := PropInfo.ReadMethod;
+            Result := PropInfo.TypeDesc;
+            AExpr.ResolvedType := Result;
+            Exit;
+          end;
+        end
+        else if PropInfo.ReadField <> '' then
+        begin
+          FldInfo := FCurrentClass.FindField(PropInfo.ReadField);
+          if FldInfo <> nil then
+          begin
+            TIdentExpr(AExpr).IsImplicitSelf    := True;
+            TIdentExpr(AExpr).ImplicitFieldInfo := FldInfo;
+            Result := FldInfo.TypeDesc;
+            AExpr.ResolvedType := Result;
+            Exit;
           end;
         end;
       end;
+    end;
+    if Sym = nil then
       SemanticError(
         Format('Undeclared identifier ''%s''', [TIdentExpr(AExpr).Name]),
         AExpr.Line, AExpr.Col);
-    end;
     { Var-params and value-record/array params are both passed by reference at
       the QBE ABI level: the local slot holds a pointer, not the aggregate
       bytes.  Codegen must dereference the slot before reading fields. }
