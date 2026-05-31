@@ -57,6 +57,7 @@ type
     procedure TestCodegen_DynArray_Write_ComputesOffset;
     procedure TestCodegen_DynArray_High_CallsRTL;
     procedure TestCodegen_DynArray_Low_ReturnsZero;
+    procedure TestCodegen_DynArray_AddrOfElement_ComputesOffset;
     procedure TestSemantic_DynArray_High_Accepted;
     procedure TestSemantic_DynArray_Low_Accepted;
   end;
@@ -424,6 +425,32 @@ begin
       ''');
   AssertTrue('emits constant 0 for Low(dynArr)',
     Pos('copy 0', IR) > 0);
+end;
+
+procedure TDynArrayTests.TestCodegen_DynArray_AddrOfElement_ComputesOffset;
+var IR: string;
+begin
+  { Regression: @A[i] on a dyn-array used to raise "Unsupported L-value
+    form for var argument" because EmitAddrOfExpr only handled static
+    and open arrays.  The fix mirrors the open-array shape (element
+    size from TDynArrayTypeDesc.ElementType.RawSize, no LowBound).
+    Verify the offset arithmetic + base load are emitted without
+    going through a temporary aggregate copy. }
+  IR := GenIR('''
+      program P;
+      type TRec = record X: Integer; end;
+           PRec = ^TRec;
+      var A: array of TRec;
+          P: PRec;
+      begin
+        SetLength(A, 3);
+        P := @A[1]
+      end.
+      ''');
+  AssertTrue('mul for element offset in @A[i]',
+    Self.CountOccurrences(IR, 'mul') > 0);
+  AssertTrue('add to combine base + offset',
+    Self.CountOccurrences(IR, 'add') > 0);
 end;
 
 initialization

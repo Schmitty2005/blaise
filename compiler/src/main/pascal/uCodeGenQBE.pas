@@ -10497,6 +10497,23 @@ begin
       Result := ElemPtr;
       Exit;
     end;
+    { Dynamic-array element address: @A[I] — EmitExpr on a dyn-array var
+      already returns the heap data pointer, so the address computation
+      mirrors the open-array case (no LowBound). }
+    if Sub.StrExpr.ResolvedType.Kind = tyDynArray then
+    begin
+      ElemSize := TDynArrayTypeDesc(Sub.StrExpr.ResolvedType).ElementType.RawSize;
+      StrPtr   := EmitExpr(Sub.StrExpr);
+      IdxW     := EmitExpr(Sub.IndexExpr);
+      IdxL     := AllocTemp;
+      Offset   := AllocTemp;
+      ElemPtr  := AllocTemp;
+      EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
+      EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
+      EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
+      Result := ElemPtr;
+      Exit;
+    end;
   end;
   if AExpr.Expr is TIdentExpr then
   begin
