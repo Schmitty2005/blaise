@@ -118,6 +118,7 @@ uses
   cp.test.e2e.dateutils,
   cp.test.e2e.useschain,
   cp.test.unitinterface,
+  cp.test.e2e.sepcompile,
   cp.test.config;
 
 begin
