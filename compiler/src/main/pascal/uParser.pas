@@ -67,6 +67,10 @@ type
     procedure ParseTypeDecl(ABlock: TBlock);
     procedure ParseConstBlock(AList: TObjectList);
     function  TryParseConstIntTypecast(out AValue: Int64): Boolean;
+    function  CurrentIsConstBitOp: Boolean;
+    function  ConsumeConstBitOpName: string;
+    function  CollectConstBitOpExpr(const AFirstStr: string;
+                                    AFirstIsIdent: Boolean): TStringList;
     function  ParseEnumDef: TEnumTypeDef;
     function  ParseSetDef: TSetTypeDef;
     function  ParseRecordDef: TRecordTypeDef;
@@ -636,10 +640,104 @@ begin
   Result := True;
 end;
 
+{ True when FCurrent is one of the bitwise operators legal inside a
+  const initialiser: 'or', 'and', 'xor', 'shl', 'shr'.  Used to detect
+  the start of a deferred bit-op expression chain after the first
+  operand has been parsed. }
+function TParser.CurrentIsConstBitOp: Boolean;
+begin
+  Result := Check(tkOr)  or Check(tkAnd) or Check(tkXor)
+         or Check(tkShl) or Check(tkShr);
+end;
+
+{ Map current bit-op token to its lowercase name, then advance past it.
+  Caller has already verified CurrentIsConstBitOp. }
+function TParser.ConsumeConstBitOpName: string;
+begin
+  case FCurrent.Kind of
+    tkOr:  Result := 'or';
+    tkAnd: Result := 'and';
+    tkXor: Result := 'xor';
+    tkShl: Result := 'shl';
+    tkShr: Result := 'shr';
+  else
+    Result := '';  { unreachable — caller gated }
+  end;
+  Advance;
+end;
+
+{ Build a deferred bit-op expression token list, seeded with the first
+  operand which has already been parsed by the caller.  Operands and
+  operators alternate; operand entries are tagged on Objects[]:
+
+    Objects[i] = nil          → integer literal (the string is the int)
+    Objects[i] = TObject(1)   → ident reference
+    Objects[i] = TObject(2)   → operator name
+
+  Each new operand may be an optionally-signed int literal, a
+  TypeName(IntLit) cast, or a bare ident; trailing typecasts apply the
+  same truncation rules as TryParseConstIntTypecast. }
+function TParser.CollectConstBitOpExpr(const AFirstStr: string;
+                                       AFirstIsIdent: Boolean): TStringList;
+var
+  OpName:    string;
+  Sign:      Integer;
+  Raw:       Int64;
+  CastVal:   Int64;
+begin
+  Result := TStringList.Create;
+  try
+    if AFirstIsIdent then
+      Result.AddObject(AFirstStr, TObject(1))
+    else
+      Result.AddObject(AFirstStr, nil);
+    while CurrentIsConstBitOp do
+    begin
+      OpName := ConsumeConstBitOpName;
+      Result.AddObject(OpName, TObject(2));
+      Sign := 1;
+      if Check(tkMinus) then begin Advance; Sign := -1; end;
+      if Check(tkIdent) and (PeekKind = tkLParen)
+         and TryParseConstIntTypecast(CastVal) then
+      begin
+        if Sign < 0 then CastVal := -CastVal;
+        Result.AddObject(IntToStr(CastVal), nil);
+      end
+      else if Check(tkIntLit) then
+      begin
+        Raw := ParseIntLiteral(FCurrent.Value);
+        if Sign < 0 then Raw := -Raw;
+        Result.AddObject(IntToStr(Raw), nil);
+        Advance;
+      end
+      else if Check(tkIdent) then
+      begin
+        if Sign < 0 then
+          raise EParseError.Create(Format(
+            'Unary minus on named constant operand is not supported '+
+            'in const bit-op expression at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        Result.AddObject(FCurrent.Value, TObject(1));
+        Advance;
+      end
+      else
+        raise EParseError.Create(Format(
+          'Expected operand after ''%s'' in const bit-op expression '+
+          'at line %d col %d in %s',
+          [OpName, FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
 procedure TParser.ParseConstBlock(AList: TObjectList);
 var
   CD:          TConstDecl;
   CastVal:     Int64;
+  FirstOperand: string;
+  FirstIsIdent: Boolean;
 begin
   Expect(tkConst);
   while Check(tkIdent) do
@@ -710,7 +808,12 @@ begin
       while True do
       begin
         { Each element may be a string literal, integer literal,
-          optionally preceded by a minus sign, or float literal }
+          optionally preceded by a minus sign, or float literal.
+          Integer-typed elements may also be a bit-op chain (e.g.
+          'FG_BLUE or 4'); when the chain references named consts
+          it's deferred to semantic via ArrayElementParts. }
+        FirstOperand := '';
+        FirstIsIdent := False;
         if Check(tkMinus) then
         begin
           Advance;
@@ -721,8 +824,9 @@ begin
           end
           else if Check(tkIntLit) then
           begin
-            CD.ArrayElements.Add('-' + FCurrent.Value);
+            FirstOperand := '-' + FCurrent.Value;
             Advance;
+            CD.ArrayElements.Add(FirstOperand);
           end
           else
             raise EParseError.Create(Format(
@@ -736,7 +840,8 @@ begin
         end
         else if Check(tkIntLit) then
         begin
-          CD.ArrayElements.Add(FCurrent.Value);
+          FirstOperand := FCurrent.Value;
+          CD.ArrayElements.Add(FirstOperand);
           Advance;
         end
         else if Check(tkFloatLit) then
@@ -748,18 +853,37 @@ begin
              and TryParseConstIntTypecast(CastVal) then
         begin
           { TypeName(IntLit) typecast — store the truncated value }
-          CD.ArrayElements.Add(IntToStr(CastVal));
+          FirstOperand := IntToStr(CastVal);
+          CD.ArrayElements.Add(FirstOperand);
         end
         else if Check(tkIdent) then
         begin
           { named constant or boolean literal }
-          CD.ArrayElements.Add(FCurrent.Value);
+          FirstOperand := FCurrent.Value;
+          FirstIsIdent := True;
+          CD.ArrayElements.Add(FirstOperand);
           Advance;
         end
         else
           raise EParseError.Create(Format(
             'Expected constant value in array const at line %d col %d in %s',
             [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        { Bit-op continuation — only applies when the element started as an
+          integer operand (FirstOperand was set), not strings/floats. }
+        if (FirstOperand <> '') and CurrentIsConstBitOp then
+        begin
+          if CD.ArrayElementParts = nil then
+          begin
+            CD.ArrayElementParts := TObjectList.Create(True);
+            { Pad with nils for prior elements that were not expressions. }
+            while CD.ArrayElementParts.Count < CD.ArrayElements.Count - 1 do
+              CD.ArrayElementParts.Add(nil);
+          end;
+          CD.ArrayElementParts.Add(
+            CollectConstBitOpExpr(FirstOperand, FirstIsIdent));
+        end
+        else if CD.ArrayElementParts <> nil then
+          CD.ArrayElementParts.Add(nil);
         if Check(tkComma) then
           Advance
         else
@@ -787,6 +911,11 @@ begin
         CD.IntVal   := -ParseIntLiteral(FCurrent.Value);
         CD.IsString := False;
         Advance;
+        if CurrentIsConstBitOp then
+        begin
+          CD.IntExprTokens := CollectConstBitOpExpr(IntToStr(CD.IntVal), False);
+          CD.IntVal := 0;
+        end;
       end;
     end
     else if Check(tkFloatLit) then
@@ -800,12 +929,32 @@ begin
       CD.IntVal   := ParseIntLiteral(FCurrent.Value);
       CD.IsString := False;
       Advance;
+      if CurrentIsConstBitOp then
+      begin
+        CD.IntExprTokens := CollectConstBitOpExpr(IntToStr(CD.IntVal), False);
+        CD.IntVal := 0;
+      end;
     end
     else if Check(tkIdent) and (PeekKind = tkLParen)
          and TryParseConstIntTypecast(CastVal) then
     begin
       { TypeName(IntLit) typecast in scalar const init }
-      CD.IntVal   := CastVal;
+      CD.IsString := False;
+      if CurrentIsConstBitOp then
+      begin
+        CD.IntExprTokens := CollectConstBitOpExpr(IntToStr(CastVal), False);
+        CD.IntVal := 0;
+      end
+      else
+        CD.IntVal := CastVal;
+    end
+    else if Check(tkIdent)
+         and (PeekKind in [tkOr, tkAnd, tkXor, tkShl, tkShr]) then
+    begin
+      { Bit-op chain whose first operand is a named constant. }
+      FirstOperand := FCurrent.Value;
+      Advance;
+      CD.IntExprTokens := CollectConstBitOpExpr(FirstOperand, True);
       CD.IsString := False;
     end
     else if Check(tkStringLit) or Check(tkIdent) then

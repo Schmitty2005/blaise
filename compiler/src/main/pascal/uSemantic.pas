@@ -67,6 +67,8 @@ type
     procedure AnalyseBlock(ABlock: TBlock);
     procedure AnalyseConstDecls(ABlock: TBlock);
     procedure AnalyseArrayConstDecls(ABlock: TBlock);
+    function  FoldConstBitOpExpr(ATokens: TStringList;
+                                 ALine, ACol: Integer): Int64;
     procedure AnalyseTypeDecls(ABlock: TBlock);
     procedure LinkClassMethodImpls(ABlock: TBlock);
     procedure LinkGenericClassMethodImpls(ABlock: TBlock);
@@ -2054,6 +2056,59 @@ begin
   end;
 end;
 
+{ Fold a deferred const bit-op expression to an Int64.  ATokens is the
+  alternating operand/operator list built by the parser:
+
+    Tokens[0,2,4,...]  operands; Objects[i] = nil → literal,
+                                 Objects[i] <> nil → ident reference
+    Tokens[1,3,5,...]  operator names: 'or'/'and'/'xor'/'shl'/'shr'
+
+  Idents must resolve to integer-typed constants in the current scope.
+  Left-to-right associativity (no precedence between bit ops). }
+function TSemanticAnalyser.FoldConstBitOpExpr(ATokens: TStringList;
+                                              ALine, ACol: Integer): Int64;
+var
+  I:       Integer;
+  Op:      string;
+  Operand: Int64;
+  RefSym:  TSymbol;
+begin
+  Result := 0;
+  if (ATokens = nil) or (ATokens.Count = 0) then Exit;
+  I := 0;
+  while I < ATokens.Count do
+  begin
+    if ATokens.Objects[I] = TObject(1) then
+    begin
+      RefSym := FTable.Lookup(ATokens.Get(I));
+      if (RefSym = nil) or (RefSym.Kind <> skConstant) then
+      begin
+        SemanticError(Format('Undeclared constant ''%s''', [ATokens.Get(I)]),
+                      ALine, ACol);
+        Exit;
+      end;
+      Operand := RefSym.ConstValue;
+    end
+    else
+      Operand := StrToInt64(ATokens.Get(I));
+    if I = 0 then
+      Result := Operand
+    else
+    begin
+      Op := ATokens.Get(I - 1);
+      if      Op = 'or'  then Result := Result or  Operand
+      else if Op = 'and' then Result := Result and Operand
+      else if Op = 'xor' then Result := Result xor Operand
+      else if Op = 'shl' then Result := Result shl Operand
+      else if Op = 'shr' then Result := Result shr Operand
+      else
+        SemanticError(Format('Unsupported const bit-op ''%s''', [Op]),
+                      ALine, ACol);
+    end;
+    Inc(I, 2);
+  end;
+end;
+
 procedure TSemanticAnalyser.AnalyseConstDecls(ABlock: TBlock);
 var
   I, J:   Integer;
@@ -2088,6 +2143,10 @@ begin
       end;
       CD.StrVal := Resolved;
     end;
+    { Deferred bit-op expression: fold now using the already-defined
+      named-constant values in scope. }
+    if CD.IntExprTokens <> nil then
+      CD.IntVal := FoldConstBitOpExpr(CD.IntExprTokens, CD.Line, CD.Col);
     if CD.TypeName <> '' then
     begin
       { Typed constant: use the declared type.  The value kind (IsFloat,
@@ -2177,6 +2236,14 @@ begin
           CD.Line, CD.Col);
       ArrTD := FTable.NewStaticArrayType(ElemTD, 0, Expected - 1);
     end;
+    { Fold any deferred bit-op expressions into their final integer
+      strings in ArrayElements before publishing to the symbol. }
+    if CD.ArrayElementParts <> nil then
+      for J := 0 to CD.ArrayElementParts.Count - 1 do
+        if (CD.ArrayElementParts.Items[J] <> nil) and
+           (J < CD.ArrayElements.Count) then
+          CD.ArrayElements.Put(J, IntToStr(FoldConstBitOpExpr(
+            TStringList(CD.ArrayElementParts.Items[J]), CD.Line, CD.Col)));
     Sym := TSymbol.Create(CD.Name, skConstant, ArrTD);
     Sym.IsGlobal := True;
     Sym.ConstArray := TStringList.Create;

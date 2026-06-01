@@ -100,6 +100,16 @@ type
     procedure TestTypedConst_SmallIntCast_NegativeOneIsMinusOne;
     procedure TestTypedConst_WordCast_NegativeOneIs65535;
     procedure TestArrayConst_CardinalCastElement_TruncatesToUnsigned;
+
+    { Bit-op chains in const initialisers — or/and/xor/shl/shr applied
+      to integer literals, named constants, or a mix.  Folded to a
+      single integer at semantic time. }
+    procedure TestTypedConst_OrChain_AllLiterals_Folds;
+    procedure TestTypedConst_OrChain_NamedConsts_Folds;
+    procedure TestTypedConst_OrChain_MixedLiteralAndNamed_Folds;
+    procedure TestTypedConst_AndMaskOfHexLiteral_Folds;
+    procedure TestTypedConst_ShiftLeftLiteral_Folds;
+    procedure TestArrayConst_OrChainElement_FoldsToFinalInteger;
   end;
 
 implementation
@@ -1129,6 +1139,100 @@ begin
   { Element 0 of the data item should be the truncated value 4294967285. }
   AssertTrue('4294967285 in $T data item',
     IRContains(IR, 'w 4294967285'));
+end;
+
+procedure TConstTests.TestTypedConst_OrChain_AllLiterals_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const X: Integer = 1 or 2 or 4;
+    var v: Integer;
+    begin v := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('1|2|4 = 7 in IR', IRContains(IR, '7'));
+end;
+
+procedure TConstTests.TestTypedConst_OrChain_NamedConsts_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const
+      FG_BLUE  = 1;
+      FG_GREEN = 2;
+      X: Integer = FG_BLUE or FG_GREEN;
+    var v: Integer;
+    begin v := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('FG_BLUE|FG_GREEN = 3 in IR', IRContains(IR, '3'));
+end;
+
+procedure TConstTests.TestTypedConst_OrChain_MixedLiteralAndNamed_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const
+      FG_BLUE = 1;
+      X: Integer = FG_BLUE or 4;
+    var v: Integer;
+    begin v := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('1|4 = 5 in IR', IRContains(IR, '5'));
+end;
+
+procedure TConstTests.TestTypedConst_AndMaskOfHexLiteral_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const X: Integer = $FF and 15;
+    var v: Integer;
+    begin v := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('$FF & 15 = 15 in IR', IRContains(IR, '15'));
+end;
+
+procedure TConstTests.TestTypedConst_ShiftLeftLiteral_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const X: Integer = 1 shl 8;
+    var v: Integer;
+    begin v := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('1 shl 8 = 256 in IR', IRContains(IR, '256'));
+end;
+
+procedure TConstTests.TestArrayConst_OrChainElement_FoldsToFinalInteger;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const
+      FG_BLUE  = 1;
+      FG_GREEN = 2;
+      T: array[0..1] of Integer = (FG_BLUE or FG_GREEN, 99);
+    var v: Integer;
+    begin v := T[0] end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  { Element 0 should land as 3 in the emitted $T data item. }
+  AssertTrue('folded 3 in $T data item', IRContains(IR, 'w 3'));
+  AssertTrue('99 also in $T data item',  IRContains(IR, 'w 99'));
 end;
 
 initialization

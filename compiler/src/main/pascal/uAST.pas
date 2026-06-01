@@ -759,6 +759,21 @@ type
     ArrayIsRangeIndexed: Boolean; { True when index is Low..High integer range }
     ArrayLowBound:  Integer;
     ArrayHighBound: Integer;
+    { Integer bit-op expression in the value position — non-nil when the
+      RHS was a chain like 'FG_BLUE or 8' that couldn't be folded at
+      parse time (because it references named constants).  Tokens are
+      stored alternating operand/operator: tokens[0,2,4,...] are operands
+      (Objects[i] = nil → integer literal, the string is the int;
+      Objects[i] <> nil → ident reference); tokens[1,3,5,...] are
+      operator names (one of 'or'/'and'/'xor'/'shl'/'shr').  Semantic
+      resolves idents and folds to CD.IntVal. }
+    IntExprTokens:  TStringList;
+    { Parallel to ArrayElements — each non-nil entry is an IntExprTokens-
+      shaped TStringList describing the bit-op expression for that
+      element.  Semantic folds it and overwrites ArrayElements[i] with
+      the resolved integer.  Nil indicates the matching ArrayElements[i]
+      is already a final scalar (literal, typecast, or ident). }
+    ArrayElementParts: TObjectList;
     destructor Destroy; override;
   end;
 
@@ -1916,6 +1931,13 @@ begin
     Result.ArrayElements := TStringList.Create;
     for I := 0 to ASrc.ArrayElements.Count - 1 do
       Result.ArrayElements.Add(ASrc.ArrayElements.Strings[I]);
+  end;
+  if ASrc.IntExprTokens <> nil then
+  begin
+    Result.IntExprTokens := TStringList.Create;
+    for I := 0 to ASrc.IntExprTokens.Count - 1 do
+      Result.IntExprTokens.AddObject(
+        ASrc.IntExprTokens.Strings[I], ASrc.IntExprTokens.Objects[I]);
   end;
 end;
 
