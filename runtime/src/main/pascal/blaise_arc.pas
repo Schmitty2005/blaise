@@ -50,6 +50,9 @@ procedure _ClassFree(UserPtr: Pointer);
 function  _HasClassAttribute(AClassTI, AAttrTI: Pointer): Boolean;
 procedure _StringReleaseCheck(DataPtr: Pointer; RefCount, Length, Capacity: Integer);
 procedure _AbstractMethodError;
+procedure _LeakTrackerEnable;
+procedure _LeakTrackerRegister(UserPtr: Pointer; ClassName: Pointer);
+procedure _libc_atexit(Fn: Pointer); external name 'atexit';
 
 implementation
 
@@ -114,6 +117,191 @@ begin
 end;
 
 { ------------------------------------------------------------------ }
+{ Leak tracker — separate hash map, zero overhead when disabled        }
+{ ------------------------------------------------------------------ }
+{
+  Open-addressing hash map: key = UserPtr (Pointer), value = className
+  string data pointer (immortal — points into the binary's typeinfo).
+  Enabled only when _LeakTrackerEnable is called (i.e. --debug builds).
+  _ClassAlloc registers every live object; _ClassRelease unregisters it.
+  On exit, _LeakTrackerReport walks all buckets and prints survivors.
+
+  Bucket layout (each bucket is two pointer-sized slots):
+    slot[0]  key   (UserPtr; nil = empty; $DEADBEEF = tombstone)
+    slot[1]  value (class-name string data ptr)
+
+  Table is allocated via _BlaiseGetMem and never freed (debug mode only).
+}
+
+const
+  LT_BUCKETS   = 1024;   { must be power of two }
+  LT_BUCKET_SZ = 16;     { 2 × 8-byte pointers }
+
+var
+  GLTEnabled:   Boolean;
+  GLTTable:     PChar;    { raw bucket array, LT_BUCKETS * LT_BUCKET_SZ bytes }
+  GLTCount:     Integer;
+  GLTTombstone: Pointer;  { sentinel for deleted slots, set to Pointer(1) at init }
+
+function LTHash(P: Pointer): Integer;
+var
+  V: PtrUInt;
+begin
+  V := PtrUInt(P);
+  V := V xor (V shr 13);
+  V := V xor (V shr 7);
+  Result := Integer(V and (LT_BUCKETS - 1));
+end;
+
+procedure LTInsert(Key, Value: Pointer);
+var
+  Idx, Step: Integer;
+  Slot: ^Pointer;
+begin
+  Idx := LTHash(Key);
+  Step := 0;
+  while Step < LT_BUCKETS do
+  begin
+    Slot := Pointer(GLTTable + Idx * LT_BUCKET_SZ);
+    if (Slot^ = nil) or (Slot^ = GLTTombstone) then
+    begin
+      Slot^ := Key;
+      Slot  := Pointer(Pointer(Slot) + 8);
+      Slot^ := Value;
+      Inc(GLTCount);
+      Exit;
+    end;
+    Idx := (Idx + 1) and (LT_BUCKETS - 1);
+    Inc(Step);
+  end;
+end;
+
+procedure LTDelete(Key: Pointer);
+var
+  Idx, Step: Integer;
+  Slot: ^Pointer;
+begin
+  Idx := LTHash(Key);
+  Step := 0;
+  while Step < LT_BUCKETS do
+  begin
+    Slot := Pointer(GLTTable + Idx * LT_BUCKET_SZ);
+    if Slot^ = nil then Exit;
+    if Slot^ = Key then
+    begin
+      Slot^ := GLTTombstone;
+      Dec(GLTCount);
+      Exit;
+    end;
+    Idx := (Idx + 1) and (LT_BUCKETS - 1);
+    Inc(Step);
+  end;
+end;
+
+procedure WriteStr(Msg: Pointer; Len: Integer);
+begin
+  _libc_write(STDERR_FD, Msg, Int64(Len));
+end;
+
+procedure WriteNL;
+var
+  NL: Byte;
+begin
+  NL := 10;
+  _libc_write(STDERR_FD, @NL, 1);
+end;
+
+procedure WriteInt(V: Integer);
+var
+  Buf: array[0..19] of Byte;
+  Pos: Integer;
+  N: Integer;
+begin
+  if V = 0 then
+  begin
+    Buf[0] := Ord('0');
+    _libc_write(STDERR_FD, @Buf[0], 1);
+    Exit;
+  end;
+  Pos := 19;
+  N := V;
+  while N > 0 do
+  begin
+    Buf[Pos] := Ord('0') + Byte(N mod 10);
+    N := N div 10;
+    Dec(Pos);
+  end;
+  _libc_write(STDERR_FD, @Buf[Pos + 1], Int64(19 - Pos));
+end;
+
+procedure _LeakTrackerReport;
+var
+  I: Integer;
+  Slot: ^Pointer;
+  NamePtr: ^Pointer;
+  ClassName: Pointer;
+  LenSlot: ^Integer;
+  NameLen: Integer;
+begin
+  if not GLTEnabled then Exit;
+  if GLTCount = 0 then Exit;
+  WriteStr('Blaise leak report:', 19);
+  WriteNL;
+  WriteStr('  ', 2);
+  WriteInt(GLTCount);
+  WriteStr(' object(s) not released:', 24);
+  WriteNL;
+  for I := 0 to LT_BUCKETS - 1 do
+  begin
+    Slot := Pointer(GLTTable + I * LT_BUCKET_SZ);
+    if (Slot^ <> nil) and (Slot^ <> GLTTombstone) then
+    begin
+      NamePtr   := Pointer(Pointer(Slot) + 8);
+      ClassName := NamePtr^;
+      WriteStr('  - ', 4);
+      if ClassName <> nil then
+      begin
+        LenSlot := ClassName - 8;   { string header: Length at data_ptr-8 }
+        NameLen := LenSlot^;
+        if (NameLen > 0) and (NameLen < 256) then
+          WriteStr(ClassName, NameLen)
+        else
+          WriteStr('(unknown)', 9);
+      end
+      else
+        WriteStr('(unknown)', 9);
+      WriteNL;
+    end;
+  end;
+end;
+
+procedure _LeakTrackerRegister(UserPtr: Pointer; ClassName: Pointer);
+begin
+  if not GLTEnabled then Exit;
+  if UserPtr = nil then Exit;
+  LTInsert(UserPtr, ClassName);
+end;
+
+procedure _LeakTrackerEnable;
+var
+  TableSize: Integer;
+  Sentinel: PtrUInt;
+begin
+  if GLTEnabled then Exit;
+  GLTEnabled := True;
+  GLTCount := 0;
+  { Use address 1 as tombstone — never a valid heap pointer (heap starts
+    well above page 0, and address 1 is in the unmapped zero page). }
+  Sentinel := 1;
+  GLTTombstone := Pointer(Sentinel);
+  TableSize := LT_BUCKETS * LT_BUCKET_SZ;
+  GLTTable := PChar(_BlaiseGetMem(TableSize));
+  if GLTTable = nil then begin GLTEnabled := False; Exit end;
+  _libc_memset(GLTTable, 0, Int64(TableSize));
+  _libc_atexit(Pointer(@_LeakTrackerReport));
+end;
+
+{ ------------------------------------------------------------------ }
 { Class ARC                                                            }
 { ------------------------------------------------------------------ }
 
@@ -145,6 +333,8 @@ begin
   RC^ := RC^ - 1;
   if RC^ = 0 then
   begin
+    if GLTEnabled then
+      LTDelete(UserPtr);
     _WeakZeroSlots(UserPtr);
     CleanupSlot := PPointer(Base + 8);
     if CleanupSlot^ <> nil then
@@ -395,13 +585,13 @@ end;
     typeinfo[ 6]  +48  -> $vtable_<T> }
 function _ClassCreate(TInfo: Pointer): Pointer;
 var
-  SizeSlot:    ^Int64;
-  PtrSlot:     ^Pointer;
-  Size:        Int64;
-  Cleanup:     Pointer;
-  VTable:      Pointer;
-  UserPtr:     Pointer;
-  VTableSlot:  ^Pointer;
+  SizeSlot:   ^Int64;
+  PtrSlot:    ^Pointer;
+  Size:       Int64;
+  Cleanup:    Pointer;
+  VTable:     Pointer;
+  UserPtr:    Pointer;
+  VTableSlot: ^Pointer;
 begin
   Result := nil;
   if TInfo = nil then Exit;

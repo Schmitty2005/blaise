@@ -5513,6 +5513,46 @@ begin
     Exit;
   end;
 
+  { Pointer(intOrPtrExpr) — reinterpret any integer or pointer value as
+    an untyped Pointer.  Integer sources are treated as raw addresses (no
+    sign-extension guarantee beyond what the source type provides). }
+  if SameText(AExpr.Name, 'Pointer') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('Pointer cast requires exactly one argument', AExpr.Line, AExpr.Col);
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    if not (ArgType.Kind in [tyInteger, tyInt64, tyUInt64, tyUInt32, tyByte,
+                              tySmallInt, tyWord, tyPointer, tyPChar, tyClass,
+                              tyMetaClass, tyProcedural, tyNil]) then
+      SemanticError(
+        Format('Pointer cast requires an integer, pointer, or class expression, got ''%s''',
+          [ArgType.Name]),
+        AExpr.Line, AExpr.Col);
+    Result := FTable.TypePointer;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
+  { PtrUInt(intOrPtrExpr) — reinterpret any integer or pointer value as
+    a pointer-sized unsigned integer (UInt64 on 64-bit targets).  The
+    primary use is arithmetic on pointer values without signed overflow. }
+  if SameText(AExpr.Name, 'PtrUInt') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError('PtrUInt cast requires exactly one argument', AExpr.Line, AExpr.Col);
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    if not (ArgType.Kind in [tyInteger, tyInt64, tyUInt64, tyUInt32, tyByte,
+                              tySmallInt, tyWord, tyPointer, tyPChar, tyClass,
+                              tyNil]) then
+      SemanticError(
+        Format('PtrUInt cast requires an integer, pointer, or class expression, got ''%s''',
+          [ArgType.Name]),
+        AExpr.Line, AExpr.Col);
+    Result := FTable.TypeUInt64;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   if SameText(AExpr.Name, 'string') then
   begin
     if AExpr.Args.Count <> 1 then

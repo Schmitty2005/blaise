@@ -267,6 +267,7 @@ type
     function  MethodEmitName(AMDecl: TMethodDecl;
       const ATypeName, AMethodName: string): string;
   public
+    FDebugMode: Boolean;
     constructor Create;
     destructor Destroy; override;
     procedure Generate(AProg: TProgram);
@@ -279,6 +280,7 @@ type
       vtable, and field-cleanup data.  Must be called before AppendUnit when
       the units contain class type definitions.  Prog.SymbolTable is correct. }
     procedure SetSymbolTable(ASymTable: TSymbolTable);
+    procedure SetDebugMode(AEnabled: Boolean);
     procedure AppendUnit(AUnit: TUnit);
     { Append program IR to existing output (companion to AppendUnit).
       Emits any remaining string literals and the $main function. }
@@ -594,6 +596,8 @@ begin
   { Call initialization sections of imported units in order }
   for I := 0 to FUnitInitNames.Count - 1 do
     EmitLine('  call $' + FUnitInitNames.Strings[I] + '_init()');
+  if FDebugMode then
+    EmitLine('  call $_LeakTrackerEnable()');
 end;
 
 procedure TCodeGenQBE.EmitMainFooter;
@@ -7427,12 +7431,12 @@ begin
           EmitLine(Format('  %s =w copy %s', [T, ArgTemp]))
         else
         begin
-          { Widening from w to l: zero-extend for unsigned targets, sign-
-            extend otherwise (QBE rejects 'l copy w'). }
+          { Widening from w to l: zero-extend for pointer/unsigned targets,
+            sign-extend otherwise (QBE rejects 'l copy w'). }
           if (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
              (QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType) = 'w') then
           begin
-            if FC.ResolvedType.Kind = tyUInt64 then
+            if FC.ResolvedType.Kind in [tyUInt64, tyPointer, tyPChar] then
               EmitLine(Format('  %s =l extuw %s', [T, ArgTemp]))
             else
               EmitLine(Format('  %s =l extsw %s', [T, ArgTemp]));
@@ -7659,6 +7663,14 @@ begin
         EmitLine(Format('  storel $vtable_%s, %s',
           [QBEMangle(RT.Name), SelfTemp]));
       EmitLine(Format('  call $_ClassAddRef(l %s)', [SelfTemp]));
+      if FDebugMode then
+      begin
+        L := AllocTemp;
+        EmitLine(Format('  %s =l add $typeinfo_%s, 16', [L, QBEMangle(RT.Name)]));
+        R := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [R, L]));
+        EmitLine(Format('  call $_LeakTrackerRegister(l %s, l %s)', [SelfTemp, R]));
+      end;
       { If there's a user-defined Create method, call it }
       if MCallExpr.ResolvedMethod <> nil then
       begin
@@ -8326,6 +8338,15 @@ begin
       if TRecordTypeDesc(FldAccess.ResolvedType).HasVTable then
         EmitLine(Format('  storel $vtable_%s, %s',
           [QBEMangle(FldAccess.ResolvedType.Name), T]));
+      if FDebugMode then
+      begin
+        { Load classname ptr from typeinfo[2] (offset +16) and register with leak tracker }
+        L := AllocTemp;
+        EmitLine(Format('  %s =l add $typeinfo_%s, 16', [L, QBEMangle(FldAccess.ResolvedType.Name)]));
+        R := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [R, L]));
+        EmitLine(Format('  call $_LeakTrackerRegister(l %s, l %s)', [T, R]));
+      end;
       { Call user-defined Create body if one exists }
       if FldAccess.ResolvedMethod <> nil then
       begin
@@ -9541,6 +9562,11 @@ end;
 procedure TCodeGenQBE.SetSymbolTable(ASymTable: TSymbolTable);
 begin
   FSymTable := ASymTable;
+end;
+
+procedure TCodeGenQBE.SetDebugMode(AEnabled: Boolean);
+begin
+  FDebugMode := AEnabled;
 end;
 
 procedure TCodeGenQBE.AppendUnit(AUnit: TUnit);

@@ -48,7 +48,15 @@ type
     function  RunUnderValgrind(const ASrc: string; out ALog: string): Boolean;
     function  CompileAndRunWithRTL(const ASrc: string;
                                    out AStdout: string;
-                                   out AExitCode: Integer): Boolean;
+                                   out AExitCode: Integer): Boolean; overload;
+    function  CompileAndRunWithRTL(const ASrc: string;
+                                   out AStdout: string;
+                                   out AExitCode: Integer;
+                                   ADebugMode: Boolean): Boolean; overload;
+    function  CompileAndRunWithRTLDebug(const ASrc: string;
+                                   out AStdout: string;
+                                   out AExitCode: Integer;
+                                   ADebugMode: Boolean): Boolean;
   end;
 
 implementation
@@ -301,6 +309,22 @@ end;
 function TE2ETestCase.CompileAndRunWithRTL(const ASrc: string;
                                            out AStdout: string;
                                            out AExitCode: Integer): Boolean;
+begin
+  Result := CompileAndRunWithRTLDebug(ASrc, AStdout, AExitCode, False);
+end;
+
+function TE2ETestCase.CompileAndRunWithRTL(const ASrc: string;
+                                           out AStdout: string;
+                                           out AExitCode: Integer;
+                                           ADebugMode: Boolean): Boolean;
+begin
+  Result := CompileAndRunWithRTLDebug(ASrc, AStdout, AExitCode, ADebugMode);
+end;
+
+function TE2ETestCase.CompileAndRunWithRTLDebug(const ASrc: string;
+                                           out AStdout: string;
+                                           out AExitCode: Integer;
+                                           ADebugMode: Boolean): Boolean;
 var
   Lexer:       TLexer;
   Parser:      TParser;
@@ -340,6 +364,7 @@ begin
       Semantic.AnalyseUnitForExport(TUnit(Units.Items[I]));
     Semantic.Analyse(Prog);
     CG := TCodeGenQBE.Create;
+    CG.SetDebugMode(ADebugMode);
     CG.SetSymbolTable(Prog.SymbolTable);
     for I := 0 to Units.Count - 1 do
       CG.AppendUnit(TUnit(Units.Items[I]));

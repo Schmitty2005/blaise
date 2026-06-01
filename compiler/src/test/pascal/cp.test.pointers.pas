@@ -50,6 +50,14 @@ type
     procedure TestCodegen_Deref_EmitsLoad;
     procedure TestCodegen_PointerWrite_EmitsStore;
     procedure TestCodegen_PointerArith_EmitsAdd;
+
+    { ------------------------------------------------------------------ }
+    { Pointer(intExpr) and PtrUInt(ptrExpr) cast pairs                    }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_Pointer_FromInt_ReturnsPointerType;
+    procedure TestSemantic_PtrUInt_FromPointer_ReturnsUInt64Type;
+    procedure TestCodegen_Pointer_FromInt_EmitsExtuw;
+    procedure TestCodegen_PtrUInt_FromPointer_EmitsCopy;
   end;
 
 implementation
@@ -373,6 +381,69 @@ var
 begin
   IR := GenIR(SrcPtrArith);
   AssertTrue('Pointer arithmetic should emit add', Pos('add', IR) > 0);
+end;
+
+const
+  SrcPointerFromInt =
+    'program P;' +
+    'var N: Integer; P: Pointer;' +
+    'begin N := 42; P := Pointer(N) end.';
+
+  SrcPtrUIntFromPtr =
+    'program P;' +
+    'var P: Pointer; U: UInt64;' +
+    'begin P := nil; U := PtrUInt(P) end.';
+
+procedure TPointerTests.TestSemantic_Pointer_FromInt_ReturnsPointerType;
+var
+  Prog: TProgram;
+  Assign: TAssignment;
+  Cast: TFuncCallExpr;
+begin
+  Prog := AnalyseSrc(SrcPointerFromInt);
+  try
+    Assign := TAssignment(Prog.Block.Stmts.Items[1]);
+    Cast   := TFuncCallExpr(Assign.Expr);
+    AssertEquals('cast resolves to tyPointer',
+      Ord(tyPointer), Ord(Cast.ResolvedType.Kind));
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TPointerTests.TestSemantic_PtrUInt_FromPointer_ReturnsUInt64Type;
+var
+  Prog: TProgram;
+  Assign: TAssignment;
+  Cast: TFuncCallExpr;
+begin
+  Prog := AnalyseSrc(SrcPtrUIntFromPtr);
+  try
+    Assign := TAssignment(Prog.Block.Stmts.Items[1]);
+    Cast   := TFuncCallExpr(Assign.Expr);
+    AssertEquals('cast resolves to tyUInt64',
+      Ord(tyUInt64), Ord(Cast.ResolvedType.Kind));
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TPointerTests.TestCodegen_Pointer_FromInt_EmitsExtuw;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcPointerFromInt);
+  AssertTrue('Pointer(Integer) should zero-extend via extuw',
+    Pos('extuw', IR) >= 0);
+end;
+
+procedure TPointerTests.TestCodegen_PtrUInt_FromPointer_EmitsCopy;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcPtrUIntFromPtr);
+  AssertTrue('PtrUInt(Pointer) should emit copy (l→l)',
+    Pos('copy', IR) >= 0);
 end;
 
 initialization

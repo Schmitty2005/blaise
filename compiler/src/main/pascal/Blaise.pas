@@ -44,6 +44,7 @@ begin
   WriteLn('  --unit-path <dir>   Add directory to unit search path (repeatable)');
   WriteLn('  --target <id>       linux-x86_64 (default), macos-arm64');
   WriteLn('  --emit-ir           Print QBE IR to stdout and exit');
+  WriteLn('  --debug             Enable runtime memory leak reporting on exit');
   WriteLn('  --debug-opdf        Emit OPDF debug info (.opdf.s companion file)');
   WriteLn('');
   WriteLn('Configuration:');
@@ -181,6 +182,7 @@ function ParseArgs(
   out OutputFile:  string;
   out EmitIR:      Boolean;
   out OPDFEnabled: Boolean;
+  out DebugMode:   Boolean;
   out SearchPaths: TStringList): Boolean;
 var
   I: Integer;
@@ -191,6 +193,7 @@ begin
   OutputFile  := '';
   EmitIR      := False;
   OPDFEnabled := False;
+  DebugMode   := False;
   SearchPaths := TStringList.Create;
 
   I := 1;
@@ -214,6 +217,8 @@ begin
     end
     else if Arg = '--emit-ir' then
       EmitIR := True
+    else if Arg = '--debug' then
+      DebugMode := True
     else if Arg = '--debug-opdf' then
       OPDFEnabled := True
     else if Arg = '--target' then
@@ -356,6 +361,7 @@ var
   ConfigPaths: TStringList;
   EmitIR:      Boolean;
   OPDFEnabled: Boolean;
+  DebugMode:   Boolean;
   OPDFAsmFile: string;
   Source:   TStringList;
   Lexer:    TLexer;
@@ -373,6 +379,7 @@ var
 begin
   SearchPaths := nil;
   OPDFEnabled := False;
+  DebugMode   := False;
   OPDFAsmFile := '';
   if IsFPCStyleInvocation then
   begin
@@ -385,7 +392,7 @@ begin
   end
   else
   begin
-    if not ParseArgs(SourceFile, OutputFile, EmitIR, OPDFEnabled, SearchPaths) then
+    if not ParseArgs(SourceFile, OutputFile, EmitIR, OPDFEnabled, DebugMode, SearchPaths) then
     begin
       PrintUsage;
       Halt(1);
@@ -474,6 +481,7 @@ begin
     try
       CG := TCodeGenQBE.Create;
       try
+        CG.SetDebugMode(DebugMode);
         if (Units <> nil) and (Units.Count > 0) then
         begin
           CG.SetSymbolTable(Prog.SymbolTable);
