@@ -938,8 +938,8 @@ end;
 
 destructor TSymbol.Destroy;
 begin
-  Params.Free;
-  ConstArray.Free;
+  { Params and ConstArray are owned class fields — released by ARC field
+    cleanup. }
   inherited Destroy;
 end;
 
@@ -960,8 +960,9 @@ end;
 
 destructor TScope.Destroy;
 begin
-  FKeys.Free;
-  FSymbols.Free;
+  { FKeys and FSymbols are owned class fields — ARC field cleanup releases
+    them automatically.  Swift-style: destructors handle side-effects only,
+    not the release of owned storage. }
   inherited Destroy;
 end;
 
@@ -1116,9 +1117,8 @@ end;
 
 destructor TSymbolTable.Destroy;
 begin
-  FGenerics.Free;
-  FScopeStack.Free;
-  FAllTypes.Free;
+  { FGenerics, FScopeStack, FAllTypes are owned class fields — released by
+    ARC field cleanup. }
   inherited Destroy;
 end;
 
