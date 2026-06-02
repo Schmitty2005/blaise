@@ -15,8 +15,17 @@ enum {
 };
 
 Op optab[NOp] = {
-#define O(op, t, cf) [O##op]={#op, t, cf},
+#undef F
+#define F(cf, hi, id, co, as, im, ic, lg, cv, pn) \
+	.canfold = cf, \
+	.hasid = hi, .idval = id, \
+	.commutes = co, .assoc = as, \
+	.idemp = im, \
+	.cmpeqwl = ic, .cmplgtewl = lg, .eqval = cv, \
+	.pinned = pn
+#define O(op, k, flags) [O##op]={.name = #op, .argcls = k, flags},
 	#include "ops.h"
+#undef F
 };
 
 typedef enum {
@@ -48,6 +57,8 @@ enum Token {
 	Thlt,
 	Texport,
 	Tthread,
+	Textern,
+	Tcommon,
 	Tfunc,
 	Ttype,
 	Tdata,
@@ -106,6 +117,8 @@ static char *kwmap[Ntok] = {
 	[Thlt] = "hlt",
 	[Texport] = "export",
 	[Tthread] = "thread",
+	[Textern] = "extern",
+	[Tcommon] = "common",
 	[Tfunc] = "function",
 	[Ttype] = "type",
 	[Tdata] = "data",
@@ -132,7 +145,7 @@ enum {
 	TMask = 16383, /* for temps hash */
 	BMask = 8191, /* for blocks hash */
 
-	K = 9583425, /* found using tools/lexh.c */
+	K = 11183273, /* found using tools/lexh.c */
 	M = 23,
 };
 
@@ -150,7 +163,8 @@ static struct {
 static int lnum;
 
 static Fn *curf;
-static int tmph[TMask+1];
+static int *tmph;
+static int tmphcap;
 static Phi **plink;
 static Blk *curb;
 static Blk **blink;
@@ -203,12 +217,15 @@ getint()
 	n = 0;
 	c = fgetc(inf);
 	m = (c == '-');
-	if (m || c == '+')
+	if (m) {
 		c = fgetc(inf);
+		if (!isdigit(c))
+			err("integer expected");
+	}
 	do {
 		n = 10*n + (c - '0');
 		c = fgetc(inf);
-	} while ('0' <= c && c <= '9');
+	} while (isdigit(c));
 	ungetc(c, inf);
 	if (m)
 		n = 1 + ~n;
@@ -218,7 +235,6 @@ getint()
 static int
 lex()
 {
-	static char tok[NString];
 	int c, i, esc;
 	int t;
 
@@ -277,7 +293,7 @@ lex()
 		lnum++;
 		return Tnl;
 	}
-	if (isdigit(c) || c == '-' || c == '+') {
+	if (isdigit(c) || c == '-') {
 		ungetc(c, inf);
 		tokval.num = getint();
 		return Tint;
@@ -285,7 +301,6 @@ lex()
 	if (c == '"') {
 		t = Tstr;
 	Quoted:
-		tokval.str = vnew(2, 1, PFn);
 		tokval.str[0] = c;
 		esc = 0;
 		for (i=1;; i++) {
@@ -306,20 +321,18 @@ Alpha:
 		err("invalid character %c (%d)", c, c);
 	i = 0;
 	do {
-		if (i >= NString-1)
-			err("identifier too long");
-		tok[i++] = c;
+		vgrow(&tokval.str, i+2);
+		tokval.str[i++] = c;
 		c = fgetc(inf);
 	} while (isalpha(c) || c == '$' || c == '.' || c == '_' || isdigit(c));
-	tok[i] = 0;
+	tokval.str[i] = 0;
 	ungetc(c, inf);
-	tokval.str = tok;
 	if (t != Txxx) {
 		return t;
 	}
-	t = lexh[hash(tok)*K >> M];
-	if (t == Txxx || strcmp(kwmap[t], tok) != 0) {
-		err("unknown keyword %s", tok);
+	t = lexh[hash(tokval.str)*K >> M];
+	if (t == Txxx || strcmp(kwmap[t], tokval.str) != 0) {
+		err("unknown keyword %s", tokval.str);
 		return Txxx;
 	}
 	return t;
@@ -380,23 +393,31 @@ expect(int t)
 }
 
 static Ref
-tmpref(char *v)
+tmpref()
 {
-	int t, *h;
+	int t, i;
 
-	h = &tmph[hash(v) & TMask];
-	t = *h;
-	if (t) {
-		if (strcmp(curf->tmp[t].name, v) == 0)
+	if (tmphcap/2 <= curf->ntmp-Tmp0) {
+		free(tmph);
+		tmphcap = tmphcap ? tmphcap*2 : TMask+1;
+		tmph = emalloc(tmphcap * sizeof tmph[0]);
+		for (t=Tmp0; t<curf->ntmp; t++) {
+			i = hash(curf->tmp[t].name) & (tmphcap-1);
+			for (; tmph[i]; i=(i+1) & (tmphcap-1))
+				;
+			tmph[i] = t;
+		}
+	}
+	i = hash(tokval.str) & (tmphcap-1);
+	for (; tmph[i]; i=(i+1) & (tmphcap-1)) {
+		t = tmph[i];
+		if (strcmp(curf->tmp[t].name, tokval.str) == 0)
 			return TMP(t);
-		for (t=curf->ntmp-1; t>=Tmp0; t--)
-			if (strcmp(curf->tmp[t].name, v) == 0)
-				return TMP(t);
 	}
 	t = curf->ntmp;
-	*h = t;
+	tmph[i] = t;
 	newtmp(0, Kx, curf);
-	strcpy(curf->tmp[t].name, v);
+	curf->tmp[t].name = strf(PFn, "%s", tokval.str);
 	return TMP(t);
 }
 
@@ -404,13 +425,12 @@ static Ref
 parseref()
 {
 	Con c;
+	int tok;
 
 	memset(&c, 0, sizeof c);
-	switch (next()) {
-	default:
-		return R;
+	switch ((tok = next())) {
 	case Ttmp:
-		return tmpref(tokval.str);
+		return tmpref();
 	case Tint:
 		c.type = CBits;
 		c.bits.i = tokval.num;
@@ -425,9 +445,20 @@ parseref()
 		c.bits.d = tokval.fltd;
 		c.flt = 2;
 		break;
-	case Tthread:
-		c.sym.type = SThr;
-		expect(Tglo);
+	default:
+		for (;; tok=next()) {
+			switch (tok) {
+			case Textern:
+				c.sym.type |= SExt;
+				continue;
+			case Tthread:
+				c.sym.type |= SThr;
+				continue;
+			}
+			break;
+		}
+		if (tok != Tglo)
+			return R;
 		/* fall through */
 	case Tglo:
 		c.type = CAddr;
@@ -548,18 +579,18 @@ parserefl(int arg)
 }
 
 static Blk *
-findblk(char *name)
+findblk()
 {
 	Blk *b;
 	uint32_t h;
 
-	h = hash(name) & BMask;
+	h = hash(tokval.str) & BMask;
 	for (b=blkh[h]; b; b=b->dlink)
-		if (strcmp(b->name, name) == 0)
+		if (strcmp(b->name, tokval.str) == 0)
 			return b;
 	b = newblk();
 	b->id = nblk++;
-	strcpy(b->name, name);
+	b->name = strf(PFn, "%s", tokval.str);
 	b->dlink = blkh[h];
 	blkh[h] = b;
 	return b;
@@ -568,8 +599,7 @@ findblk(char *name)
 static void
 closeblk()
 {
-	curb->nins = curi - insb;
-	idup(&curb->ins, insb, curb->nins);
+	idup(curb, insb, curi-insb);
 	blink = &curb->link;
 	curi = insb;
 }
@@ -590,7 +620,7 @@ parseline(PState ps)
 		err("label or } expected");
 	switch (t) {
 	case Ttmp:
-		r = tmpref(tokval.str);
+		r = tmpref();
 		expect(Teq);
 		k = parsecls(&ty);
 		op = next();
@@ -610,7 +640,7 @@ parseline(PState ps)
 	case Trbrace:
 		return PEnd;
 	case Tlbl:
-		b = findblk(tokval.str);
+		b = findblk();
 		if (curb && curb->jmp.type == Jxxx) {
 			closeblk();
 			curb->jmp.type = Jjmp;
@@ -646,11 +676,11 @@ parseline(PState ps)
 		expect(Tcomma);
 	Jump:
 		expect(Tlbl);
-		curb->s1 = findblk(tokval.str);
+		curb->s1 = findblk();
 		if (curb->jmp.type != Jjmp) {
 			expect(Tcomma);
 			expect(Tlbl);
-			curb->s2 = findblk(tokval.str);
+			curb->s2 = findblk();
 		}
 		if (curb->s1 == curf->start || curb->s2 == curf->start)
 			err("invalid jump to the start block");
@@ -680,6 +710,7 @@ parseline(PState ps)
 		goto Ins;
 	}
 	if (op == Tcall) {
+		curf->leaf = 0;
 		arg[0] = parseref();
 		parserefl(1);
 		op = Ocall;
@@ -709,7 +740,7 @@ parseline(PState ps)
 				err("too many arguments");
 			if (op == Tphi) {
 				expect(Tlbl);
-				blk[i] = findblk(tokval.str);
+				blk[i] = findblk();
 			}
 			arg[i] = parseref();
 			if (req(arg[i], R))
@@ -896,6 +927,7 @@ parsefn(Lnk *lnk)
 	curf->con[0].bits.i = 0xdeaddead;  /* UNDEF */
 	curf->con[1].type = CBits;
 	curf->lnk = *lnk;
+	curf->leaf = 1;
 	blink = &curf->start;
 	curf->retty = Kx;
 	if (peek() != Tglo)
@@ -904,7 +936,7 @@ parsefn(Lnk *lnk)
 		rcls = K0;
 	if (next() != Tglo)
 		err("function name expected");
-	strncpy(curf->name, tokval.str, NString-1);
+	curf->name = strf(PFn, "%s", tokval.str);
 	curf->vararg = parserefl(0);
 	if (nextnl() != Tlbrace)
 		err("function body must start with {");
@@ -919,12 +951,12 @@ parsefn(Lnk *lnk)
 	curf->mem = vnew(0, sizeof curf->mem[0], PFn);
 	curf->nmem = 0;
 	curf->nblk = nblk;
-	curf->rpo = 0;
-	for (b=0; b; b=b->link)
+	curf->rpo = vnew(nblk, sizeof curf->rpo[0], PFn);
+	for (b=curf->start; b; b=b->link)
 		b->dlink = 0; /* was trashed by findblk() */
 	for (i=0; i<BMask+1; ++i)
 		blkh[i] = 0;
-	memset(tmph, 0, sizeof tmph);
+	memset(tmph, 0, tmphcap * sizeof tmph[0]);
 	typecheck(curf);
 	return curf;
 }
@@ -1014,7 +1046,7 @@ parsetyp()
 	ty->size = 0;
 	if (nextnl() != Ttyp ||  nextnl() != Teq)
 		err("type name and then = expected");
-	strcpy(ty->name, tokval.str);
+	ty->name = strf(PHeap, "%s", tokval.str);
 	t = nextnl();
 	if (t == Talign) {
 		if (nextnl() != Tint)
@@ -1058,7 +1090,7 @@ parsedatref(Dat *d)
 	int t;
 
 	d->isref = 1;
-	d->u.ref.name = tokval.str;
+	d->u.ref.name = strf(PFn, "%s", tokval.str);
 	d->u.ref.off = 0;
 	t = peek();
 	if (t == Tplus) {
@@ -1073,24 +1105,27 @@ static void
 parsedatstr(Dat *d)
 {
 	d->isstr = 1;
-	d->u.str = tokval.str;
+	d->u.str = strf(PFn, "%s", tokval.str);
 }
 
 static void
 parsedat(void cb(Dat *), Lnk *lnk)
 {
-	char name[NString] = {0};
+	char *name;
 	int t;
 	Dat d;
 
 	if (nextnl() != Tglo || nextnl() != Teq)
 		err("data name, then = expected");
-	strncpy(name, tokval.str, NString-1);
+	name = strf(PFn, "%s", tokval.str);
 	t = nextnl();
 	lnk->align = 8;
 	if (t == Talign) {
 		if (nextnl() != Tint)
 			err("alignment expected");
+		if (tokval.num <= 0 || tokval.num > CHAR_MAX
+		|| (tokval.num & (tokval.num-1)) != 0)
+			err("invalid alignment");
 		lnk->align = tokval.num;
 		t = nextnl();
 	}
@@ -1156,15 +1191,18 @@ parselnk(Lnk *lnk)
 		case Tthread:
 			lnk->thread = 1;
 			break;
+		case Tcommon:
+			lnk->common = 1;
+			break;
 		case Tsection:
 			if (lnk->sec)
 				err("only one section allowed");
 			if (next() != Tstr)
 				err("section \"name\" expected");
-			lnk->sec = tokval.str;
+			lnk->sec = strf(PFn, "%s", tokval.str);
 			if (peek() == Tstr) {
 				next();
-				lnk->secf = tokval.str;
+				lnk->secf = strf(PFn, "%s", tokval.str);
 			}
 			break;
 		default:
@@ -1189,6 +1227,7 @@ parse(FILE *f, char *path, void dbgfile(char *), void data(Dat *), void func(Fn 
 	thead = Txxx;
 	ntyp = 0;
 	typ = vnew(0, sizeof typ[0], PHeap);
+	tokval.str = vnew(128, 1, PHeap);
 	for (;;) {
 		lnk = (Lnk){0};
 		switch (parselnk(&lnk)) {
@@ -1199,6 +1238,7 @@ parse(FILE *f, char *path, void dbgfile(char *), void data(Dat *), void func(Fn 
 			dbgfile(tokval.str);
 			break;
 		case Tfunc:
+			lnk.align = 16;
 			func(parsefn(&lnk));
 			break;
 		case Tdata:
@@ -1208,9 +1248,11 @@ parse(FILE *f, char *path, void dbgfile(char *), void data(Dat *), void func(Fn 
 			parsetyp();
 			break;
 		case Teof:
-			for (n=0; n<ntyp; n++)
+			for (n=0; n<ntyp; n++) {
+				free(typ[n].name);
 				if (typ[n].nunion)
 					vfree(typ[n].fields);
+			}
 			vfree(typ);
 			return;
 		}
@@ -1224,7 +1266,9 @@ printcon(Con *c, FILE *f)
 	case CUndef:
 		break;
 	case CAddr:
-		if (c->sym.type == SThr)
+		if (c->sym.type & SExt)
+			fprintf(f, "extern ");
+		if (c->sym.type & SThr)
 			fprintf(f, "thread ");
 		fprintf(f, "$%s", str(c->sym.id));
 		if (c->bits.i)
@@ -1293,6 +1337,9 @@ printref(Ref r, Fn *fn, FILE *f)
 		break;
 	case RInt:
 		fprintf(f, "%d", rsval(r));
+		break;
+	case -1:
+		fprintf(f, "R");
 		break;
 	}
 }

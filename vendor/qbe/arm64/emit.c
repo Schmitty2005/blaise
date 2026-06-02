@@ -10,24 +10,24 @@ struct E {
 };
 
 #define CMP(X) \
-	X(Cieq,       "eq") \
-	X(Cine,       "ne") \
-	X(Cisge,      "ge") \
-	X(Cisgt,      "gt") \
-	X(Cisle,      "le") \
-	X(Cislt,      "lt") \
-	X(Ciuge,      "cs") \
-	X(Ciugt,      "hi") \
-	X(Ciule,      "ls") \
-	X(Ciult,      "cc") \
-	X(NCmpI+Cfeq, "eq") \
-	X(NCmpI+Cfge, "ge") \
-	X(NCmpI+Cfgt, "gt") \
-	X(NCmpI+Cfle, "ls") \
-	X(NCmpI+Cflt, "mi") \
-	X(NCmpI+Cfne, "ne") \
-	X(NCmpI+Cfo,  "vc") \
-	X(NCmpI+Cfuo, "vs")
+	X(Cieq,       "eq", "ne") \
+	X(Cine,       "ne", "eq") \
+	X(Cisge,      "ge", "lt") \
+	X(Cisgt,      "gt", "le") \
+	X(Cisle,      "le", "gt") \
+	X(Cislt,      "lt", "ge") \
+	X(Ciuge,      "cs", "cc") \
+	X(Ciugt,      "hi", "ls") \
+	X(Ciule,      "ls", "hi") \
+	X(Ciult,      "cc", "cs") \
+	X(NCmpI+Cfeq, "eq", "ne") \
+	X(NCmpI+Cfge, "ge", "lt") \
+	X(NCmpI+Cfgt, "gt", "le") \
+	X(NCmpI+Cfle, "ls", "hi") \
+	X(NCmpI+Cflt, "mi", "pl") \
+	X(NCmpI+Cfne, "ne", "eq") \
+	X(NCmpI+Cfo,  "vc", "vs") \
+	X(NCmpI+Cfuo, "vs", "vc")
 
 enum {
 	Ki = -1, /* matches Kw and Kl */
@@ -37,7 +37,7 @@ enum {
 static struct {
 	short op;
 	short cls;
-	char *asm;
+	char *fmt;
 } omap[] = {
 	{ Oadd,    Ki, "add %=, %0, %1" },
 	{ Oadd,    Ka, "fadd %=, %0, %1" },
@@ -102,11 +102,15 @@ static struct {
 	{ Oacmn,   Ki, "cmn %0, %1" },
 	{ Oafcmp,  Ka, "fcmpe %0, %1" },
 
-#define X(c, str) \
+#define X(c, str, _) \
 	{ Oflag+c, Ki, "cset %=, " str },
 	CMP(X)
 #undef X
 	{ NOp, 0, 0 }
+};
+
+enum {
+	V31 = 0x1fffffff,  /* local name for V31 */
 };
 
 static char *
@@ -131,6 +135,12 @@ rname(int r, int k)
 		case Ks: sprintf(buf, "s%d", r-V0); break;
 		case Kx:
 		case Kd: sprintf(buf, "d%d", r-V0); break;
+		}
+	else if (r == V31)
+		switch (k) {
+		default: die("invalid class");
+		case Ks: sprintf(buf, "s31"); break;
+		case Kd: sprintf(buf, "d31"); break;
 		}
 	else
 		die("invalid register");
@@ -160,7 +170,8 @@ emitf(char *s, Ins *i, E *e)
 	Ref r;
 	int k, c;
 	Con *pc;
-	uint n, sp;
+	uint64_t n;
+	uint sp;
 
 	fputc('\t', e->f);
 
@@ -171,7 +182,7 @@ emitf(char *s, Ins *i, E *e)
 			if (c == ' ' && !sp) {
 				fputc('\t', e->f);
 				sp = 1;
-			} else if ( !c) {
+			} else if (!c) {
 				fputc('\n', e->f);
 				return;
 			} else
@@ -194,14 +205,14 @@ emitf(char *s, Ins *i, E *e)
 			goto Switch;
 		case '?':
 			if (KBASE(k) == 0)
-				fputs(rname(R18, k), e->f);
+				fputs(rname(IP1, k), e->f);
 			else
-				fputs(k==Ks ? "s31" : "d31", e->f);
+				fputs(rname(V31, k), e->f);
 			break;
 		case '=':
 		case '0':
 			r = c == '=' ? i->to : i->arg[0];
-			assert(isreg(r));
+			assert(isreg(r) || req(r, TMP(V31)));
 			fputs(rname(r.val, k), e->f);
 			break;
 		case '1':
@@ -217,10 +228,17 @@ emitf(char *s, Ins *i, E *e)
 				pc = &e->fn->con[r.val];
 				n = pc->bits.i;
 				assert(pc->type == CBits);
-				if (n & 0xfff000)
-					fprintf(e->f, "#%u, lsl #12", n>>12);
-				else
-					fprintf(e->f, "#%u", n);
+				if (n >> 24) {
+					assert(arm64_logimm(n, k));
+					fprintf(e->f, "#%"PRIu64, n);
+				} else if (n & 0xfff000) {
+					assert(!(n & ~0xfff000ull));
+					fprintf(e->f, "#%"PRIu64", lsl #12",
+						n>>12);
+				} else {
+					assert(!(n & ~0xfffull));
+					fprintf(e->f, "#%"PRIu64, n);
+				}
 				break;
 			}
 			break;
@@ -260,6 +278,10 @@ loadaddr(Con *c, char *rn, E *e)
 			s = "\tadrp\tR, SO\n"
 			    "\tadd\tR, R, #:lo12:SO\n";
 		break;
+	case SExtThr:
+		if (!T.apple)
+			die("extern thread unavailable on arm64");
+		/* fall through */
 	case SThr:
 		if (T.apple)
 			s = "\tadrp\tR, S@tlvppage\n"
@@ -268,6 +290,14 @@ loadaddr(Con *c, char *rn, E *e)
 			s = "\tmrs\tR, tpidr_el0\n"
 			    "\tadd\tR, R, #:tprel_hi12:SO, lsl #12\n"
 			    "\tadd\tR, R, #:tprel_lo12_nc:SO\n";
+		break;
+	case SExt:
+		if (T.apple)
+			s = "\tadrp\tR, S@gotpageO\n"
+			    "\tldr\tR, [R, S@gotpageoffO]\n";
+		else
+			s = "\tadrp\tR, :got:SO\n"
+			    "\tldr\tR, [R, #:got_lo12:SO]\n";
 		break;
 	}
 
@@ -304,6 +334,7 @@ loadcon(Con *c, int r, int k, E *e)
 	rn = rname(r, k);
 	n = c->bits.i;
 	if (c->type == CAddr) {
+		rn = rname(r, Kl);
 		loadaddr(c, rn, e);
 		return;
 	}
@@ -326,8 +357,8 @@ loadcon(Con *c, int r, int k, E *e)
 
 static void emitins(Ins *, E *);
 
-static void
-fixarg(Ref *pr, int sz, E *e)
+static int
+fixarg(Ref *pr, int sz, int t, E *e)
 {
 	Ins *i;
 	Ref r;
@@ -337,11 +368,14 @@ fixarg(Ref *pr, int sz, E *e)
 	if (rtype(r) == RSlot) {
 		s = slot(r, e);
 		if (s > sz * 4095u) {
-			i = &(Ins){Oaddr, Kl, TMP(IP0), {r}};
+			if (t < 0)
+				return 1;
+			i = &(Ins){Oaddr, Kl, TMP(t), {r}};
 			emitins(i, e);
-			*pr = TMP(IP0);
+			*pr = TMP(t);
 		}
 	}
+	return 0;
 }
 
 static void
@@ -349,16 +383,28 @@ emitins(Ins *i, E *e)
 {
 	char *l, *p, *rn;
 	uint64_t s;
-	int o;
+	int o, t;
 	Ref r;
 	Con *c;
 
 	switch (i->op) {
 	default:
 		if (isload(i->op))
-			fixarg(&i->arg[0], loadsz(i), e);
-		if (isstore(i->op))
-			fixarg(&i->arg[1], storesz(i), e);
+			fixarg(&i->arg[0], loadsz(i), IP1, e);
+		if (isstore(i->op)) {
+			t = T.apple ? -1 : R18;
+			if (fixarg(&i->arg[1], storesz(i), t, e)) {
+				if (req(i->arg[0], TMP(IP1))) {
+					fprintf(e->f,
+						"\tfmov\t%c31, %c17\n",
+						"ds"[i->cls == Kw],
+						"xw"[i->cls == Kw]);
+					i->arg[0] = TMP(V31);
+					i->op = Ostores + (i->cls-Kw);
+				}
+				fixarg(&i->arg[1], storesz(i), IP1, e);
+			}
+		}
 	Table:
 		/* most instructions are just pulled out of
 		 * the table omap[], some special cases are
@@ -374,7 +420,7 @@ emitins(Ins *i, E *e)
 			|| (omap[o].cls == Ki && KBASE(i->cls) == 0))
 				break;
 		}
-		emitf(omap[o].asm, i, e);
+		emitf(omap[o].fmt, i, e);
 		break;
 	case Onop:
 		break;
@@ -384,7 +430,7 @@ emitins(Ins *i, E *e)
 		if (rtype(i->to) == RSlot) {
 			r = i->to;
 			if (!isreg(i->arg[0])) {
-				i->to = TMP(R18);
+				i->to = TMP(IP1);
 				emitins(i, e);
 				i->arg[0] = i->to;
 			}
@@ -405,7 +451,7 @@ emitins(Ins *i, E *e)
 			emitins(i, e);
 			break;
 		default:
-			assert(i->to.val != R18);
+			assert(i->to.val != IP1);
 			goto Table;
 		}
 		break;
@@ -434,7 +480,7 @@ emitins(Ins *i, E *e)
 			goto Table;
 		c = &e->fn->con[i->arg[0].val];
 		if (c->type != CAddr
-		|| c->sym.type != SGlo
+		|| (c->sym.type & SThr)
 		|| c->bits.i)
 			die("invalid call argument");
 		l = str(c->sym.id);
@@ -498,8 +544,8 @@ framelayout(E *e)
 void
 arm64_emitfn(Fn *fn, FILE *out)
 {
-	static char *ctoa[] = {
-	#define X(c, s) [c] = s,
+	static char *ctoa[][2] = {
+	#define X(c, s, n) [c] = {s, n},
 		CMP(X)
 	#undef X
 	};
@@ -514,6 +560,7 @@ arm64_emitfn(Fn *fn, FILE *out)
 	if (T.apple)
 		e->fn->lnk.align = 4;
 	emitfnlnk(e->fn->name, &e->fn->lnk, e->f);
+	fputs("\thint\t#34\n", e->f);
 	framelayout(e);
 
 	if (e->fn->vararg && !T.apple) {
@@ -629,11 +676,12 @@ arm64_emitfn(Fn *fn, FILE *out)
 				t = b->s1;
 				b->s1 = b->s2;
 				b->s2 = t;
+				n = 0;
 			} else
-				c = cmpneg(c);
+				n = 1;
 			fprintf(e->f,
 				"\tb%s\t%s%d\n",
-				ctoa[c], T.asloc, id0+b->s2->id
+				ctoa[c][n], T.asloc, id0+b->s2->id
 			);
 			goto Jmp;
 		}

@@ -406,26 +406,20 @@ spill(Fn *fn)
 			if (rtype(b->jmp.arg) == RCall)
 				v->t[0] |= T.retregs(b->jmp.arg, 0);
 		}
+		if (rtype(b->jmp.arg) == RTmp) {
+			t = b->jmp.arg.val;
+			assert(KBASE(tmp[t].cls) == 0);
+			bsset(v, t);
+			limit2(v, 0, 0, NULL);
+			if (!bshas(v, t))
+				b->jmp.arg = slot(t);
+		}
 		for (t=Tmp0; bsiter(b->out, &t); t++)
 			if (!bshas(v, t))
 				slot(t);
 		bscopy(b->out, v);
 
 		/* 2. process the block instructions */
-		if (rtype(b->jmp.arg) == RTmp) {
-			t = b->jmp.arg.val;
-			assert(KBASE(tmp[t].cls) == 0);
-			lvarg[0] = bshas(v, t);
-			bsset(v, t);
-			bscopy(u, v);
-			limit2(v, 0, 0, NULL);
-			if (!bshas(v, t)) {
-				if (!lvarg[0])
-					bsclr(u, t);
-				b->jmp.arg = slot(t);
-			}
-			reloads(u, v);
-		}
 		curi = &insb[NIns];
 		for (i=&b->ins[b->nins]; i!=b->ins;) {
 			i--;
@@ -517,8 +511,7 @@ spill(Fn *fn)
 				p->to = slot(p->to.val);
 		}
 		bscopy(b->in, v);
-		b->nins = &insb[NIns] - curi;
-		idup(&b->ins, curi, b->nins);
+		idup(b, curi, &insb[NIns]-curi);
 	}
 
 	/* align the locals to a 16 byte boundary */

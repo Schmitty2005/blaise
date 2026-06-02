@@ -228,8 +228,8 @@ int amd64_sysv_rsave[] = {
 int amd64_sysv_rclob[] = {RBX, R12, R13, R14, R15, -1};
 
 MAKESURE(sysv_arrays_ok,
-	sizeof amd64_sysv_rsave == (NGPS+NFPS+1) * sizeof(int) &&
-	sizeof amd64_sysv_rclob == (NCLR+1) * sizeof(int)
+	sizeof amd64_sysv_rsave == (NGPS_SYSV+NFPS+1) * sizeof(int) &&
+	sizeof amd64_sysv_rclob == (NCLR_SYSV+1) * sizeof(int)
 );
 
 /* layout of call's second argument (RCall)
@@ -508,11 +508,10 @@ split(Fn *fn, Blk *b)
 
 	++fn->nblk;
 	bn = newblk();
-	bn->nins = &insb[NIns] - curi;
-	idup(&bn->ins, curi, bn->nins);
+	idup(bn, curi, &insb[NIns]-curi);
 	curi = &insb[NIns];
 	bn->visit = ++b->visit;
-	strf(bn->name, "%s.%d", b->name, b->visit);
+	bn->name = strf(PFn, "%s.%d", b->name, b->visit);
 	bn->loop = b->loop;
 	bn->link = b->link;
 	b->link = bn;
@@ -657,9 +656,9 @@ void
 amd64_sysv_abi(Fn *fn)
 {
 	Blk *b;
-	Ins *i, *i0, *ip;
+	Ins *i, *i0;
 	RAlloc *ral;
-	int n, fa;
+	int n0, n1, ioff, fa;
 
 	for (b=fn->start; b; b=b->link)
 		b->visit = 0;
@@ -669,12 +668,13 @@ amd64_sysv_abi(Fn *fn)
 		if (!ispar(i->op))
 			break;
 	fa = selpar(fn, b->ins, i);
-	n = b->nins - (i - b->ins) + (&insb[NIns] - curi);
-	i0 = alloc(n * sizeof(Ins));
-	ip = icpy(ip = i0, curi, &insb[NIns] - curi);
-	ip = icpy(ip, i, &b->ins[b->nins] - i);
-	b->nins = n;
-	b->ins = i0;
+	n0 = &insb[NIns] - curi;
+	ioff = i - b->ins;
+	n1 = b->nins - ioff;
+	vgrow(&b->ins, n0+n1);
+	icpy(b->ins+n0, b->ins+ioff, n1);
+	icpy(b->ins, curi, n0);
+	b->nins = n0+n1;
 
 	/* lower calls, returns, and vararg instructions */
 	ral = 0;
@@ -711,8 +711,7 @@ amd64_sysv_abi(Fn *fn)
 		if (b == fn->start)
 			for (; ral; ral=ral->link)
 				emiti(ral->i);
-		b->nins = &insb[NIns] - curi;
-		idup(&b->ins, curi, b->nins);
+		idup(b, curi, &insb[NIns]-curi);
 	} while (b != fn->start);
 
 	if (debug['A']) {

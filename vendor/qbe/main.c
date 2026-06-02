@@ -10,7 +10,8 @@ char debug['Z'+1] = {
 	['M'] = 0, /* memory optimization */
 	['N'] = 0, /* ssa construction */
 	['C'] = 0, /* copy elimination */
-	['F'] = 0, /* constant folding */
+	['G'] = 0, /* gvn/gcm */
+	['K'] = 0, /* if-conversion */
 	['A'] = 0, /* abi lowering */
 	['I'] = 0, /* instruction selection */
 	['L'] = 0, /* liveness */
@@ -20,6 +21,7 @@ char debug['Z'+1] = {
 
 extern Target T_amd64_sysv;
 extern Target T_amd64_apple;
+extern Target T_amd64_win;
 extern Target T_arm64;
 extern Target T_arm64_apple;
 extern Target T_rv64;
@@ -27,6 +29,7 @@ extern Target T_rv64;
 static Target *tlist[] = {
 	&T_amd64_sysv,
 	&T_amd64_apple,
+	&T_amd64_win,
 	&T_arm64,
 	&T_arm64_apple,
 	&T_rv64,
@@ -59,8 +62,7 @@ func(Fn *fn)
 		printfn(fn, stderr);
 	}
 	T.abi0(fn);
-	fillrpo(fn);
-	fillpreds(fn);
+	fillcfg(fn);
 	filluse(fn);
 	promote(fn);
 	filluse(fn);
@@ -73,25 +75,37 @@ func(Fn *fn)
 	fillalias(fn);
 	coalesce(fn);
 	filluse(fn);
+	filldom(fn);
 	ssacheck(fn);
-	copy(fn);
+	gvn(fn);
+	fillcfg(fn);
+	simplcfg(fn);
 	filluse(fn);
-	fold(fn);
+	filldom(fn);
+	gcm(fn);
+	filluse(fn);
+	ssacheck(fn);
+	if (T.cansel) {
+		ifconvert(fn);
+		fillcfg(fn);
+		filluse(fn);
+		filldom(fn);
+		ssacheck(fn);
+	}
 	T.abi1(fn);
 	simpl(fn);
-	fillpreds(fn);
+	fillcfg(fn);
 	filluse(fn);
 	T.isel(fn);
-	fillrpo(fn);
+	fillcfg(fn);
 	filllive(fn);
 	fillloop(fn);
 	fillcost(fn);
 	spill(fn);
 	rega(fn);
-	fillrpo(fn);
+	fillcfg(fn);
 	simpljmp(fn);
-	fillpreds(fn);
-	fillrpo(fn);
+	fillcfg(fn);
 	assert(fn->rpo[0] == fn->start);
 	for (n=0;; n++)
 		if (n == fn->nblk-1) {

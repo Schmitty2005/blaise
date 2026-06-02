@@ -166,6 +166,23 @@ load(Slice sl, bits msk, Loc *l)
 	return r;
 }
 
+static void
+rebase(Slice *sl)
+{
+	Alias *a;
+
+	if (rtype(sl->ref) != RTmp)
+		return;
+	a = &curf->tmp[sl->ref.val].alias;
+	if (a->offset == (short)a->offset)
+	if (a->type == ALoc
+	|| a->type == AEsc
+	|| a->type == AUnk) {
+		sl->ref = TMP(a->base);
+		sl->off = a->offset;
+	}
+}
+
 static int
 killsl(Ref r, Slice sl)
 {
@@ -380,6 +397,7 @@ def(Slice sl, bits msk, Blk *b, Ins *i, Loc *il)
 			goto Load;
 		p->arg[np] = r1;
 		p->blk[np] = bp;
+		/* XXX - multiplicity in predecessors!!! */
 	}
 	if (msk != msks)
 		mask(cls, &r, msk, il);
@@ -430,6 +448,7 @@ loadopt(Fn *fn)
 			sz = loadsz(i);
 			sl = (Slice){i->arg[0], 0, sz, i->cls};
 			l = (Loc){LRoot, i-b->ins, b};
+			rebase(&sl);
 			i->arg[1] = def(sl, MASK(sz), b, i, &l);
 		}
 	qsort(ilog, nlog, sizeof ilog[0], icmp);
@@ -481,8 +500,7 @@ loadopt(Fn *fn)
 			vgrow(&ib, ++nt);
 			ib[nt-1] = *i;
 		}
-		b->nins = nt;
-		idup(&b->ins, ib, nt);
+		idup(b, ib, nt);
 	}
 	vfree(ib);
 	vfree(ilog);
