@@ -74,7 +74,7 @@ type
     BaseType = nil means untyped 'Pointer'; non-nil means '^BaseType'. }
   TPointerTypeDesc = class(TTypeDesc)
   public
-    BaseType: TTypeDesc;  { not owned; nil = untyped Pointer }
+    [Unretained] BaseType: TTypeDesc;  { not owned; nil = untyped Pointer }
   end;
 
   { Metaclass descriptor — 'class of TFoo'.  The runtime value of any
@@ -82,7 +82,7 @@ type
     descended from BaseClass.  Stored as QBE 'l' (8 bytes). }
   TMetaClassTypeDesc = class(TTypeDesc)
   public
-    BaseClass: TTypeDesc;  { not owned; the class type after 'class of' }
+    [Unretained] BaseClass: TTypeDesc;  { not owned; the class type after 'class of' }
   end;
 
   { Open-array parameter descriptor.
@@ -90,7 +90,7 @@ type
     is handled entirely in the parser, semantic pass, and codegen. }
   TOpenArrayTypeDesc = class(TTypeDesc)
   public
-    ElementType: TTypeDesc;  { not owned }
+    [Unretained] ElementType: TTypeDesc;  { not owned }
   end;
 
   { Dynamic array descriptor: heap-allocated, reference-counted, runtime length.
@@ -100,14 +100,14 @@ type
     Length is stored at data_ptr − 4; RefCount at data_ptr − 8. }
   TDynArrayTypeDesc = class(TTypeDesc)
   public
-    ElementType: TTypeDesc;  { not owned }
+    [Unretained] ElementType: TTypeDesc;  { not owned }
   end;
 
   { Static array descriptor: fixed-size, stack-allocated, compile-time bounds.
     Element access: base_ptr + (I − LowBound) × ElementType.ByteSize. }
   TStaticArrayTypeDesc = class(TTypeDesc)
   public
-    ElementType: TTypeDesc;  { not owned }
+    [Unretained] ElementType: TTypeDesc;  { not owned }
     LowBound:    Integer;
     HighBound:   Integer;
   end;
@@ -128,7 +128,7 @@ type
     members, 'l' for 33–64.  Each member ordinal N maps to bit (1 shl N). }
   TSetTypeDesc = class(TTypeDesc)
   public
-    BaseType: TEnumTypeDesc;  { not owned }
+    [Unretained] BaseType: TEnumTypeDesc;  { not owned }
     BitCount: Integer;        { = BaseType.Members.Count }
   end;
 
@@ -136,7 +136,7 @@ type
   TProcParamInfo = class
   public
     Name:         string;
-    TypeDesc:     TTypeDesc;  { not owned }
+    [Unretained] TypeDesc:     TTypeDesc;  { not owned }
     IsVarParam:   Boolean;
     IsConstParam: Boolean;
   end;
@@ -155,7 +155,7 @@ type
   TProceduralTypeDesc = class(TTypeDesc)
   public
     Params:      TObjectList;  { owned TProcParamInfo }
-    ReturnType:  TTypeDesc;    { not owned; nil = procedure (no return) }
+    [Unretained] ReturnType:  TTypeDesc;    { not owned; nil = procedure (no return) }
     IsMethodPtr: Boolean;      { True for 'procedure of object' types }
     constructor Create(const AName: string);
     destructor  Destroy; override;
@@ -171,11 +171,18 @@ type
   TFieldInfo = class
   public
     Name:     string;
-    TypeDesc: TTypeDesc;  { not owned }
+    [Unretained] TypeDesc: TTypeDesc;  { not owned }
     Offset:   Integer;    { byte offset from record base }
     IsWeak:   Boolean;    { set when the class field was declared [Weak];
                             field cleanup emits _WeakClear for weak fields
                             and field assignment bypasses addref/release. }
+    IsUnretained: Boolean; { set when the class field was declared [Unretained];
+                             a non-owning reference to an object owned elsewhere.
+                             Unlike [Weak] there is NO weak-registry registration
+                             and NO auto-nil: field assignment stores the pointer
+                             with neither addref nor release, and field cleanup
+                             does nothing.  Use only when the referent is
+                             guaranteed to outlive this field. }
   end;
 
   { One entry in a class vtable — tracks slot index and implementing method. }
@@ -191,13 +198,13 @@ type
   TPropertyInfo = class
   public
     Name:           string;
-    TypeDesc:       TTypeDesc;   { not owned — resolved by semantic analysis }
+    [Unretained] TypeDesc:       TTypeDesc;   { not owned — resolved by semantic analysis }
     ReadField:      string;      { '' if method-backed read }
     ReadMethod:     string;      { '' if field-backed read }
     WriteField:     string;      { '' if method-backed write or read-only }
     WriteMethod:    string;      { '' if field-backed write or read-only }
     IndexParamName: string;  { '' = non-indexed property }
-    IndexTypeDesc: TTypeDesc;  { not owned; non-nil when IndexParamName <> '' }
+    [Unretained] IndexTypeDesc: TTypeDesc;  { not owned; non-nil when IndexParamName <> '' }
   end;
 
   { Type descriptor for zero-GUID interface types (Phase 3). }
@@ -206,7 +213,7 @@ type
     FMethods:     TStringList;  { method names, case-insensitive }
     FReturnTypes: TStringList;  { parallel: return type name, '' = procedure }
     FParamIsVar:  TStringList;  { parallel: comma-separated '1'/'0' per param; '1' = var param }
-    FParent:      TInterfaceTypeDesc;  { not owned; nil if no parent }
+    [Unretained] FParent:      TInterfaceTypeDesc;  { not owned; nil if no parent }
   public
     constructor Create(const AName: string);
     destructor Destroy; override;
@@ -227,7 +234,7 @@ type
   private
     FFields:          TObjectList;  { owned TFieldInfo }
     FKeys:            TStringList;  { sorted, case-insensitive; Objects[] = TFieldInfo (not owned) }
-    FParent:          TRecordTypeDesc;   { not owned; nil for root classes }
+    [Unretained] FParent:          TRecordTypeDesc;   { not owned; nil for root classes }
     FVTable:          TObjectList;  { owned TVTableEntry; nil if no virtual methods }
     FImplements:      TObjectList;  { not owned — TInterfaceTypeDesc references }
     FProperties:      TObjectList;  { owned TPropertyInfo }
@@ -297,7 +304,7 @@ type
   TParamDesc = class
   public
     Name:     string;
-    TypeDesc: TTypeDesc;  { not owned }
+    [Unretained] TypeDesc: TTypeDesc;  { not owned }
     IsConst:  Boolean;
     IsVar:    Boolean;
   end;
@@ -306,7 +313,7 @@ type
   public
     Name:       string;
     Kind:       TSymbolKind;
-    TypeDesc:   TTypeDesc;    { not owned; nil for procedures }
+    [Unretained] TypeDesc:   TTypeDesc;    { not owned; nil for procedures }
     Params:     TObjectList;  { owned TParamDesc; populated for procedures/functions }
     ConstValue:  Int64;       { valid when Kind = skConstant; integer/bool/enum value }
     ConstString: string;      { valid when Kind = skConstant and type is tyString }
@@ -318,9 +325,9 @@ type
                                 QBE data-section storage instead of stack alloc }
     IsOverload:   Boolean;    { true when declared with the 'overload' directive;
                                 same-named overload symbols form a NextOverload chain }
-    NextOverload: TSymbol;    { not owned — link to next overload in the chain;
+    [Unretained] NextOverload: TSymbol;    { not owned — link to next overload in the chain;
                                 nil = last (or only) overload }
-    Decl:         TObject;    { not owned — TMethodDecl backing this proc/func symbol;
+    [Unretained] Decl:         TObject;    { not owned — TMethodDecl backing this proc/func symbol;
                                 nil for non-callable symbols }
     constructor Create(const AName: string; AKind: TSymbolKind; AType: TTypeDesc);
     destructor Destroy; override;

@@ -3294,6 +3294,12 @@ begin
         ValTemp := ExtTemp;
       end;
       { ARC for class/string field stored via implicit Self.Field }
+      if ISFld.IsUnretained and (ISFld.TypeDesc.Kind = tyClass) then
+      begin
+        { Unretained class field: non-owning store, no addref/release. }
+        EmitLine(Format('  storel %s, %s', [ValTemp, ObjTemp]));
+        Exit;
+      end;
       if ISFld.IsWeak and (ISFld.TypeDesc.Kind = tyClass) then
       begin
         { Weak class field: route through _WeakAssign so the runtime can
@@ -4326,7 +4332,13 @@ begin
 
   IsStr := AAssign.FieldInfo.TypeDesc.IsString;
   IsArc := IsStr or (AAssign.FieldInfo.TypeDesc.Kind = tyClass);
-  if AAssign.FieldInfo.IsWeak then
+  if AAssign.FieldInfo.IsUnretained and (AAssign.FieldInfo.TypeDesc.Kind = tyClass) then
+  begin
+    { Unretained class field: non-owning — store the pointer with no addref
+      and no release.  The referent is owned elsewhere and outlives this field. }
+    EmitLine(Format('  storel %s, %s', [ValTemp, Ptr]));
+  end
+  else if AAssign.FieldInfo.IsWeak then
   begin
     { Weak class field: store through _WeakAssign so the runtime can zero
       the field slot if the target is freed while the weak ref is live. }
@@ -5415,6 +5427,9 @@ begin
     F := TFieldInfo(ARec.Fields.Items[I]);
     if F.TypeDesc = nil then Continue;
     if not (F.TypeDesc.IsString or (F.TypeDesc.Kind = tyClass)) then
+      Continue;
+    { Unretained class field: non-owning — nothing to release or clear. }
+    if F.IsUnretained and (F.TypeDesc.Kind = tyClass) then
       Continue;
     if F.Offset > 0 then
     begin

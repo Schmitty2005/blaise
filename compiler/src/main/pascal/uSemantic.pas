@@ -153,6 +153,7 @@ type
       chain of a class to verify it descends from TCustomAttribute. }
     function  AttrMatches(const AAttrName, ACanonical: string): Boolean;
     function  HasWeakAttribute(AAttrs: TStringList): Boolean;
+    function  HasUnretainedAttribute(AAttrs: TStringList): Boolean;
     function  IsCustomAttributeClass(const ATypeName: string): Boolean;
     function  ResolveCustomAttrName(const ARawName: string): string;
 
@@ -256,6 +257,24 @@ begin
   end;
   for I := 0 to AAttrs.Count - 1 do
     if AttrMatches(AAttrs.Strings[I], 'Weak') then
+    begin
+      Result := True;
+      Exit;
+    end;
+  Result := False;
+end;
+
+function TSemanticAnalyser.HasUnretainedAttribute(AAttrs: TStringList): Boolean;
+var
+  I: Integer;
+begin
+  if AAttrs = nil then
+  begin
+    Result := False;
+    Exit;
+  end;
+  for I := 0 to AAttrs.Count - 1 do
+    if AttrMatches(AAttrs.Strings[I], 'Unretained') then
     begin
       Result := True;
       Exit;
@@ -2660,15 +2679,32 @@ begin
             FDecl.Line, FDecl.Col);
         FDecl.IsWeak := True;
       end;
+      { Resolve [Unretained] on fields — a non-owning reference with no ARC
+        and no weak registry.  Same class/interface constraint as [Weak]. }
+      if HasUnretainedAttribute(FDecl.Attributes) then
+      begin
+        if not ((FldType.Kind = tyClass) or (FldType.Kind = tyInterface)) then
+          SemanticError(
+            Format('[Unretained] can only be applied to class or interface ' +
+                   'fields, not ''%s''', [FDecl.TypeName]),
+            FDecl.Line, FDecl.Col);
+        if FDecl.IsWeak then
+          SemanticError(
+            '[Weak] and [Unretained] are mutually exclusive',
+            FDecl.Line, FDecl.Col);
+        FDecl.IsUnretained := True;
+      end;
       for K := 0 to FDecl.Names.Count - 1 do
       begin
         FldName := FDecl.Names.Strings[K];
         RT.AddField(FldName, FldType);
-        { Propagate the weak flag to the just-added field info so codegen
-          and the field cleanup emitter can consult it without walking
-          back to the AST. }
+        { Propagate the weak/unretained flags to the just-added field info so
+          codegen and the field cleanup emitter can consult them without
+          walking back to the AST. }
         if FDecl.IsWeak then
           RT.FindField(FldName).IsWeak := True;
+        if FDecl.IsUnretained then
+          RT.FindField(FldName).IsUnretained := True;
       end;
     end;
 

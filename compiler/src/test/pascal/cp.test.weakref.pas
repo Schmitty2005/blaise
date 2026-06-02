@@ -68,6 +68,15 @@ type
     procedure TestCodegen_WeakVarAssign_UsesWeakAssign;
     procedure TestCodegen_WeakVarScopeExit_UsesWeakClear;
     procedure TestCodegen_WeakVarAssign_DoesNotCallClassAddRef;
+
+    { ------------------------------------------------------------------ }
+    { [Unretained] — non-owning, no ARC, no weak registry                 }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_Unretained_OnInteger_RaisesError;
+    procedure TestSemantic_Unretained_WithWeak_RaisesError;
+    procedure TestCodegen_UnretainedField_NoAddRefOnStore;
+    procedure TestCodegen_UnretainedField_NoWeakAssign;
+    procedure TestCodegen_UnretainedField_CleanupDoesNotRelease;
   end;
 
 implementation
@@ -447,6 +456,56 @@ const
         end.
         ''';
 
+  { [Unretained] class field — a non-owning store with no ARC and no weak
+    registry.  FRef := AT must be a plain storel: no _ClassAddRef, no
+    _WeakAssign; and _FieldCleanup_THolder must not release it. }
+  SrcCodegenUnretainedField =
+    '''
+        program P;
+        type
+          TTarget = class
+            FN: Integer;
+          end;
+          THolder = class
+            [Unretained] FRef: TTarget;
+            procedure SetRef(AT: TTarget);
+          end;
+        procedure THolder.SetRef(AT: TTarget);
+        begin
+          FRef := AT
+        end;
+        var H: THolder;
+        begin
+          H := THolder.Create
+        end.
+        ''';
+
+  { [Unretained] on a non-class field is rejected. }
+  SrcSemUnretainedInt =
+    '''
+        program P;
+        type
+          TFoo = class
+            [Unretained] N: Integer;
+          end;
+        begin
+        end.
+        ''';
+
+  { [Weak] and [Unretained] together is rejected. }
+  SrcSemUnretainedWithWeak =
+    '''
+        program P;
+        type
+          TFoo = class
+          end;
+          TBar = class
+            [Weak][Unretained] F: TFoo;
+          end;
+        begin
+        end.
+        ''';
+
 procedure TWeakRefTests.TestCodegen_WeakVarAssign_UsesWeakAssign;
 var
   IR: string;
@@ -484,6 +543,75 @@ begin
   After := Copy(IR, FirstAssignEnd, 200);
   AssertTrue('no _ClassAddRef adjacent to the weak store',
     Pos('_ClassAddRef', After) < 0);
+end;
+
+procedure TWeakRefTests.TestSemantic_Unretained_OnInteger_RaisesError;
+begin
+  AnalyseExpectError(SrcSemUnretainedInt, 'Unretained');
+end;
+
+procedure TWeakRefTests.TestSemantic_Unretained_WithWeak_RaisesError;
+begin
+  AnalyseExpectError(SrcSemUnretainedWithWeak, 'mutually exclusive');
+end;
+
+procedure TWeakRefTests.TestCodegen_UnretainedField_NoAddRefOnStore;
+var
+  IR, Body: string;
+  P0, P1, N, Idx: Integer;
+begin
+  { Within THolder.SetRef the only _ClassAddRef is the parameter-entry retain
+    on AT (balanced by the scope-exit release).  A strong field store would
+    add a SECOND _ClassAddRef (on the value being stored into FRef); the
+    unretained store is a bare storel with no such retain.  Assert exactly one
+    _ClassAddRef in the function body. }
+  IR := GenIR(SrcCodegenUnretainedField);
+  P0 := Pos('$THolder_SetRef', IR);
+  AssertTrue('THolder_SetRef present', P0 > 0);
+  Body := Copy(IR, P0, Length(IR) - P0);
+  P1   := Pos('@method_exit', Body);
+  AssertTrue('method exit present', P1 > 0);
+  Body := Copy(Body, 0, P1);
+  N   := 0;
+  Idx := 0;
+  while True do
+  begin
+    Idx := PosEx('_ClassAddRef', Body, Idx);
+    if Idx < 0 then Break;
+    Inc(N);
+    Inc(Idx);
+  end;
+  AssertEquals('exactly one addref (the AT param entry, none for the store)',
+    1, N);
+end;
+
+procedure TWeakRefTests.TestCodegen_UnretainedField_NoWeakAssign;
+var
+  IR: string;
+begin
+  { [Unretained] is NOT [Weak]: it must not route through the weak table. }
+  IR := GenIR(SrcCodegenUnretainedField);
+  AssertTrue('unretained field does not use _WeakAssign',
+    Pos('_WeakAssign', IR) < 0);
+end;
+
+procedure TWeakRefTests.TestCodegen_UnretainedField_CleanupDoesNotRelease;
+var
+  IR, Cleanup: string;
+  P0, P1: Integer;
+begin
+  { _FieldCleanup_THolder must not release FRef — an unretained field is
+    non-owning, so cleanup is a no-op for it. }
+  IR := GenIR(SrcCodegenUnretainedField);
+  P0 := Pos('$_FieldCleanup_THolder', IR);
+  AssertTrue('_FieldCleanup_THolder present', P0 > 0);
+  Cleanup := Copy(IR, P0, 200);
+  P1 := Pos('}', Cleanup);
+  if P1 > 0 then Cleanup := Copy(Cleanup, 0, P1);
+  AssertTrue('unretained field cleanup does not release',
+    Pos('_ClassRelease', Cleanup) < 0);
+  AssertTrue('unretained field cleanup does not weak-clear',
+    Pos('_WeakClear', Cleanup) < 0);
 end;
 
 initialization

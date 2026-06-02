@@ -28,7 +28,9 @@ type
   { Semantic analyser fills ResolvedType on every expression node. }
   TASTExpr = class(TASTNode)
   public
-    ResolvedType: TTypeDesc;  { set by uSemantic; nil until analysed }
+    [Unretained] ResolvedType: TTypeDesc;  { not owned — points into the
+                                              symbol table's type pool, which
+                                              outlives the AST. }
   end;
 
   TIntLiteral = class(TASTExpr)
@@ -75,12 +77,12 @@ type
     ConstValue:        Int64;    { valid when IsConstant = True; integer/bool/enum value }
     ConstString:       string;   { valid when IsConstant = True and type is tyString }
     IsNoArgFuncCall:   Boolean;  { set by uSemantic — bare ident that resolves to a 0-arg function }
-    NoArgFuncDecl:     TObject;  { TMethodDecl — not owned; valid when IsNoArgFuncCall and user-defined }
+    [Unretained] NoArgFuncDecl:     TObject;  { TMethodDecl — not owned; valid when IsNoArgFuncCall and user-defined }
     IsGlobal:          Boolean;  { set by uSemantic — this ident is a program-level global var }
     IsImplicitSelf:    Boolean;  { set by uSemantic — bare field name implicitly referencing Self }
-    ImplicitFieldInfo: TObject;  { TFieldInfo — not owned; valid when IsImplicitSelf }
+    [Unretained] ImplicitFieldInfo: TObject;  { TFieldInfo — not owned; valid when IsImplicitSelf }
     IsImplicitSelfMethod: Boolean; { set by uSemantic — bare zero-arg method call on Self }
-    ImplicitMethodDecl:   TObject;  { TMethodDecl — not owned; set when IsImplicitSelfMethod }
+    [Unretained] ImplicitMethodDecl:   TObject;  { TMethodDecl — not owned; set when IsImplicitSelfMethod }
     IsMetaclassRef:    Boolean;     { set by uSemantic — bare class type identifier used as
                                       metaclass value (typeinfo ptr); codegen emits
                                       $typeinfo_<Name> instead of loading a variable. }
@@ -96,17 +98,17 @@ type
     ConstValue:        Int64;         { valid when IsConstant = True }
     ConstString:       string;        { valid when IsConstant = True and type is tyString }
     ConstArraySymbol:  string;        { non-empty for class-level array const — global data label }
-    ConstArrayType:    TObject;       { TStaticArrayTypeDesc — not owned; set when ConstArraySymbol is set }
+    [Unretained] ConstArrayType:    TObject;       { TStaticArrayTypeDesc — not owned; set when ConstArraySymbol is set }
     IsConstructorCall: Boolean;       { set by uSemantic — TypeName.Create }
     IsClassAccess:     Boolean;       { set by uSemantic — pointer deref needed }
     PropRead:          TPropertyInfo; { non-nil if this is a method-backed property read }
     PropOwnerType:     string;        { class type name for method-backed property calls }
     IsImplicitSelf:    Boolean;       { set by uSemantic — RecordName is a field of Self }
-    ImplicitBaseInfo:  TFieldInfo;    { non-owned — the field of Self holding the record/class }
+    [Unretained] ImplicitBaseInfo:  TFieldInfo;    { non-owned — the field of Self holding the record/class }
     IsMethodCall:        Boolean;     { set by uSemantic — FieldName is a zero-arg method }
-    ResolvedMethod:      TObject;     { TMethodDecl — not owned; set when IsMethodCall }
+    [Unretained] ResolvedMethod:      TObject;     { TMethodDecl — not owned; set when IsMethodCall }
     IsInterfaceCall:     Boolean;     { set by uSemantic — zero-arg method call through interface itab }
-    ResolvedClassType:   TTypeDesc;  { not owned; set when IsInterfaceCall — the interface descriptor }
+    [Unretained] ResolvedClassType:   TTypeDesc;  { not owned; set when IsInterfaceCall — the interface descriptor }
     IsGlobal:            Boolean;     { set by uSemantic — RecordName is a program-level global }
     IsClassNameAccess:   Boolean;     { set by uSemantic — .ClassName built-in on a class instance }
     IsClassTypeAccess:   Boolean;     { set by uSemantic — .ClassType built-in: returns metaclass (typeinfo ptr) }
@@ -237,9 +239,9 @@ type
     IsArrayIter:          Boolean;    { True when collection is a static array }
     EnumVarName:          string;     { synthetic enumerator slot, e.g. __forin_0 }
     ResolvedEnumTypeName: string;     { enumerator class type name }
-    GetEnumDecl:          TObject;    { TMethodDecl — not owned }
-    MoveNextDecl:         TObject;    { TMethodDecl — not owned }
-    CurrentDecl:          TObject;    { TMethodDecl getter — not owned }
+    [Unretained] GetEnumDecl:          TObject;    { TMethodDecl — not owned }
+    [Unretained] MoveNextDecl:         TObject;    { TMethodDecl — not owned }
+    [Unretained] CurrentDecl:          TObject;    { TMethodDecl getter — not owned }
     { Static-array iteration path (IsArrayIter = True) }
     IdxVarName:           string;     { synthetic index slot — shared with string/dynarray path }
     ArrayLow:             Integer;    { compile-time lower bound }
@@ -329,11 +331,11 @@ type
     FieldInfo:     TFieldInfo; { set by uSemantic — carries offset + type }
     IsClassAccess: Boolean;    { set by uSemantic — pointer deref needed }
     IsImplicitSelf:    Boolean; { set by uSemantic — RecordName is a field of Self }
-    ImplicitBaseInfo:  TFieldInfo; { non-owned — the field of Self that holds the record/class }
+    [Unretained] ImplicitBaseInfo:  TFieldInfo; { non-owned — the field of Self that holds the record/class }
     IsGlobal:          Boolean; { set by uSemantic — RecordName is a program-level global }
     IsVarParam:        Boolean; { set by uSemantic — RecordName is a var parameter (record by-ref) }
     PropIndexExpr: TASTExpr;  { owned — non-nil = indexed property write via setter }
-    PropWriteInfo: TPropertyInfo;  { non-owned — set by semantic when PropIndexExpr is set }
+    [Unretained] PropWriteInfo: TPropertyInfo;  { non-owned — set by semantic when PropIndexExpr is set }
     PropOwnerType: string;  { owner class name for setter call; valid when PropIndexExpr set }
     destructor Destroy; override;
   end;
@@ -345,7 +347,7 @@ type
     IndexExpr: TASTExpr;  { owned }
     ValueExpr: TASTExpr;  { owned }
     IsGlobal: Boolean;    { set by uSemantic }
-    ResolvedArrayType: TTypeDesc;  { set by uSemantic; not owned }
+    [Unretained] ResolvedArrayType: TTypeDesc;  { set by uSemantic; not owned }
     destructor Destroy; override;
   end;
 
@@ -354,7 +356,7 @@ type
   public
     PtrExpr:  TASTExpr;  { owned — pointer expression }
     ValExpr:  TASTExpr;  { owned — value to store }
-    BaseTy:   TTypeDesc; { non-owned — element type; set by uSemantic }
+    [Unretained] BaseTy:   TTypeDesc; { non-owned — element type; set by uSemantic }
     destructor Destroy; override;
   end;
 
@@ -362,11 +364,11 @@ type
   public
     Name:         string;
     Args:         TObjectList;  { owned TASTExpr items }
-    ResolvedDecl: TObject;      { TMethodDecl — not owned; set by uSemantic for user-defined procs }
+    [Unretained] ResolvedDecl: TObject;      { TMethodDecl — not owned; set by uSemantic for user-defined procs }
     IsImplicitSelfMethod: Boolean; { set by uSemantic — call is on Self }
     IsIndirectCall:       Boolean; { set by uSemantic — Name is a procedural-typed variable }
     IndirectCallIsGlobal: Boolean; { set by uSemantic — when IsIndirectCall, variable is global }
-    ResolvedProcType:     TObject; { TProceduralTypeDesc — not owned; valid when IsIndirectCall }
+    [Unretained] ResolvedProcType:     TObject; { TProceduralTypeDesc — not owned; valid when IsIndirectCall }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -375,7 +377,7 @@ type
   public
     Name:         string;
     Args:         TObjectList;  { owned TASTExpr items }
-    ResolvedDecl: TObject;      { TMethodDecl — not owned; set by uSemantic }
+    [Unretained] ResolvedDecl: TObject;      { TMethodDecl — not owned; set by uSemantic }
     IsImplicitSelfMethod: Boolean; { set by uSemantic — call is on Self }
     IsIndirectCall:       Boolean; { set by uSemantic — Name resolves to a
                                      variable of procedural type; codegen
@@ -385,7 +387,7 @@ type
     IndirectCallIsGlobal: Boolean; { set by uSemantic — when IsIndirectCall,
                                      True if the holding variable is a
                                      program-level global. }
-    ResolvedProcType: TObject;     { TProceduralTypeDesc — not owned;
+    [Unretained] ResolvedProcType: TObject;     { TProceduralTypeDesc — not owned;
                                      valid when IsIndirectCall }
     IsBuiltinHasClassAttr: Boolean; { set by uSemantic — HasClassAttribute builtin }
     HasClassAttrClass:     string;  { class name for arg 1 (class being queried) }
@@ -401,7 +403,7 @@ type
   public
     CalleeExpr:      TASTExpr;   { owned — the expression that yields the proc pointer }
     Args:            TObjectList; { owned TASTExpr items }
-    ResolvedProcType: TObject;   { TProceduralTypeDesc — not owned; set by uSemantic }
+    [Unretained] ResolvedProcType: TObject;   { TProceduralTypeDesc — not owned; set by uSemantic }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -427,10 +429,10 @@ type
     Args:       TObjectList;   { owned TASTExpr items }
     ObjExpr:    TASTExpr;  { owned — when non-nil, receiver is this expression }
     { Set by uSemantic: }
-    ResolvedClassType:  TTypeDesc;   { not owned }
-    ResolvedMethod:     TObject;     { TMethodDecl — not owned; avoids forward ref }
+    [Unretained] ResolvedClassType:  TTypeDesc;   { not owned }
+    [Unretained] ResolvedMethod:     TObject;     { TMethodDecl — not owned; avoids forward ref }
     IsImplicitSelf:     Boolean;     { ObjectName is a field of Self }
-    ImplicitBaseInfo:   TFieldInfo;  { not owned — the field of Self }
+    [Unretained] ImplicitBaseInfo:   TFieldInfo;  { not owned — the field of Self }
     IsGlobal:           Boolean;     { set by uSemantic — ObjectName is a program-level global }
     IsVarParam:         Boolean;     { set by uSemantic — ObjectName is a var/out parameter }
     IsBuiltinToString:  Boolean;     { set by uSemantic — built-in TObject.ToString virtual dispatch }
@@ -438,8 +440,8 @@ type
                                        the receiver, invoked directly (F.Handler;).  Codegen
                                        loads the (Code, Data) pair from the field slot and
                                        dispatches indirectly instead of calling a method. }
-    ProcFieldInfo:      TFieldInfo;  { not owned — the procedural field, when IsProcFieldCall }
-    ResolvedProcType:   TObject;     { TProceduralTypeDesc — not owned; the field's signature }
+    [Unretained] ProcFieldInfo:      TFieldInfo;  { not owned — the procedural field, when IsProcFieldCall }
+    [Unretained] ResolvedProcType:   TObject;     { TProceduralTypeDesc — not owned; the field's signature }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -452,8 +454,8 @@ type
     Name:               string;        { parent method name to call }
     Args:               TObjectList;   { owned TASTExpr items }
     { Set by uSemantic: }
-    ResolvedParentType: TObject;       { TRecordTypeDesc — not owned }
-    ResolvedMethod:     TObject;       { TMethodDecl — not owned }
+    [Unretained] ResolvedParentType: TObject;       { TRecordTypeDesc — not owned }
+    [Unretained] ResolvedMethod:     TObject;       { TMethodDecl — not owned }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -475,6 +477,9 @@ type
     IsWeak:       Boolean;      { set by uSemantic when [Weak] is resolved
                                   on this declaration.  Codegen keys off
                                   this instead of walking Attributes. }
+    IsUnretained: Boolean;      { set by uSemantic when [Unretained] is resolved.
+                                  Non-owning reference, no ARC and no weak
+                                  registry.  See TFieldInfo.IsUnretained. }
     IsGlobal:     Boolean;      { set by uSemantic when this is a program-level global variable }
     constructor Create;
     destructor Destroy; override;
@@ -521,6 +526,7 @@ type
     ResolvedType: TTypeDesc;    { set by uSemantic }
     Attributes:   TStringList;  { owned — see TVarDecl.Attributes. }
     IsWeak:       Boolean;      { set by uSemantic when [Weak] is resolved. }
+    IsUnretained: Boolean;      { set by uSemantic when [Unretained] is resolved. }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -619,7 +625,7 @@ type
       share the outer variable's storage.  EnclosingDecl points to the directly
       enclosing standalone proc/function (nil for top-level decls). }
     CapturedVars:  TStringList; { owned; nil when no captures }
-    EnclosingDecl: TMethodDecl; { not owned — enclosing standalone proc, or nil }
+    [Unretained] EnclosingDecl: TMethodDecl; { not owned — enclosing standalone proc, or nil }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -630,8 +636,8 @@ type
     Name:              string;     { method name }
     Args:              TObjectList; { owned TASTExpr }
     ObjExpr:           TASTExpr;   { owned — receiver expression when ObjectName = '' }
-    ResolvedClassType:  TTypeDesc;   { not owned; set by uSemantic }
-    ResolvedMethod:     TObject;     { TMethodDecl — not owned }
+    [Unretained] ResolvedClassType:  TTypeDesc;   { not owned; set by uSemantic }
+    [Unretained] ResolvedMethod:     TObject;     { TMethodDecl — not owned }
     IsConstructorCall:  Boolean;    { set by uSemantic — TypeName.Create(args) }
     IsGlobal:           Boolean;    { set by uSemantic — ObjectName is a program-level global }
     IsVarParam:         Boolean;    { set by uSemantic — ObjectName is a var/out parameter }
@@ -691,7 +697,7 @@ type
   public
     TypeName: string;        { raw e.g. 'TBox<Integer>' }
     ClassDef: TClassTypeDef; { owned — cloned class body with substituted type names }
-    TypeDesc: TTypeDesc;     { non-owned — points to TRecordTypeDesc in SymbolTable }
+    [Unretained] TypeDesc: TTypeDesc;     { non-owned — points to TRecordTypeDesc in SymbolTable }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -720,7 +726,7 @@ type
   public
     InstName: string;          { mangled name e.g. 'IEqualityComparer_Integer' }
     IntfDef:  TInterfaceTypeDef; { owned — cloned with substituted type names }
-    TypeDesc: TTypeDesc;       { non-owned — points to TInterfaceTypeDesc in SymbolTable }
+    [Unretained] TypeDesc: TTypeDesc;       { non-owned — points to TInterfaceTypeDesc in SymbolTable }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -1145,7 +1151,8 @@ begin
   inherited Create;
   Names      := TStringList.Create;
   Attributes := TStringList.Create;
-  IsWeak     := False;
+  IsWeak       := False;
+  IsUnretained := False;
 end;
 
 destructor TFieldDecl.Destroy;

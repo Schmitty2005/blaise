@@ -792,10 +792,67 @@ written code.
 
 ==== Known limitation: reference cycles
 
-ARC cannot automatically collect reference cycles. Blaise provides a
-`weak` reference mechanism (analogous to `weak` in Swift) to break cycles.
-Identifying cycles in a codebase is the principal migration cost when
-porting from manual-free FPC code.
+ARC cannot automatically collect reference cycles. Blaise provides two
+non-owning reference attributes to break cycles and to model borrowed
+references — `[Weak]` and `[Unretained]` — applied to class- or
+interface-typed fields and local variables. Identifying cycles in a codebase
+is the principal migration cost when porting from manual-free FPC code.
+
+===== `[Weak]`
+
+`[Weak]` (analogous to `weak` in Swift) is a *safe* non-owning reference. The
+runtime registers each weak slot in a weak table; when the referent is freed,
+every weak slot pointing at it is automatically zeroed. Reading a weak slot
+therefore yields either a live object or `nil` — never a dangling pointer.
+
+[source,pascal]
+----
+TObserver = class
+  [Weak] FSubject: TSubject;  { does not keep FSubject alive }
+end;
+----
+
+Assignment lowers to `_WeakAssign` (which registers the slot) and scope
+exit / field cleanup lowers to `_WeakClear` (which unregisters it). There is
+a per-assignment cost for the registry bookkeeping.
+
+Use `[Weak]` when the referent may be destroyed while the reference is still
+reachable, and the holder must observe that (the slot going `nil`).
+
+===== `[Unretained]`
+
+`[Unretained]` (analogous to `unowned(unsafe)` in Swift) is an *unsafe*
+non-owning reference. It performs *no* reference counting and *no* weak-table
+registration: the field assignment is a plain pointer store, and field
+cleanup does nothing for it. There is zero per-assignment overhead.
+
+[source,pascal]
+----
+TNode = class
+  [Unretained] Parent: TNode;  { back-pointer; parent outlives the child }
+end;
+----
+
+Because there is no auto-nil, an `[Unretained]` field becomes a dangling
+pointer if the referent is freed first. Use it *only* when the referent is
+guaranteed to outlive the field — for example a back-pointer to an owner, or
+a reference into a long-lived pool (the Blaise compiler uses it for the
+`ResolvedType` set by semantic analysis, which points into the symbol table's
+type pool that outlives the AST).
+
+`[Weak]` and `[Unretained]` are mutually exclusive on the same declaration.
+
+===== Choosing between them
+
+[cols="1,1,1", options="header"]
+|===
+| | `[Weak]` | `[Unretained]`
+
+| Keeps referent alive | no | no
+| Auto-nil on referent free | yes | no (dangles)
+| Per-assignment cost | weak-table register | none (plain store)
+| Use when | referent may die first | referent outlives the field
+|===
 
 ==== Porting note
 
