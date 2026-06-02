@@ -18,7 +18,9 @@ unit cp.test.e2e.native;
   Milestone coverage:
     M1 — empty program compiles, links, and exits 0.
     M2 — integer arithmetic (+ - * div mod, nesting, precedence) and
-         Write/WriteLn of integers. }
+         Write/WriteLn of integers.
+    M3 — control flow: if/else, while, repeat, and the comparison operators
+         (= <> < > <= >=). }
 
 interface
 
@@ -35,6 +37,9 @@ type
     procedure TestRun_Native_IntArithmetic_WriteLn;
     procedure TestRun_Native_DivModAndNesting;
     procedure TestRun_Native_WriteNoNewline;
+    procedure TestRun_Native_IfElse;
+    procedure TestRun_Native_ComparisonsAndNestedIf;
+    procedure TestRun_Native_Repeat;
   end;
 
 implementation
@@ -81,6 +86,37 @@ const
     end.
     ''';
 
+  SrcIfElse = '''
+    program P;
+    begin
+      if 5 > 3 then WriteLn(1) else WriteLn(0);
+      if 2 > 9 then WriteLn(1) else WriteLn(0);
+      if 4 = 4 then WriteLn(44)
+    end.
+    ''';
+
+  SrcComparisons = '''
+    program P;
+    begin
+      if 3 < 5 then WriteLn(11);
+      if 5 <= 5 then WriteLn(22);
+      if 6 >= 9 then WriteLn(33) else WriteLn(44);
+      if 7 <> 8 then WriteLn(55);
+      if (2 + 2) = 4 then
+        if 10 > 1 then WriteLn(66)
+    end.
+    ''';
+
+  { while with a false condition never runs; repeat runs once then exits when
+    the until condition is true.  (Counter-driven loops arrive with M4 locals.) }
+  SrcRepeat = '''
+    program P;
+    begin
+      while 3 > 5 do WriteLn(999);
+      repeat WriteLn(8) until 1 = 1
+    end.
+    ''';
+
 procedure TE2ENativeTests.TestRun_Native_EmptyProgram_ExitsZero;
 var Output: string; RCode: Integer;
 begin
@@ -116,6 +152,34 @@ begin
   AssertTrue('compile+run', CompileAndRunNative(SrcWriteNoNL, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('123 then newline', '123' + LE, Output);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IfElse;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunNative(SrcIfElse, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('1 0 44', '1' + LE + '0' + LE + '44' + LE, Output);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ComparisonsAndNestedIf;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunNative(SrcComparisons, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('11 22 44 55 66',
+    '11' + LE + '22' + LE + '44' + LE + '55' + LE + '66' + LE, Output);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Repeat;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunNative(SrcRepeat, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('8 once', '8' + LE, Output);
 end;
 
 initialization

@@ -32,6 +32,11 @@ uses
 type
   TX86_64Backend = class(TNativeBackend)
   protected
+    FLabelCount: Integer;   { monotonic source of unique local labels }
+
+    { Allocate a fresh local assembly label (".L<prefix><N>"). }
+    function NewLabel(const APrefix: string): string;
+
     procedure EmitProgram(AProg: TProgram); override;
     { Lower one statement. }
     procedure EmitStmt(AStmt: TASTStmt);
@@ -39,6 +44,10 @@ type
     procedure EmitWrite(ACall: TProcCall; ANewline: Boolean);
     { Evaluate an integer expression; result left in %eax. }
     procedure EmitExprToEax(AExpr: TASTExpr);
+    { Evaluate a boolean condition and branch: if true jump ATrueLabel, else
+      fall through to AFalseLabel (a jmp is emitted to it). }
+    procedure EmitCondBranch(AExpr: TASTExpr;
+                             const ATrueLabel, AFalseLabel: string);
   public
     constructor Create(const ATarget: TTargetDesc); override;
   end;
@@ -48,6 +57,13 @@ implementation
 constructor TX86_64Backend.Create(const ATarget: TTargetDesc);
 begin
   inherited Create(ATarget);
+  FLabelCount := 0;
+end;
+
+function TX86_64Backend.NewLabel(const APrefix: string): string;
+begin
+  Result := '.L' + APrefix + IntToStr(FLabelCount);
+  Inc(FLabelCount);
 end;
 
 { ------------------------------------------------------------------ }
@@ -90,6 +106,22 @@ begin
           Self.Emit(#9'idivl %ecx');
           Self.Emit(#9'movl %edx, %eax');  { remainder in %edx }
         end;
+      { Signed integer comparisons -> boolean 0/1 in %eax.  AT&T `cmpl B, A`
+        computes A - B, so with left in %eax and right in %ecx, `cmpl %ecx,
+        %eax` sets flags for (left ? right); setcc then yields the 0/1. }
+      boEQ, boNE, boLT, boGT, boLE, boGE:
+        begin
+          Self.Emit(#9'cmpl %ecx, %eax');
+          case BE.Op of
+            boEQ: Self.Emit(#9'sete %al');
+            boNE: Self.Emit(#9'setne %al');
+            boLT: Self.Emit(#9'setl %al');
+            boGT: Self.Emit(#9'setg %al');
+            boLE: Self.Emit(#9'setle %al');
+            boGE: Self.Emit(#9'setge %al');
+          end;
+          Self.Emit(#9'movzbl %al, %eax');  { zero-extend the byte result }
+        end;
     else
       raise ENativeCodeGenError.Create(
         'native backend: unsupported binary operator in integer expression');
@@ -99,6 +131,17 @@ begin
 
   raise ENativeCodeGenError.Create(
     'native backend: unsupported expression form ' + AExpr.ClassName);
+end;
+
+procedure TX86_64Backend.EmitCondBranch(AExpr: TASTExpr;
+                                        const ATrueLabel, AFalseLabel: string);
+begin
+  { Evaluate the condition to a 0/1 (or any nonzero=true) value in %eax, then
+    branch.  testl sets ZF when %eax is zero. }
+  Self.EmitExprToEax(AExpr);
+  Self.Emit(#9'testl %eax, %eax');
+  Self.Emit(#9'jne ' + ATrueLabel);
+  Self.Emit(#9'jmp ' + AFalseLabel);
 end;
 
 { ------------------------------------------------------------------ }
@@ -129,7 +172,14 @@ end;
 
 procedure TX86_64Backend.EmitStmt(AStmt: TASTStmt);
 var
-  PC: TProcCall;
+  PC:    TProcCall;
+  Comp:  TCompoundStmt;
+  IfS:   TIfStmt;
+  WhileS: TWhileStmt;
+  RepS:  TRepeatStmt;
+  I:     Integer;
+  LThen, LElse, LEnd:    string;
+  LCond, LBody:          string;
 begin
   if AStmt is TProcCall then
   begin
@@ -146,6 +196,66 @@ begin
     end;
     raise ENativeCodeGenError.Create(
       'native backend: unsupported procedure call ' + PC.Name);
+  end;
+
+  if AStmt is TCompoundStmt then
+  begin
+    Comp := TCompoundStmt(AStmt);
+    for I := 0 to Comp.Stmts.Count - 1 do
+      Self.EmitStmt(TASTStmt(Comp.Stmts.Items[I]));
+    Exit;
+  end;
+
+  if AStmt is TIfStmt then
+  begin
+    IfS   := TIfStmt(AStmt);
+    LThen := Self.NewLabel('then');
+    LEnd  := Self.NewLabel('ifend');
+    if IfS.ElseStmt <> nil then
+      LElse := Self.NewLabel('else')
+    else
+      LElse := LEnd;
+    Self.EmitCondBranch(IfS.Condition, LThen, LElse);
+    Self.Emit(LThen + ':');
+    Self.EmitStmt(IfS.ThenStmt);
+    Self.Emit(#9'jmp ' + LEnd);
+    if IfS.ElseStmt <> nil then
+    begin
+      Self.Emit(LElse + ':');
+      Self.EmitStmt(IfS.ElseStmt);
+      Self.Emit(#9'jmp ' + LEnd);
+    end;
+    Self.Emit(LEnd + ':');
+    Exit;
+  end;
+
+  if AStmt is TWhileStmt then
+  begin
+    WhileS := TWhileStmt(AStmt);
+    LCond  := Self.NewLabel('wcond');
+    LBody  := Self.NewLabel('wbody');
+    LEnd   := Self.NewLabel('wend');
+    Self.Emit(LCond + ':');
+    Self.EmitCondBranch(WhileS.Condition, LBody, LEnd);
+    Self.Emit(LBody + ':');
+    Self.EmitStmt(WhileS.Body);
+    Self.Emit(#9'jmp ' + LCond);
+    Self.Emit(LEnd + ':');
+    Exit;
+  end;
+
+  if AStmt is TRepeatStmt then
+  begin
+    RepS  := TRepeatStmt(AStmt);
+    LBody := Self.NewLabel('rbody');
+    LEnd  := Self.NewLabel('rend');
+    Self.Emit(LBody + ':');
+    for I := 0 to RepS.Body.Stmts.Count - 1 do
+      Self.EmitStmt(TASTStmt(RepS.Body.Stmts.Items[I]));
+    { repeat exits when the condition is TRUE: branch true->end, false->body. }
+    Self.EmitCondBranch(RepS.Condition, LEnd, LBody);
+    Self.Emit(LEnd + ':');
+    Exit;
   end;
 
   raise ENativeCodeGenError.Create(
