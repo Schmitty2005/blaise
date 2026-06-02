@@ -63,14 +63,22 @@ https://github.com/graemeg/opdebugger[OPDF] debug format support.
 | Complete ✅
 
 | 5
-| Self-hosting + LLVM + Windows + macOS ARM64
-| In-Progress
+| Self-hosting
+| Complete ✅
 
 | 6
+| Language improvements + expand RTL & StdLib + bug fixing
+| In-Progress
+
+| 7
+| LLVM + Windows + macOS ARM64
+| Planned
+
+| 8
 | LSP + VS Code extension
 | Planned
 
-| 7
+| 9
 | Migration analyser for FPC/Delphi codebases
 | Planned
 |===
