@@ -23,7 +23,10 @@ unit cp.test.e2e.native;
          (= <> < > <= >=).
     M4 — program-global integer variables (declare, assign, read) and the for
          loop (to / downto, nesting, end-expression evaluated once), plus
-         counter-driven while/repeat. }
+         counter-driven while/repeat.
+    M5 — user procedures/functions: integer value parameters, integer/void
+         return via Result, locals in a stack frame, direct calls (including
+         in expressions and nested), recursion, and for loops over a local. }
 
 interface
 
@@ -47,6 +50,9 @@ type
     procedure TestRun_Native_DownToAndNestedFor;
     procedure TestRun_Native_CounterLoops;
     procedure TestRun_Native_ForEndEvaluatedOnce;
+    procedure TestRun_Native_FunctionsAndCalls;
+    procedure TestRun_Native_Recursion;
+    procedure TestRun_Native_ForLoopOverLocal;
   end;
 
 implementation
@@ -183,6 +189,60 @@ const
     end.
     ''';
 
+  SrcFunctions = '''
+    program P;
+    function Square(x: Integer): Integer;
+    begin
+      Result := x * x
+    end;
+    function Sum3(a, b, c: Integer): Integer;
+    begin
+      Result := a + b + c
+    end;
+    procedure PrintTwice(n: Integer);
+    begin
+      WriteLn(n);
+      WriteLn(n)
+    end;
+    begin
+      WriteLn(Square(6));
+      WriteLn(Sum3(1, 2, 3));
+      PrintTwice(9);
+      WriteLn(Square(Square(2)));
+      WriteLn(Square(3) + Sum3(10, 20, 30))
+    end.
+    ''';
+
+  SrcRecursion = '''
+    program P;
+    function Fact(n: Integer): Integer;
+    begin
+      if n <= 1 then
+        Result := 1
+      else
+        Result := n * Fact(n - 1)
+    end;
+    begin
+      WriteLn(Fact(5));
+      WriteLn(Fact(1))
+    end.
+    ''';
+
+  SrcForOverLocal = '''
+    program P;
+    function SumTo(n: Integer): Integer;
+    var i, s: Integer;
+    begin
+      s := 0;
+      for i := 1 to n do s := s + i;
+      Result := s
+    end;
+    begin
+      WriteLn(SumTo(10));
+      WriteLn(SumTo(100))
+    end.
+    ''';
+
 procedure TE2ENativeTests.TestRun_Native_EmptyProgram_ExitsZero;
 var Output: string; RCode: Integer;
 begin
@@ -284,6 +344,36 @@ begin
   AssertTrue('compile+run', CompileAndRunNative(SrcForEndOnce, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('count = 3 (end not extended)', '3' + LE, Output);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_FunctionsAndCalls;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunNative(SrcFunctions, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  { Square(6)=36; Sum3(1,2,3)=6; PrintTwice(9)=9,9; Square(Square(2))=16;
+    Square(3)+Sum3(10,20,30)=9+60=69 }
+  AssertEquals('36 6 9 9 16 69',
+    '36' + LE + '6' + LE + '9' + LE + '9' + LE + '16' + LE + '69' + LE, Output);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Recursion;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunNative(SrcRecursion, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('120 then 1', '120' + LE + '1' + LE, Output);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ForLoopOverLocal;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunNative(SrcForOverLocal, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('55 then 5050', '55' + LE + '5050' + LE, Output);
 end;
 
 initialization

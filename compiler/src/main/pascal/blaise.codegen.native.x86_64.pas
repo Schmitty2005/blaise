@@ -40,6 +40,26 @@ type
       gives free dedup via IndexOf. }
     FDataGlobals: TStringList;
 
+    { Current function's stack frame: maps a local name (param, var, or
+      Result) to its negative %rbp-relative byte offset, held in Objects[] as a
+      small integer.  nil while emitting program $main (whose top-level vars are
+      globals, not frame slots).
+
+      NOTE on container choice: this is a key->value map, so TDictionary<string,
+      Integer> from generics.collections is the semantically correct structure.
+      It cannot be used here yet because of an open compiler bug (see bugs.txt):
+      a generic class that implements a generic interface (TDictionary ->
+      IMap<K,V>) fails to link when instantiated inside a UNIT — the
+      impllist references typeinfo_IMap_string_Integer but the def is never
+      emitted in the multi-unit path.  Since this unit is part of the
+      multi-unit compiler build, it would hit exactly that.  Until the bug is
+      fixed, a TStringList keyed by name (Objects[] = offset) is used; N is tiny
+      (locals per function) so IndexOf lookup is fine.
+      TODO: switch to TDictionary<string, Integer> once the multi-unit
+      generic-interface-typeinfo bug is resolved. }
+    FFrame:     TStringList;
+    FFrameSize: Integer;        { bytes to reserve for locals (16-aligned) }
+
     { Allocate a fresh local assembly label (".L<prefix><N>"). }
     function NewLabel(const APrefix: string): string;
     { Register a 4-byte global integer slot (idempotent). }
@@ -47,13 +67,27 @@ type
     { Emit the accumulated .data section (one slot per registered global). }
     procedure EmitDataSection;
 
+    { True when AName is a slot in the current function frame. }
+    function IsLocal(const AName: string): Boolean;
+    { The AT&T operand addressing AName: "-N(%rbp)" for a frame local,
+      "name(%rip)" for a global. }
+    function VarOperand(const AName: string): string;
+    { Build FFrame for a function: assign offsets to params, Result, locals. }
+    procedure BuildFrame(ADecl: TMethodDecl);
+    { Tear down the current frame. }
+    procedure ClearFrame;
+
     procedure EmitProgram(AProg: TProgram); override;
+    { Emit a standalone procedure/function definition. }
+    procedure EmitFunctionDef(ADecl: TMethodDecl);
     { Lower one statement. }
     procedure EmitStmt(AStmt: TASTStmt);
     { Lower a Write/WriteLn call (ANewline = WriteLn). }
     procedure EmitWrite(ACall: TProcCall; ANewline: Boolean);
     { Lower a for loop. }
     procedure EmitForStmt(AFor: TForStmt);
+    { Emit a direct call to a user procedure/function; result (if any) in %eax. }
+    procedure EmitCall(const AFuncSym: string; AArgs: TObjectList);
     { Evaluate an integer expression; result left in %eax. }
     procedure EmitExprToEax(AExpr: TASTExpr);
     { Evaluate a boolean condition and branch: if true jump ATrueLabel, else
@@ -67,15 +101,43 @@ type
 
 implementation
 
+const
+  { SysV AMD64 integer argument registers (32-bit views), in order. }
+  SysVArgRegs: array[0..5] of string =
+    ('%edi', '%esi', '%edx', '%ecx', '%r8d', '%r9d');
+
+{ The assembly symbol for a procedure/function: the semantic pass sets
+  ResolvedQbeName for overloaded/mangled names; otherwise use the source name
+  verbatim (matching the QBE backend's $name vs $ResolvedQbeName choice). }
+function FuncSymbolFromDecl(ADecl: TMethodDecl): string;
+begin
+  if (ADecl <> nil) and (ADecl.ResolvedQbeName <> '') then
+    Result := ADecl.ResolvedQbeName
+  else if ADecl <> nil then
+    Result := ADecl.Name
+  else
+    Result := '';
+end;
+
+function FuncSymbolOf(ACall: TFuncCallExpr): string;
+begin
+  Result := FuncSymbolFromDecl(TMethodDecl(ACall.ResolvedDecl));
+  if Result = '' then
+    Result := ACall.Name;
+end;
+
 constructor TX86_64Backend.Create(const ATarget: TTargetDesc);
 begin
   inherited Create(ATarget);
   FLabelCount  := 0;
   FDataGlobals := TStringList.Create;
+  FFrame       := nil;
+  FFrameSize   := 0;
 end;
 
 destructor TX86_64Backend.Destroy;
 begin
+  Self.ClearFrame;
   FDataGlobals.Free;
   inherited Destroy;
 end;
@@ -112,6 +174,81 @@ begin
 end;
 
 { ------------------------------------------------------------------ }
+{ Frame model                                                          }
+{ ------------------------------------------------------------------ }
+
+function TX86_64Backend.IsLocal(const AName: string): Boolean;
+begin
+  Result := (FFrame <> nil) and (FFrame.IndexOf(AName) >= 0);
+end;
+
+function TX86_64Backend.VarOperand(const AName: string): string;
+var
+  Idx: Integer;
+begin
+  if FFrame <> nil then
+  begin
+    Idx := FFrame.IndexOf(AName);
+    if Idx >= 0 then
+    begin
+      { Objects[] holds the negative offset magnitude. }
+      Result := Format('-%d(%%rbp)', [Integer(PtrUInt(FFrame.Objects[Idx]))]);
+      Exit;
+    end;
+  end;
+  Result := AName + '(%rip)';
+end;
+
+procedure TX86_64Backend.BuildFrame(ADecl: TMethodDecl);
+var
+  I, J, Offset: Integer;
+  P:    TMethodParam;
+  VD:   TVarDecl;
+begin
+  Self.ClearFrame;
+  FFrame := TStringList.Create;
+  Offset := 0;
+  { Params first (spilled from arg registers in the prologue).  Each name gets
+    a 4-byte slot; the running Offset is the negative %rbp displacement. }
+  for I := 0 to ADecl.Params.Count - 1 do
+  begin
+    P := TMethodParam(ADecl.Params.Items[I]);
+    Inc(Offset, 4);
+    FFrame.AddObject(P.ParamName, TObject(PtrUInt(Offset)));
+  end;
+  { Result slot for a function (not a procedure). }
+  if ADecl.ResolvedReturnType <> nil then
+  begin
+    Inc(Offset, 4);
+    FFrame.AddObject('Result', TObject(PtrUInt(Offset)));
+  end;
+  { Local var declarations. }
+  if ADecl.Body <> nil then
+    for I := 0 to ADecl.Body.Decls.Count - 1 do
+    begin
+      VD := TVarDecl(ADecl.Body.Decls.Items[I]);
+      for J := 0 to VD.Names.Count - 1 do
+      begin
+        Inc(Offset, 4);
+        FFrame.AddObject(VD.Names.Strings[J], TObject(PtrUInt(Offset)));
+      end;
+    end;
+  { Round the reserved size up to a 16-byte multiple (SysV alignment).
+    -16 is the bitmask not(15) in two's complement (Blaise `not` is Boolean). }
+  FFrameSize := (Offset + 15) and (-16);
+end;
+
+procedure TX86_64Backend.ClearFrame;
+begin
+  if FFrame <> nil then
+  begin
+    FFrame.Free;
+    FFrame := nil;
+  end;
+  FFrameSize := 0;
+end;
+
+{ ------------------------------------------------------------------ }
 { Expression lowering                                                  }
 { ------------------------------------------------------------------ }
 
@@ -127,13 +264,22 @@ begin
 
   if AExpr is TIdentExpr then
   begin
-    { Named integer constant -> immediate; otherwise a global integer var
-      loaded RIP-relative.  (Locals are program-level globals at this stage,
-      matching the QBE backend's model for a program's top-level var block.) }
+    { Named integer constant -> immediate; otherwise an integer variable loaded
+      from its frame slot (function local) or RIP-relative (program global). }
     if TIdentExpr(AExpr).IsConstant then
       Self.Emit(Format(#9'movl $%d, %%eax', [TIdentExpr(AExpr).ConstValue]))
     else
-      Self.Emit(Format(#9'movl %s(%%rip), %%eax', [TIdentExpr(AExpr).Name]));
+      Self.Emit(Format(#9'movl %s, %%eax',
+        [Self.VarOperand(TIdentExpr(AExpr).Name)]));
+    Exit;
+  end;
+
+  if AExpr is TFuncCallExpr then
+  begin
+    if TFuncCallExpr(AExpr).IsIndirectCall then
+      raise ENativeCodeGenError.Create(
+        'native backend: indirect (procedural-type) calls not yet supported');
+    Self.EmitCall(FuncSymbolOf(TFuncCallExpr(AExpr)), TFuncCallExpr(AExpr).Args);
     Exit;
   end;
 
@@ -229,15 +375,20 @@ end;
 
 procedure TX86_64Backend.EmitForStmt(AFor: TForStmt);
 var
-  EndSlot:               string;
+  VarOp, EndSlot:        string;
   LCond, LBody, LEnd:    string;
 begin
   { Pascal `for` evaluates the end expression once.  Stash it in a hidden
     global slot, initialise the loop variable, then loop:
       cond: if (i <= end) [downto: i >= end] goto body else end
-      body: <body>; i := i +/- 1; goto cond }
-  Self.AddGlobal(AFor.VarName);
-  EndSlot := Self.NewLabel('forend');  { hidden global for the once-evaluated end }
+      body: <body>; i := i +/- 1; goto cond
+    The loop variable may be a function-local (frame slot) or a program global;
+    VarOperand picks the right addressing.  Only register it as a .data global
+    when it is not a frame local. }
+  if not Self.IsLocal(AFor.VarName) then
+    Self.AddGlobal(AFor.VarName);
+  VarOp   := Self.VarOperand(AFor.VarName);
+  EndSlot := Self.NewLabel('forend');  { hidden file-local slot for the end value }
   Self.AddGlobal(EndSlot);
   LCond := Self.NewLabel('fcond');
   LBody := Self.NewLabel('fbody');
@@ -245,14 +396,14 @@ begin
 
   { i := start }
   Self.EmitExprToEax(AFor.StartExpr);
-  Self.Emit(Format(#9'movl %%eax, %s(%%rip)', [AFor.VarName]));
+  Self.Emit(Format(#9'movl %%eax, %s', [VarOp]));
   { endslot := end (evaluated once) }
   Self.EmitExprToEax(AFor.EndExpr);
   Self.Emit(Format(#9'movl %%eax, %s(%%rip)', [EndSlot]));
 
   Self.Emit(LCond + ':');
   { compare i against end }
-  Self.Emit(Format(#9'movl %s(%%rip), %%eax', [AFor.VarName]));
+  Self.Emit(Format(#9'movl %s, %%eax', [VarOp]));
   Self.Emit(Format(#9'movl %s(%%rip), %%ecx', [EndSlot]));
   Self.Emit(#9'cmpl %ecx, %eax');     { computes i - end }
   if AFor.IsDownTo then
@@ -264,12 +415,12 @@ begin
   Self.Emit(LBody + ':');
   Self.EmitStmt(AFor.Body);
   { i := i +/- 1 }
-  Self.Emit(Format(#9'movl %s(%%rip), %%eax', [AFor.VarName]));
+  Self.Emit(Format(#9'movl %s, %%eax', [VarOp]));
   if AFor.IsDownTo then
     Self.Emit(#9'subl $1, %eax')
   else
     Self.Emit(#9'addl $1, %eax');
-  Self.Emit(Format(#9'movl %%eax, %s(%%rip)', [AFor.VarName]));
+  Self.Emit(Format(#9'movl %%eax, %s', [VarOp]));
   Self.Emit(#9'jmp ' + LCond);
   Self.Emit(LEnd + ':');
 end;
@@ -289,10 +440,16 @@ begin
   if AStmt is TAssignment then
   begin
     Asgn := TAssignment(AStmt);
-    { Integer assignment to a (program-global) variable: value -> %eax, store. }
-    Self.AddGlobal(Asgn.Name);
-    Self.EmitExprToEax(Asgn.Expr);
-    Self.Emit(Format(#9'movl %%eax, %s(%%rip)', [Asgn.Name]));
+    Self.EmitExprToEax(Asgn.Expr);     { value -> %eax }
+    { A function-local frame slot (including Result), or a program global.
+      Blaise returns values via Result, so no function-name-as-result case. }
+    if Self.IsLocal(Asgn.Name) then
+      Self.Emit(Format(#9'movl %%eax, %s', [Self.VarOperand(Asgn.Name)]))
+    else
+    begin
+      Self.AddGlobal(Asgn.Name);
+      Self.Emit(Format(#9'movl %%eax, %s(%%rip)', [Asgn.Name]));
+    end;
     Exit;
   end;
 
@@ -315,8 +472,12 @@ begin
       Self.EmitWrite(PC, False);
       Exit;
     end;
-    raise ENativeCodeGenError.Create(
-      'native backend: unsupported procedure call ' + PC.Name);
+    if PC.IsIndirectCall then
+      raise ENativeCodeGenError.Create(
+        'native backend: indirect (procedural-type) calls not yet supported');
+    { User procedure call (result, if any, ignored in statement position). }
+    Self.EmitCall(FuncSymbolFromDecl(TMethodDecl(PC.ResolvedDecl)), PC.Args);
+    Exit;
   end;
 
   if AStmt is TCompoundStmt then
@@ -383,6 +544,105 @@ begin
     'native backend: unsupported statement ' + AStmt.ClassName);
 end;
 
+{ ------------------------------------------------------------------ }
+{ Calls and function definitions                                       }
+{ ------------------------------------------------------------------ }
+
+{ Emit a direct call.  Integer value arguments are passed in the SysV integer
+  registers (edi, esi, edx, ecx, r8d, r9d).  Each argument is fully evaluated
+  to %eax and pushed; once all are on the stack they are popped into the arg
+  registers, so a complex argument expression cannot clobber an already-set
+  arg register.  The pushes balance the pops, keeping %rsp 16-aligned at the
+  call.  Result (if any) is left in %eax. }
+procedure TX86_64Backend.EmitCall(const AFuncSym: string; AArgs: TObjectList);
+var
+  I: Integer;
+begin
+  if AArgs.Count > 6 then
+    raise ENativeCodeGenError.Create(
+      'native backend: more than 6 arguments not yet supported');
+  { Evaluate left-to-right, pushing each result. }
+  for I := 0 to AArgs.Count - 1 do
+  begin
+    Self.EmitExprToEax(TASTExpr(AArgs.Items[I]));
+    Self.Emit(#9'pushq %rax');
+  end;
+  { Pop into argument registers in reverse so register i gets argument i. }
+  for I := AArgs.Count - 1 downto 0 do
+  begin
+    Self.Emit(#9'popq %rax');
+    Self.Emit(Format(#9'movl %%eax, %s', [SysVArgRegs[I]]));
+  end;
+  Self.Emit(#9'callq ' + AFuncSym);
+end;
+
+{ Emit a standalone procedure/function definition.  Frame layout mirrors the
+  reference (FPC -O- and the QBE backend): params and locals each get a 4-byte
+  %rbp-relative slot; the prologue spills the incoming argument registers into
+  the param slots; the body runs through the slots; a function returns its
+  Result slot in %eax.  M5 supports integer value parameters and integer/void
+  return only. }
+procedure TX86_64Backend.EmitFunctionDef(ADecl: TMethodDecl);
+var
+  I:   Integer;
+  P:   TMethodParam;
+  Sym: string;
+begin
+  { Reject what M5 does not handle yet, loudly. }
+  if ADecl.Params.Count > 6 then
+    raise ENativeCodeGenError.Create(
+      'native backend: more than 6 parameters not yet supported');
+  for I := 0 to ADecl.Params.Count - 1 do
+  begin
+    P := TMethodParam(ADecl.Params.Items[I]);
+    if P.IsVarParam then
+      raise ENativeCodeGenError.Create(
+        'native backend: var/out parameters not yet supported');
+    if (P.ResolvedType = nil) or (P.ResolvedType.Kind <> tyInteger) then
+      raise ENativeCodeGenError.Create(
+        'native backend: only Integer parameters supported (param ' +
+        P.ParamName + ')');
+  end;
+  if (ADecl.ResolvedReturnType <> nil) and
+     (ADecl.ResolvedReturnType.Kind <> tyInteger) then
+    raise ENativeCodeGenError.Create(
+      'native backend: only Integer or void return supported (function ' +
+      ADecl.Name + ')');
+
+  Sym := FuncSymbolFromDecl(ADecl);
+  Self.BuildFrame(ADecl);
+
+  Self.Emit('.text');
+  Self.Emit('.globl ' + Sym);
+  Self.Emit(Sym + ':');
+  Self.Emit(#9'pushq %rbp');
+  Self.Emit(#9'movq %rsp, %rbp');
+  if FFrameSize > 0 then
+    Self.Emit(Format(#9'subq $%d, %%rsp', [FFrameSize]));
+  { Spill incoming argument registers into the param slots. }
+  for I := 0 to ADecl.Params.Count - 1 do
+  begin
+    P := TMethodParam(ADecl.Params.Items[I]);
+    Self.Emit(Format(#9'movl %s, %s', [SysVArgRegs[I], Self.VarOperand(P.ParamName)]));
+  end;
+  { Initialise Result to 0 (defined default), like the QBE backend. }
+  if ADecl.ResolvedReturnType <> nil then
+    Self.Emit(Format(#9'movl $0, %s', [Self.VarOperand('Result')]));
+  { Body. }
+  if ADecl.Body <> nil then
+    for I := 0 to ADecl.Body.Stmts.Count - 1 do
+      Self.EmitStmt(TASTStmt(ADecl.Body.Stmts.Items[I]));
+  { Epilogue: load Result into %eax (functions), restore frame, return. }
+  if ADecl.ResolvedReturnType <> nil then
+    Self.Emit(Format(#9'movl %s, %%eax', [Self.VarOperand('Result')]));
+  Self.Emit(#9'movq %rbp, %rsp');
+  Self.Emit(#9'popq %rbp');
+  Self.Emit(#9'ret');
+  Self.Emit('.type ' + Sym + ', @function');
+
+  Self.ClearFrame;
+end;
+
 { Emit the program entry function.
 
   The Blaise runtime expects an exported `main(argc, argv)` returning int.  It
@@ -398,6 +658,7 @@ procedure TX86_64Backend.EmitProgram(AProg: TProgram);
 var
   I, J:  Integer;
   VD:    TVarDecl;
+  Decl:  TMethodDecl;
 begin
   { Register declared program-level integer variables as global slots, so even
     unused declarations get a definition (matching the QBE backend). }
@@ -407,6 +668,17 @@ begin
     if (VD.ResolvedType <> nil) and (VD.ResolvedType.Kind = tyInteger) then
       for J := 0 to VD.Names.Count - 1 do
         Self.AddGlobal(VD.Names.Strings[J]);
+  end;
+
+  { Standalone procedures/functions first, then $main. }
+  for I := 0 to AProg.Block.ProcDecls.Count - 1 do
+  begin
+    Decl := TMethodDecl(AProg.Block.ProcDecls.Items[I]);
+    if Decl.OwnerTypeName <> '' then Continue;     { class methods: later }
+    if Decl.TypeParams <> nil then Continue;       { generic templates: later }
+    if Decl.Body = nil then Continue;              { forward decls }
+    if Decl.IsExternal then Continue;              { external: later }
+    Self.EmitFunctionDef(Decl);
   end;
 
   Self.Emit('.text');
