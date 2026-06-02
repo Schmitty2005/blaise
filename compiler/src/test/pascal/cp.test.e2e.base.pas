@@ -22,6 +22,13 @@ uses
   uCodeGen, blaise.codegen.target, blaise.codegen.native;
 
 type
+  { Code-generation backends an e2e test can run against.  The native backend
+    currently supports a subset of the language (integer family, control flow,
+    direct calls); a test opts into it explicitly (AssertRunsOnBoth, or
+    CompileAndRunOn for one backend), so QBE-only features stay QBE-only until
+    native catches up. }
+  TBackend = (beQBE, beNative);
+
   TE2ETestCase = class(TTestCase)
   private
     FQBE:         string;
@@ -52,6 +59,25 @@ type
     function  CompileAndRunNative(const ASrc: string;
                             out AStdout: string;
                             out AExitCode: Integer): Boolean;
+    { Compile and run ASrc on the chosen backend.  Shared front-end (lex,
+      parse, semantic); the backend selects QBE-text+qbe or direct native
+      assembly.  CompileAndRun and CompileAndRunNative both delegate here. }
+    function  CompileAndRunOn(ABackend: TBackend; const ASrc: string;
+                            out AStdout: string;
+                            out AExitCode: Integer): Boolean;
+    { Run ASrc on BOTH backends and assert each produces AExpectedOut on stdout
+      and AExpectedCode as its exit code.  Failures name the offending backend,
+      so a native-only regression is unambiguous.  This is the primary helper
+      for tests the native backend supports: write the expected output once,
+      exercise both code generators.  (A set-of-backends parameter would read
+      better but Blaise does not yet accept a set literal as a set-typed
+      argument — see bugs.txt; two booleans avoid that.) }
+    procedure AssertRunsOnBoth(const ASrc, AExpectedOut: string;
+                            AExpectedCode: Integer);
+    { Per-backend worker for AssertRunsOnBoth (separate method because Blaise
+      has no nested procedures). }
+    procedure AssertRunsOnOne(ABackend: TBackend; const AName, ASrc,
+                            AExpectedOut: string; AExpectedCode: Integer);
     function  RunUnderValgrind(const ASrc: string; out ALog: string): Boolean;
     function  CompileAndRunWithRTL(const ASrc: string;
                                    out AStdout: string;
@@ -183,16 +209,18 @@ begin
   end
 end;
 
-function TE2ETestCase.CompileAndRun(const ASrc: string;
-                                    out AStdout: string;
-                                    out AExitCode: Integer): Boolean;
+function TE2ETestCase.CompileAndRunOn(ABackend: TBackend; const ASrc: string;
+                                     out AStdout: string;
+                                     out AExitCode: Integer): Boolean;
 var
   Lexer:    TLexer;
   Parser:   TParser;
   Prog:     TProgram;
   Semantic: TSemanticAnalyser;
-  CG:       TCodeGenQBE;
-  IR:       string;
+  QCG:      TCodeGenQBE;
+  NCG:      TCodeGenNative;
+  CG:       ICodeGen;
+  Emitted:  string;       { QBE IR text, or native assembly text }
   IRFile:   string;
   AsmFile:  string;
   BinFile:  string;
@@ -205,73 +233,87 @@ begin
   AsmFile := FScratch + '/t' + IntToStr(FCounter) + '.s';
   BinFile := FScratch + '/t' + IntToStr(FCounter);
 
-  Lexer := nil; Parser := nil; Prog := nil; Semantic := nil; CG := nil;
+  { Shared front-end; the codegen object differs per backend.  QBE and native
+    both implement ICodeGen, but TCodeGenQBE is freed manually (not ARC-held
+    via the interface here) while the native object is ARC-managed. }
+  Lexer := nil; Parser := nil; Prog := nil; Semantic := nil;
+  QCG := nil; CG := nil;
   try
     Lexer    := TLexer.Create(ASrc);
     Parser   := TParser.Create(Lexer);
     Prog     := Parser.Parse;
     Semantic := TSemanticAnalyser.Create;
     Semantic.Analyse(Prog);
-    CG       := TCodeGenQBE.Create;
-    CG.Generate(Prog);
-    IR       := CG.GetOutput
+    if ABackend = beNative then
+    begin
+      NCG := TCodeGenNative.Create;
+      NCG.SetTarget(HostTarget);
+      CG  := NCG;            { ARC-managed; released at scope exit }
+      CG.Generate(Prog);
+      Emitted := CG.GetOutput
+    end
+    else
+    begin
+      QCG := TCodeGenQBE.Create;
+      QCG.Generate(Prog);
+      Emitted := QCG.GetOutput
+    end
   finally
-    CG.Free; Semantic.Free; Prog.Free; Parser.Free; Lexer.Free
+    QCG.Free;               { nil for the native path — Free(nil) is a no-op }
+    { CG (ICodeGen) freed by ARC; do not Free. }
+    Semantic.Free; Prog.Free; Parser.Free; Lexer.Free
   end;
 
-  WriteFile(IRFile, IR);
-  Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
-  if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end;
+  if ABackend = beNative then
+  begin
+    { Native backend emits assembly directly — no QBE step. }
+    WriteFile(AsmFile, Emitted)
+  end
+  else
+  begin
+    WriteFile(IRFile, Emitted);
+    Rc := RunProc(FQBE, ['-o', AsmFile, IRFile], ToolOut);
+    if Rc <> 0 then begin AStdout := 'qbe failed: ' + ToolOut; AExitCode := Rc; Exit end
+  end;
   Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
   if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
   AExitCode := RunProcNoArgs(BinFile, AStdout);
   Result := True
 end;
 
+function TE2ETestCase.CompileAndRun(const ASrc: string;
+                                    out AStdout: string;
+                                    out AExitCode: Integer): Boolean;
+begin
+  Result := Self.CompileAndRunOn(beQBE, ASrc, AStdout, AExitCode)
+end;
+
 function TE2ETestCase.CompileAndRunNative(const ASrc: string;
                                           out AStdout: string;
                                           out AExitCode: Integer): Boolean;
-var
-  Lexer:    TLexer;
-  Parser:   TParser;
-  Prog:     TProgram;
-  Semantic: TSemanticAnalyser;
-  NCG:      TCodeGenNative;
-  CG:       ICodeGen;
-  AsmText:  string;
-  AsmFile:  string;
-  BinFile:  string;
-  ToolOut:  string;
-  Rc:       Integer;
 begin
-  Result := False;
-  Inc(FCounter);
-  AsmFile := FScratch + '/t' + IntToStr(FCounter) + '.s';
-  BinFile := FScratch + '/t' + IntToStr(FCounter);
+  Result := Self.CompileAndRunOn(beNative, ASrc, AStdout, AExitCode)
+end;
 
-  Lexer := nil; Parser := nil; Prog := nil; Semantic := nil; CG := nil;
-  try
-    Lexer    := TLexer.Create(ASrc);
-    Parser   := TParser.Create(Lexer);
-    Prog     := Parser.Parse;
-    Semantic := TSemanticAnalyser.Create;
-    Semantic.Analyse(Prog);
-    NCG      := TCodeGenNative.Create;
-    NCG.SetTarget(HostTarget);
-    CG       := NCG;       { ARC-managed; released at scope exit }
-    CG.Generate(Prog);
-    AsmText  := CG.GetOutput
-  finally
-    { CG (ICodeGen) freed by ARC; do not Free. }
-    Semantic.Free; Prog.Free; Parser.Free; Lexer.Free
-  end;
+{ Run ASrc on one backend and assert its stdout/exit match the expected
+  values, tagging the failure message with the backend name. }
+procedure TE2ETestCase.AssertRunsOnOne(ABackend: TBackend; const AName, ASrc,
+                                       AExpectedOut: string; AExpectedCode: Integer);
+var
+  Output: string;
+  RCode:  Integer;
+begin
+  AssertTrue('[' + AName + '] compile+run',
+    Self.CompileAndRunOn(ABackend, ASrc, Output, RCode));
+  AssertEquals('[' + AName + '] exit code', AExpectedCode, RCode);
+  AssertEquals('[' + AName + '] stdout', AExpectedOut, Output)
+end;
 
-  WriteFile(AsmFile, AsmText);
-  { Native backend emits assembly directly — no QBE step. }
-  Rc := RunProc('cc', ['-o', BinFile, AsmFile, FRTL, '-lm', '-lpthread'], ToolOut);
-  if Rc <> 0 then begin AStdout := 'cc failed: ' + ToolOut; AExitCode := Rc; Exit end;
-  AExitCode := RunProcNoArgs(BinFile, AStdout);
-  Result := True
+procedure TE2ETestCase.AssertRunsOnBoth(const ASrc, AExpectedOut: string;
+                                        AExpectedCode: Integer);
+begin
+  Self.AssertRunsOnOne(beQBE, 'qbe', ASrc, AExpectedOut, AExpectedCode);
+  Self.AssertRunsOnOne(beNative, 'native', ASrc, AExpectedOut, AExpectedCode)
 end;
 
 function TE2ETestCase.CompileAndRun(const ASrc: string;
