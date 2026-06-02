@@ -16,7 +16,9 @@ unit cp.test.e2e.native;
   cover, run through the native path.
 
   Milestone coverage:
-    M1 — empty program compiles, links, and exits 0. }
+    M1 — empty program compiles, links, and exits 0.
+    M2 — integer arithmetic (+ - * div mod, nesting, precedence) and
+         Write/WriteLn of integers. }
 
 interface
 
@@ -30,6 +32,9 @@ type
     procedure SetUp; override;
   published
     procedure TestRun_Native_EmptyProgram_ExitsZero;
+    procedure TestRun_Native_IntArithmetic_WriteLn;
+    procedure TestRun_Native_DivModAndNesting;
+    procedure TestRun_Native_WriteNoNewline;
   end;
 
 implementation
@@ -41,9 +46,38 @@ begin
 end;
 
 const
+  LE = #10;
+
   SrcEmpty = '''
     program P;
     begin
+    end.
+    ''';
+
+  SrcArith = '''
+    program P;
+    begin
+      WriteLn(2 + 3 * 4);
+      WriteLn(100 - 58)
+    end.
+    ''';
+
+  SrcDivMod = '''
+    program P;
+    begin
+      WriteLn(20 div 6);
+      WriteLn(20 mod 6);
+      WriteLn((2 + 3) * (10 - 4));
+      WriteLn(7 - 10)
+    end.
+    ''';
+
+  SrcWriteNoNL = '''
+    program P;
+    begin
+      Write(1);
+      Write(2);
+      WriteLn(3)
     end.
     ''';
 
@@ -54,6 +88,34 @@ begin
   AssertTrue('compile+run', CompileAndRunNative(SrcEmpty, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('no output', '', Output);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IntArithmetic_WriteLn;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunNative(SrcArith, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('14 then 42', '14' + LE + '42' + LE, Output);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_DivModAndNesting;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunNative(SrcDivMod, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('3 2 30 -3',
+    '3' + LE + '2' + LE + '30' + LE + '-3' + LE, Output);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_WriteNoNewline;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRunNative(SrcWriteNoNL, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('123 then newline', '123' + LE, Output);
 end;
 
 initialization
