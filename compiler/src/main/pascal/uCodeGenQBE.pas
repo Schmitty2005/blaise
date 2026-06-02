@@ -16,7 +16,7 @@ unit uCodeGenQBE;
 interface
 
 uses
-  SysUtils, StrUtils, Classes, uAST, uSymbolTable, uStrCompat;
+  SysUtils, StrUtils, Classes, uAST, uSymbolTable, uStrCompat, uCodeGen;
 
 // Raw byte copy used by TIRBuffer — maps to libc memcpy.
 // Blaise links blaise_rtl.a which already pulls in libc.
@@ -44,7 +44,7 @@ type
     property  Len: Integer read FLen;
   end;
 
-  TCodeGenQBE = class
+  TCodeGenQBE = class(TObject, ICodeGen)
   private
     FOutput:          TIRBuffer;
     FStrLits:         TStringList;  { index → raw value; label = $__s<index> }
@@ -3594,6 +3594,31 @@ begin
     EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
     EmitLine(Format('  storel %s, %s_obj',  [ObjTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
     EmitLine(Format('  storel %s, %s_itab', [ItabTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    Exit;
+  end;
+
+  { Interface := nil — clear the fat pointer (obj + itab slots).  Without
+    this case a nil assignment falls through to the scalar store path, which
+    emits a single-slot `storew ..., $Name` against a variable that has no
+    `$Name` data definition (only `$Name_obj` / `$Name_itab`), producing an
+    undefined-symbol link error for interface-typed globals.  For a strong
+    reference the prior obj ref is released; weak references unregister via
+    _WeakClear.  The itab slot is static rodata and is simply zeroed. }
+  if (AAssign.ResolvedLhsType <> nil) and
+     (AAssign.ResolvedLhsType.Kind = tyInterface) and
+     (AAssign.Expr is TNilLiteral) then
+  begin
+    if AAssign.IsWeakLhs then
+      EmitLine(Format('  call $_WeakClear(l %s_obj)',
+        [VarRef(AAssign.Name, AAssign.IsGlobal)]))
+    else
+    begin
+      OldTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s_obj', [OldTemp, VarRef(AAssign.Name, AAssign.IsGlobal)]));
+      EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
+      EmitLine(Format('  storel 0, %s_obj', [VarRef(AAssign.Name, AAssign.IsGlobal)]));
+    end;
+    EmitLine(Format('  storel 0, %s_itab', [VarRef(AAssign.Name, AAssign.IsGlobal)]));
     Exit;
   end;
 

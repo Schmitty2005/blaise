@@ -22,7 +22,7 @@ program Blaise;
 
 uses
   SysUtils, Classes, Process, contnrs,
-  uLexer, uParser, uAST, uSemantic, uCodeGenQBE, uUnitLoader, uDebugOPDF,
+  uLexer, uParser, uAST, uSemantic, uCodeGen, uCodeGenQBE, uUnitLoader, uDebugOPDF,
   uStrCompat, uConfig;
 
 const
@@ -368,7 +368,7 @@ var
   Parser:   TParser;
   Prog:     TProgram;
   Semantic: TSemanticAnalyser;
-  CG:       TCodeGenQBE;
+  CG:       ICodeGen;
   OE:       TOPDFEmitter;
   Loader:   TUnitLoader;
   Units:    TObjectList;
@@ -429,7 +429,8 @@ begin
   Parser   := nil;
   Prog     := nil;
   Semantic := nil;
-  CG       := nil;
+  { CG (ICodeGen) is zero-initialised by default; no explicit nil-assignment
+    (stage-1 mis-compiles interface-global nil stores — see EmitAssign note). }
   Loader   := nil;
   Units    := nil;
   try
@@ -479,23 +480,27 @@ begin
     end;
 
     try
+      { CG is an ICodeGen (ARC-managed) — no manual Free; assigning nil at
+        the end releases it.  Backend selection happens here: TCodeGenQBE
+        today, TCodeGenNative once --backend native is wired in. }
       CG := TCodeGenQBE.Create;
-      try
-        CG.SetDebugMode(DebugMode);
-        if (Units <> nil) and (Units.Count > 0) then
-        begin
-          CG.SetSymbolTable(Prog.SymbolTable);
-          for I := 0 to Units.Count - 1 do
-            CG.AppendUnit(TUnit(Units.Items[I]));
-          CG.AppendProgram(Prog);
-        end
-        else
-          CG.Generate(Prog);
-        IR := CG.GetOutput;
-      finally
-        CG.Free;
-        CG := nil;
-      end;
+      CG.SetDebugMode(DebugMode);
+      if (Units <> nil) and (Units.Count > 0) then
+      begin
+        CG.SetSymbolTable(Prog.SymbolTable);
+        for I := 0 to Units.Count - 1 do
+          CG.AppendUnit(TUnit(Units.Items[I]));
+        CG.AppendProgram(Prog);
+      end
+      else
+        CG.Generate(Prog);
+      IR := CG.GetOutput;
+      { CG (ICodeGen) is released by ARC at program scope exit.  We avoid an
+        explicit `CG := nil` here: the stage-1 release binary mis-compiles an
+        explicit nil-assignment to an interface-typed global (emits a bare
+        single-slot store against an undefined $CG symbol).  That codegen gap
+        is fixed in this tree (EmitAssign interface-nil case in uCodeGenQBE),
+        but stage-1 predates the fix, so the driver must not rely on it. }
 
       if OPDFEnabled then
       begin
@@ -518,7 +523,7 @@ begin
     Units.Free;
     Loader.Free;
     SearchPaths.Free;
-    CG.Free;
+    { CG is ICodeGen (ARC-managed) — released via assignment/scope, not Free. }
     Semantic.Free;
     Prog.Free;
     Parser.Free;
