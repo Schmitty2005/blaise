@@ -59,6 +59,7 @@ type
     procedure TestRun_Set_InOperator;
     procedure TestRun_Set_UnionIntersect;
     procedure TestRun_Set_ValuedConstant;
+    procedure TestRun_Set_LiteralArgument;
 
     { for..in }
     procedure TestRun_ForIn_String_ByteVar_PrintsBytes;
@@ -383,6 +384,23 @@ const
     end.
     ''';
 
+  { A set literal passed directly as a `set of` argument (both non-empty and
+    empty), exercising the set-param ABI (w-width spill) too. }
+  SrcSetLiteralArg = '''
+    program P;
+    type TDir = (North, South, East, West);
+         TDirs = set of TDir;
+    procedure Report(D: TDirs);
+    begin
+      if North in D then WriteLn('N') else WriteLn('no-N');
+      if East  in D then WriteLn('E') else WriteLn('no-E')
+    end;
+    begin
+      Report([East, West]);
+      Report([])
+    end.
+    ''';
+
   SrcForInStringByte = '''
     program P;
     var
@@ -699,6 +717,17 @@ begin
   { Horizontal = [East, West]: no-N, E, W; Empty cleared the set. }
   AssertEquals('set const',
     'no-N' + LE + 'E' + LE + 'W' + LE + 'cleared' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_Set_LiteralArgument;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcSetLiteralArg, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  { Report([East,West]): no-N, E.  Report([]): no-N, no-E. }
+  AssertEquals('set literal arg',
+    'no-N' + LE + 'E' + LE + 'no-N' + LE + 'no-E' + LE, Output);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_String_ByteVar_PrintsBytes;

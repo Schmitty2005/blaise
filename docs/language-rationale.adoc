@@ -1216,13 +1216,21 @@ Sets are value types (copied on assignment), not heap-allocated.
 ==== Set literals and disambiguation
 
 Set literals use the same `[elem, ...]` bracket notation as array literals.
-The semantic pass resolves the ambiguity by examining the assignment target
-type: when the LHS is a set type, the bracket expression is analysed as a set
-literal; otherwise it is treated as an array literal.
+The semantic pass resolves the ambiguity from the target type:
 
-An empty literal `[]` is valid only in a set context (the empty set, bitmask 0).
-In an array context, `[]` remains a semantic error (element type cannot be
-inferred without type-context propagation).
+- *Assignment* — when the LHS is a set type, the bracket expression is analysed
+  as a set literal; otherwise it is an array literal.
+- *Call argument* — a bracket literal passed where a `set of <enum>` parameter
+  is expected is treated as a set constructor.  Overload resolution matches it
+  when the members share the parameter's base enum (or the literal is empty);
+  the chosen call then re-types the argument to the parameter's set type so the
+  bitmask is emitted.  This means a set value can be passed inline, e.g.
+  `Configure([optA, optC])`, without a named intermediate variable.
+
+An empty literal `[]` carries no element type of its own, so it is only valid
+where a set target supplies the type — a set assignment or a `set of`
+argument.  Used anywhere else (e.g. assigned to a non-set variable) it is a
+semantic error, not a silent no-op.
 
 ==== Set operators
 

@@ -81,6 +81,16 @@ type
     procedure TestSemantic_SetConst_NonEnumMember_Fails;
     procedure TestCodegen_SetConst_FoldsToBitmask;
     procedure TestCodegen_SetConst_AssignableToNamedSetType;
+
+    { ------------------------------------------------------------------ }
+    { set literal as a call argument                                       }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_SetLiteralArg_OK;
+    procedure TestSemantic_SetLiteralArg_Empty_OK;
+    procedure TestSemantic_SetLiteralArg_WrongEnum_Fails;
+    procedure TestSemantic_EmptyLiteral_NonSetAssign_Fails;
+    procedure TestCodegen_SetLiteralArg_FoldsToBitmask;
+    procedure TestCodegen_SetParam_SpillsAtWordWidth;
   end;
 
 implementation
@@ -185,6 +195,58 @@ const
     program P;
     const X = 5; Bad = [X];
     begin
+    end.
+    ''';
+
+  { A set literal passed directly as a `set of` argument: mask dNorth(0)|
+    dEast(2) = 5. }
+  SrcSetLiteralArg =
+    'program P;' + #10 +
+    DirEnum +
+    '''
+        procedure Take(S: TDirSet);
+        begin
+          if dNorth in S then Halt(0)
+        end;
+        begin
+          Take([dNorth, dEast])
+        end.
+        ''';
+
+  SrcSetLiteralArgEmpty =
+    'program P;' + #10 +
+    DirEnum +
+    '''
+        procedure Take(S: TDirSet);
+        begin
+          if dNorth in S then Halt(0)
+        end;
+        begin
+          Take([])
+        end.
+        ''';
+
+  SrcSetLiteralArgWrongEnum =
+    '''
+    program P;
+    type
+      TDir = (dNorth, dEast);
+      TDirSet = set of TDir;
+      TColor = (cRed, cBlue);
+    procedure Take(S: TDirSet);
+    begin
+    end;
+    begin
+      Take([cRed])
+    end.
+    ''';
+
+  SrcEmptyLiteralNonSetAssign =
+    '''
+    program P;
+    var x: Integer;
+    begin
+      x := []
     end.
     ''';
 
@@ -696,6 +758,56 @@ begin
   { An inferred 'set of TDir' const assigns to a TDirSet variable — the two
     set types are structurally the same.  Just assert it analyses + emits. }
   SemanticOK(SrcSetConstInferred);
+end;
+
+{ ------------------------------------------------------------------ }
+{ set literal as a call argument                                       }
+{ ------------------------------------------------------------------ }
+
+procedure TSetTests.TestSemantic_SetLiteralArg_OK;
+begin
+  { Take([dNorth, dEast]) resolves the set-literal argument against the
+    `set of TDir` parameter. }
+  SemanticOK(SrcSetLiteralArg);
+end;
+
+procedure TSetTests.TestSemantic_SetLiteralArg_Empty_OK;
+begin
+  { An empty literal [] matches any set parameter. }
+  SemanticOK(SrcSetLiteralArgEmpty);
+end;
+
+procedure TSetTests.TestSemantic_SetLiteralArg_WrongEnum_Fails;
+begin
+  { [cRed] (a TColor set constructor) does not match a `set of TDir`. }
+  SemanticFail(SrcSetLiteralArgWrongEnum);
+end;
+
+procedure TSetTests.TestSemantic_EmptyLiteral_NonSetAssign_Fails;
+begin
+  { x := [] where x is Integer: empty literal has no set context — a clean
+    error, not a crash. }
+  SemanticFail(SrcEmptyLiteralNonSetAssign);
+end;
+
+procedure TSetTests.TestCodegen_SetLiteralArg_FoldsToBitmask;
+var
+  IR: string;
+begin
+  { [dNorth, dEast] at the call site folds to mask 5. }
+  IR := GenIR(SrcSetLiteralArg);
+  AssertTrue('set literal arg folds to mask 5', Pos('copy 5', IR) > 0);
+end;
+
+procedure TSetTests.TestCodegen_SetParam_SpillsAtWordWidth;
+var
+  IR: string;
+begin
+  { A ≤32-member set parameter is a w; its prologue spill must use storew, not
+    storel (which QBE rejects for a w operand). }
+  IR := GenIR(SrcSetLiteralArg);
+  AssertTrue('set param spilled with storew', Pos('storew %_par_S', IR) > 0);
+  AssertFalse('set param not spilled with storel', Pos('storel %_par_S', IR) > 0);
 end;
 
 initialization

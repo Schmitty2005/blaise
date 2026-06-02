@@ -5076,6 +5076,20 @@ begin
           EmitLine(Format('  storel %%_par_%s, %%_var_%s',
             [Par.ParamName, Par.ParamName]));
         end;
+      tySet:
+        { A set is a w (≤32 members) or l (≤64) bitmask — spill at its width. }
+        if TSetTypeDesc(Par.ResolvedType).BitCount <= 32 then
+        begin
+          EmitLine(Format('  %%_var_%s =l alloc4 1', [Par.ParamName]));
+          EmitLine(Format('  storew %%_par_%s, %%_var_%s',
+            [Par.ParamName, Par.ParamName]));
+        end
+        else
+        begin
+          EmitLine(Format('  %%_var_%s =l alloc8 1', [Par.ParamName]));
+          EmitLine(Format('  storel %%_par_%s, %%_var_%s',
+            [Par.ParamName, Par.ParamName]));
+        end;
       tyDouble:
         begin
           EmitLine(Format('  %%_var_%s =l alloc8 1', [Par.ParamName]));
@@ -5905,6 +5919,20 @@ begin
           begin
             EmitLine(Format('  %%_var_%s =l alloc4 1', [Par.ParamName]));
             EmitLine(Format('  storew %%_par_%s, %%_var_%s',
+              [Par.ParamName, Par.ParamName]));
+          end;
+        tySet:
+          { w (≤32 members) or l (≤64) bitmask — spill at its width. }
+          if TSetTypeDesc(Par.ResolvedType).BitCount <= 32 then
+          begin
+            EmitLine(Format('  %%_var_%s =l alloc4 1', [Par.ParamName]));
+            EmitLine(Format('  storew %%_par_%s, %%_var_%s',
+              [Par.ParamName, Par.ParamName]));
+          end
+          else
+          begin
+            EmitLine(Format('  %%_var_%s =l alloc8 1', [Par.ParamName]));
+            EmitLine(Format('  storel %%_par_%s, %%_var_%s',
               [Par.ParamName, Par.ParamName]));
           end;
         tyDouble:

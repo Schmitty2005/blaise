@@ -127,6 +127,10 @@ type
     { Per-arg compatibility: 2 = exact, 1 = widening, 0 = no match. }
     function  ArgMatchScore(AParam: TTypeDesc; AArg: TTypeDesc;
                 AArgExpr: TASTExpr = nil): Integer;
+    { Shared enum of a bracket literal's elements, or nil (see impl). }
+    function  SetLiteralBaseEnum(AExpr: TArrayLiteralExpr): TTypeDesc;
+    { Re-type set-literal args to their `set of` param type post-overload. }
+    procedure RetypeSetLiteralArgs(AArgs: TObjectList; AMDecl: TMethodDecl);
     procedure AnalyseMethodCall(ACall: TMethodCallStmt);
     procedure AnalyseInheritedCall(ACall: TInheritedCallStmt);
     procedure AnalyseCaseStmt(AStmt: TCaseStmt);
@@ -434,6 +438,14 @@ var
   I:  Integer;
 begin
   if AExpected = AActual then
+    Exit;
+  { A nil actual type means the right-hand expression could not be typed —
+    e.g. a bare empty set literal '[]' used outside a set context.  Report it
+    rather than dereferencing nil (segfault). }
+  if AActual = nil then
+    SemanticError(Format('Expression has no value type in %s', [AContext]),
+      ALine, ACol);
+  if AExpected = nil then
     Exit;
   { nil is compatible with any class, interface, pointer, PChar, or string type }
   if (AActual.Kind = tyNil) and (AExpected.Kind in [tyClass, tyInterface, tyPointer, tyPChar, tyString, tyProcedural]) then
@@ -4724,6 +4736,14 @@ begin
       TSetTypeDesc(VarSym.TypeDesc));
     Exit;
   end;
+  { An empty bracket literal [] assigned to a non-set LHS has no inferable
+    type (it deferred to a nil ResolvedType); only a set target gives it
+    meaning.  Reject cleanly rather than passing nil to CheckTypesMatch. }
+  if (AAssign.Expr is TArrayLiteralExpr) and
+     (TArrayLiteralExpr(AAssign.Expr).Elements.Count = 0) then
+    SemanticError(Format(
+      'Empty set literal ''[]'' cannot be assigned to non-set variable ''%s'' of type ''%s''',
+      [AAssign.Name, VarSym.TypeDesc.Name]), AAssign.Line, AAssign.Col);
 
   ExprType := AnalyseExpr(AAssign.Expr);
   CheckTypesMatch(VarSym.TypeDesc, ExprType, 'assignment', AAssign.Line, AAssign.Col);
@@ -5197,11 +5217,89 @@ begin
   end;
 end;
 
+{ After overload resolution: any bracket-literal argument matched against a
+  `set of` parameter is a set constructor, but it was analysed without set
+  context (so its ResolvedType is an open-array, not the set).  Re-point each
+  such argument's ResolvedType at the parameter's set type so codegen emits a
+  bitmask (EmitArrayLiteralExpr dispatches on ResolvedType.Kind = tySet). }
+procedure TSemanticAnalyser.RetypeSetLiteralArgs(AArgs: TObjectList;
+  AMDecl: TMethodDecl);
+var
+  I:   Integer;
+  Par: TMethodParam;
+  Arg: TASTExpr;
+  N:   Integer;
+begin
+  N := AArgs.Count;
+  if AMDecl.Params.Count < N then
+    N := AMDecl.Params.Count;
+  for I := 0 to N - 1 do
+  begin
+    Par := TMethodParam(AMDecl.Params.Items[I]);
+    Arg := TASTExpr(AArgs.Items[I]);
+    if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tySet) and
+       (Arg is TArrayLiteralExpr) then
+      Arg.ResolvedType := Par.ResolvedType;
+  end;
+end;
+
+{ If every element of the bracket literal is an enum constant of one shared
+  enum, return that enum descriptor; otherwise nil.  Used to recognise a set
+  constructor [a, b] passed where a `set of <enum>` is expected.  An empty
+  literal returns nil (the caller treats [] as matching any set). }
+function TSemanticAnalyser.SetLiteralBaseEnum(AExpr: TArrayLiteralExpr): TTypeDesc;
+var
+  I:    Integer;
+  Elem: TASTExpr;
+  Sym:  TSymbol;
+begin
+  Result := nil;
+  if AExpr.Elements.Count = 0 then Exit;
+  for I := 0 to AExpr.Elements.Count - 1 do
+  begin
+    Elem := TASTExpr(AExpr.Elements.Items[I]);
+    if not (Elem is TIdentExpr) then
+    begin
+      Result := nil;
+      Exit;
+    end;
+    Sym := FTable.Lookup(TIdentExpr(Elem).Name);
+    if (Sym = nil) or (Sym.Kind <> skConstant) or (Sym.TypeDesc = nil) or
+       (Sym.TypeDesc.Kind <> tyEnum) then
+    begin
+      Result := nil;
+      Exit;
+    end;
+    if Result = nil then
+      Result := Sym.TypeDesc
+    else if Sym.TypeDesc <> Result then
+    begin
+      Result := nil;   { mixed enums — not a clean set constructor }
+      Exit;
+    end;
+  end;
+end;
+
 function TSemanticAnalyser.ArgMatchScore(AParam: TTypeDesc;
   AArg: TTypeDesc; AArgExpr: TASTExpr): Integer;
 begin
   Result := 0;
-  if (AParam = nil) or (AArg = nil) then Exit;
+  if AParam = nil then Exit;
+  { A bracket literal [a, b] against a `set of <enum>` parameter is a set
+    constructor, even though (lacking set context) it was analysed as an
+    open-array — or, for the empty literal [], left untyped.  Match it here,
+    before the nil-arg bail, so [] also matches.  AnalyseProcCall re-types the
+    argument to the set type before codegen so the bitmask is emitted.  Checked
+    first because an empty-literal arg has no ResolvedType. }
+  if (AParam.Kind = tySet) and (AArgExpr is TArrayLiteralExpr) then
+  begin
+    if (TArrayLiteralExpr(AArgExpr).Elements.Count = 0) or
+       (TSetTypeDesc(AParam).BaseType =
+          SetLiteralBaseEnum(TArrayLiteralExpr(AArgExpr))) then
+      Result := 2;
+    Exit;
+  end;
+  if AArg = nil then Exit;
   { Integer literal (untyped constant) matches any integer type exactly —
     mirrors Pascal's treatment of untyped integer constants.  Floating-point
     params score 1 (widening) so an Integer overload beats a Double overload
@@ -5568,6 +5666,7 @@ begin
       { Non-var argument compatibility was verified by overload scoring;
         no second CheckTypesMatch needed here. }
     end;
+    RetypeSetLiteralArgs(ACall.Args, MDecl);
     AppendDefaultArgs(ACall.Args, MDecl, ACall.Name, ACall.Line, ACall.Col);
     ACall.ResolvedDecl := MDecl;
   end
@@ -8234,9 +8333,18 @@ var
   ActType:  TTypeDesc;
   I:        Integer;
 begin
+  { An empty literal [] has no element type to infer.  It is only valid in a
+    context that supplies the target type — a set assignment (handled before
+    this is reached) or a set-typed argument (resolved by RetypeSetLiteralArgs
+    after overload resolution).  Defer here (nil type, no error) rather than
+    rejecting outright; an [] that never gets a context surfaces later as an
+    unresolved-type use. }
   if AExpr.Elements.Count = 0 then
-    SemanticError('Array literal must contain at least one element',
-      AExpr.Line, AExpr.Col);
+  begin
+    AExpr.ResolvedType := nil;
+    Result := nil;
+    Exit;
+  end;
   ElemType := AnalyseExpr(TASTExpr(AExpr.Elements.Items[0]));
   for I := 1 to AExpr.Elements.Count - 1 do
   begin
