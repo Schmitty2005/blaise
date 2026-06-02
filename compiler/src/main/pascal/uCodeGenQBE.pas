@@ -9970,7 +9970,7 @@ begin
         EmitFieldCleanupFn(GI.TypeName, RT);
       end;
       EmitFFIRecordTypeDecls;
-    FOutput.AppendBuffer(Body);
+      FOutput.AppendBuffer(Body);
     finally
       Body.Free;
     end;
@@ -10346,7 +10346,7 @@ begin
       EmitLocalArrayConstsInUnit(AUnit);
 
       EmitFFIRecordTypeDecls;
-    FOutput.AppendBuffer(Body);
+      FOutput.AppendBuffer(Body);
 
       { Initialization section: emit as export function $<Unit>_init() }
       if (AUnit.InitStmts <> nil) and (AUnit.InitStmts.Count > 0) then
