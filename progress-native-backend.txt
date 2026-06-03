@@ -171,9 +171,27 @@ Branch: native-codegen
         TAssignment detects record LHS + record-returning RHS and dispatches to
         EmitSretCall. TestRun_Native_RecordReturnFunction promoted from Ignore.
         2383 tests pass; FIXPOINT_OK.
-[ ] M7b class system — vtables, typeinfo, class allocation, method dispatch,
-        field access through class pointer, RTTI (MethodAddress).
-        Required for: TestRun_Native_IndirectCall_MethodPtr (currently Ignored)
+[x] M7b class system — vtables, typeinfo, class allocation, method dispatch,
+        field access through class pointer, RTTI (MethodAddress). DONE 2026-06-03.
+        EmitClassMethods iterates AProg.Block.TypeDecls (not ProcDecls) so class
+        method bodies in CD.Methods are emitted. EmitClassSection emits .data vtables
+        (typeinfo + virtual method ptrs), typeinfo blocks (8-quad: parent, itab,
+        name, methods, size, cleanup, vtable, attrs), class-name strings (ARC header
+        + ASCII null-terminated), method tables (count + name-ptr/code pairs), and
+        field-cleanup stubs. NativeMangle strips the $ prefix from vtable ImplName
+        entries (StrAt/StrCopyTail) to match QBE-backend output. Constructor calls
+        allocate via _ClassAlloc, wire the vtable ptr, then call the named ctor body.
+        Class variable assignment uses ARC (_ClassAddRef new, _ClassRelease old).
+        TMethod record fields (Code/Data) accessed via struct-field read/write with
+        leaq+offset. Method-pointer (of-object) calls dispatch via EmitMethodPtrCall
+        (leaq slot→%rcx; movq 0(%rcx)→%r10 Code; movq 8(%rcx)→%r11 Data; args into
+        %rsi/%rdx/...; movq %r11,%rdi; callq *%r10). MethodAddress emits a call to
+        _MethodAddress(instance, name_ptr) with the class-name string +12 offset.
+        Method-pointer cast assignment (TFoo(M)) copies 16 bytes via memcpy.
+        tyProcedural IsMethodPtr globals emit .quad 0 × 2 (16 bytes) in EmitDataSection.
+        tyClass globals registered and emitted as .quad 0 (8 bytes). FSretFunc flag
+        unchanged from M7a. TestRun_Native_IndirectCall_MethodPtr promoted from
+        Ignore to AssertRunsOnBoth. 2383 tests pass.
 [ ] M8  full cp.test.e2e suite parity (stdout+exit), QBE vs native
 [ ] M9  self-hosting: native-built Blaise --emit-ir == QBE-built Blaise
 [ ] M10 (opt) linear-scan regalloc / direct ELF .o emission

@@ -26,7 +26,7 @@ unit blaise.codegen.native.x86_64;
 interface
 
 uses
-  SysUtils, contnrs, Generics.Collections, uAST, uSymbolTable,
+  SysUtils, contnrs, Generics.Collections, uAST, uSymbolTable, uStrCompat,
   blaise.codegen.native.backend, blaise.codegen.target;
 
 type
@@ -39,6 +39,9 @@ type
       is the slot's static type so loads, stores, and the .data directive all
       pick the right width and signedness. }
     FDataGlobals: TOrderedDictionary<string, TTypeDesc>;
+    { Class-name string blobs already emitted to avoid duplicate label errors.
+      Keyed by mangled name. }
+    FClassNameEmitted: TDictionary<string, Boolean>;
 
     { Current function's stack frame: maps a local name (param, var, or Result)
       to its negative %rbp-relative byte offset.  nil while emitting program
@@ -77,6 +80,21 @@ type
     function GlobalType(const AName: string): TTypeDesc;
     { Emit the accumulated .data section (one slot per registered global). }
     procedure EmitDataSection;
+    { Emit all class-related data: class-name strings, published-method tables,
+      typeinfo blocks, vtables, itab/impllist blocks.  Mirrors QBE backend's
+      EmitTypeInfoDefs + EmitVTableDefs.  Called from EmitProgram. }
+    procedure EmitClassSection(AProg: TProgram);
+    { Emit an immortal class-name string blob in the data section and return
+      the label+12 expression that points to the character data. }
+    function EmitClassNameString(const AClassName: string): string;
+    { Emit the body of one $_FieldCleanup_<T> function.  For classes with
+      no managed fields this is just a ret; with ARC string/class fields it
+      would call release helpers (deferred — today all user classes have only
+      integer fields). }
+    procedure EmitFieldCleanupFn(const AMangledName: string;
+                                 ART: TRecordTypeDesc);
+    { Emit all class method definitions (OwnerTypeName <> ''). }
+    procedure EmitClassMethods(AProg: TProgram);
 
     { True when AName is a slot in the current function frame. }
     function IsLocal(const AName: string): Boolean;
@@ -148,6 +166,17 @@ type
       fall through to AFalseLabel (a jmp is emitted to it). }
     procedure EmitCondBranch(AExpr: TASTExpr;
                              const ATrueLabel, AFalseLabel: string);
+    { Emit a TMethodCallExpr (class method call, with explicit receiver).
+      Loads Self into %rdi and evaluates scalar args; result in %rax/%xmm0. }
+    procedure EmitMethodCallExpr(ACall: TMethodCallExpr);
+    { Emit a TMethodCallStmt (class method call in statement position). }
+    procedure EmitMethodCallStmt(ACall: TMethodCallStmt);
+    { Emit a method-pointer (of-object) call: load Code from offset 0 and Data
+      from offset 8 of the TMethod block at APtrOperand; call Code with Data as
+      Self (%rdi) and the remaining args shifted. }
+    procedure EmitMethodPtrCall(const APtrOperand: string;
+                                AProcType: TProceduralTypeDesc;
+                                AArgs: TObjectList);
   public
     constructor Create(const ATarget: TTargetDesc); override;
     destructor Destroy; override;
@@ -241,8 +270,9 @@ end;
 constructor TX86_64Backend.Create(const ATarget: TTargetDesc);
 begin
   inherited Create(ATarget);
-  FLabelCount     := 0;
-  FDataGlobals    := TOrderedDictionary<>.Create;
+  FLabelCount          := 0;
+  FDataGlobals         := TOrderedDictionary<>.Create;
+  FClassNameEmitted    := TDictionary<>.Create;
   FBreakLabels    := TStack<>.Create;
   FContinueLabels := TStack<>.Create;
   FFrame          := nil;
@@ -257,6 +287,7 @@ begin
   Self.ClearFrame;
   FContinueLabels.Free;
   FBreakLabels.Free;
+  FClassNameEmitted.Free;
   FDataGlobals.Free;
   inherited Destroy;
 end;
@@ -291,6 +322,19 @@ begin
   for I := 0 to FDataGlobals.Count - 1 do
   begin
     Name := FDataGlobals.Keys[I];
+    { Method pointers (of-object): 16-byte Code+Data block, zero-initialised. }
+    if (Self.GlobalType(Name) <> nil) and
+       (Self.GlobalType(Name).Kind = tyProcedural) and
+       TProceduralTypeDesc(Self.GlobalType(Name)).IsMethodPtr then
+    begin
+      Self.Emit('.balign 8');
+      if Copy(Name, 1, 2) <> '.L' then
+        Self.Emit('.globl ' + Name);
+      Self.Emit(Name + ':');
+      Self.Emit(#9'.quad 0');
+      Self.Emit(#9'.quad 0');
+      Continue;
+    end;
     { Records and static arrays: emit a zeroed block of RawSize bytes. }
     if (Self.GlobalType(Name) <> nil) and
        (Self.GlobalType(Name).Kind in [tyRecord, tyStaticArray]) then
@@ -340,6 +384,297 @@ begin
       Self.Emit('.globl ' + Name);
     Self.Emit(Name + ':');
     Self.Emit(Directive);
+  end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ Class data section helpers                                           }
+{ ------------------------------------------------------------------ }
+
+{ Mangle a name for use as an assembly label: replace characters that are
+  invalid in label names with underscores, matching QBE backend's QBEMangle. }
+function NativeMangle(const AName: string): string;
+var
+  I, C: Integer;
+begin
+  Result := '';
+  for I := 0 to Length(AName) - 1 do
+  begin
+    C := Ord(AName[I]);
+    case C of
+      60: Result := Result + '_';    { '<' }
+      62: ;                          { '>' — skip }
+      44: Result := Result + '_';    { ',' }
+      36: Result := Result + '_D_';  { '$' }
+      64: Result := Result + '_V_';  { '@' }
+      94: Result := Result + '_P_';  { '^' }
+    else
+      Result := Result + Chr(C);
+    end;
+  end;
+end;
+
+{ Compute the mangled emit name for a class method: ResolvedQbeName if set,
+  else TypeName_MethodName, both passed through NativeMangle. }
+function MethodEmitNameNative(ADecl: TMethodDecl; const ATypeName, AMethodName: string): string;
+begin
+  if (ADecl <> nil) and (ADecl.ResolvedQbeName <> '') then
+    Result := NativeMangle(ADecl.ResolvedQbeName)
+  else if ADecl <> nil then
+    Result := NativeMangle(ATypeName + '_' + ADecl.Name)
+  else
+    Result := NativeMangle(ATypeName + '_' + AMethodName);
+end;
+
+{ Emit an immortal class-name string blob and return the label+12 reference
+  (the pointer to the character data, past the 12-byte ARC/length header). }
+function TX86_64Backend.EmitClassNameString(const AClassName: string): string;
+var
+  Mangled: string;
+  Len:     Integer;
+begin
+  Mangled := NativeMangle(AClassName);
+  Result  := '__cn_' + Mangled + ' + 12';
+  { Idempotent: skip if already emitted (MethodAddress and class section may
+    both request the same name string). }
+  if FClassNameEmitted.ContainsKey(Mangled) then
+    Exit;
+  FClassNameEmitted.Add(Mangled, True);
+  Len := Length(AClassName);
+  Self.Emit('.balign 4');
+  Self.Emit('__cn_' + Mangled + ':');
+  Self.Emit(#9'.long -1');
+  Self.Emit(Format(#9'.long %d', [Len]));
+  Self.Emit(Format(#9'.long %d', [Len]));
+  Self.Emit(Format(#9'.ascii "%s"', [AClassName]));
+  Self.Emit(#9'.byte 0');
+end;
+
+procedure TX86_64Backend.EmitFieldCleanupFn(const AMangledName: string;
+                                            ART: TRecordTypeDesc);
+begin
+  Self.Emit('.text');
+  Self.Emit('.globl _FieldCleanup_' + AMangledName);
+  Self.Emit('_FieldCleanup_' + AMangledName + ':');
+  Self.Emit(#9'pushq %rbp');
+  Self.Emit(#9'movq %rsp, %rbp');
+  Self.Emit(#9'movq %rbp, %rsp');
+  Self.Emit(#9'popq %rbp');
+  Self.Emit(#9'ret');
+  Self.Emit('.type _FieldCleanup_' + AMangledName + ', @function');
+end;
+
+procedure TX86_64Backend.EmitClassSection(AProg: TProgram);
+var
+  I, J, S:   Integer;
+  TD:        TTypeDecl;
+  TDesc:     TTypeDesc;
+  RT:        TRecordTypeDesc;
+  CD:        TClassTypeDef;
+  MD:        TMethodDecl;
+  E:         TVTableEntry;
+  GI:        TGenericInstance;
+  MName:     string;
+  ParentStr: string;
+  ImplStr:   string;
+  MethStr:   string;
+  PubCount:  Integer;
+  Line:      string;
+begin
+  { Fixed RTL class-name strings and stubs for TObject and TCustomAttribute. }
+  Self.Emit('.data');
+  Self.EmitClassNameString('TObject');
+  Self.EmitClassNameString('TCustomAttribute');
+
+  { User class data: name strings, method tables, typeinfo, vtables. }
+  for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);
+    if not (TD.Def is TClassTypeDef) then Continue;
+    TDesc := AProg.SymbolTable.FindType(TD.Name);
+    if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
+    RT := TRecordTypeDesc(TDesc);
+    CD := TClassTypeDef(TD.Def);
+
+    { Class-name string blob }
+    Self.EmitClassNameString(TD.Name);
+
+    { Published-method table: count, then (nameref, codeptr) pairs }
+    PubCount := 0;
+    for J := 0 to CD.Methods.Count - 1 do
+      if TMethodDecl(CD.Methods.Items[J]).IsPublished then
+        Inc(PubCount);
+    if PubCount > 0 then
+    begin
+      { Emit name strings for published methods. }
+      for J := 0 to CD.Methods.Count - 1 do
+      begin
+        MD := TMethodDecl(CD.Methods.Items[J]);
+        if MD.IsPublished then
+          Self.EmitClassNameString(MD.Name);
+      end;
+      Self.Emit('.balign 8');
+      Self.Emit('.globl methods_' + TD.Name);
+      Self.Emit('methods_' + TD.Name + ':');
+      Self.Emit(Format(#9'.quad %d', [PubCount]));
+      for J := 0 to CD.Methods.Count - 1 do
+      begin
+        MD := TMethodDecl(CD.Methods.Items[J]);
+        if not MD.IsPublished then Continue;
+        Self.Emit(Format(#9'.quad __cn_%s + 12', [NativeMangle(MD.Name)]));
+        Self.Emit(Format(#9'.quad %s', [MethodEmitNameNative(MD, TD.Name, MD.Name)]));
+      end;
+      MethStr := 'methods_' + TD.Name;
+    end
+    else
+      MethStr := '0';
+  end;
+
+  { Typeinfo blocks — must come after all class-name strings are emitted. }
+  Self.Emit('.balign 8');
+  Self.Emit('typeinfo_TObject:');
+  Self.Emit(#9'.quad 0');          { parent = nil }
+  Self.Emit(#9'.quad 0');          { impllist = nil }
+  Self.Emit(#9'.quad __cn_TObject + 12');
+  Self.Emit(#9'.quad 0');          { methods = nil }
+  Self.Emit(#9'.quad 8');          { size = 8 (vptr only) }
+  Self.Emit(#9'.quad _FieldCleanup_TObject');
+  Self.Emit(#9'.quad vtable_TObject');
+  Self.Emit(#9'.quad 0');          { attrs = nil }
+
+  Self.Emit('.balign 8');
+  Self.Emit('typeinfo_TCustomAttribute:');
+  Self.Emit(#9'.quad typeinfo_TObject');
+  Self.Emit(#9'.quad 0');
+  Self.Emit(#9'.quad __cn_TCustomAttribute + 12');
+  Self.Emit(#9'.quad 0');
+  Self.Emit(#9'.quad 8');
+  Self.Emit(#9'.quad _FieldCleanup_TCustomAttribute');
+  Self.Emit(#9'.quad vtable_TCustomAttribute');
+  Self.Emit(#9'.quad 0');
+
+  for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);
+    if not (TD.Def is TClassTypeDef) then Continue;
+    TDesc := AProg.SymbolTable.FindType(TD.Name);
+    if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
+    RT := TRecordTypeDesc(TDesc);
+
+    if RT.Parent <> nil then
+      ParentStr := 'typeinfo_' + RT.Parent.Name
+    else
+      ParentStr := '0';
+    if RT.ImplementsCount > 0 then
+      ImplStr := 'impllist_' + TD.Name
+    else
+      ImplStr := '0';
+
+    { Rebuild MethStr for typeinfo (already computed above but not stored). }
+    CD := TClassTypeDef(TD.Def);
+    PubCount := 0;
+    for J := 0 to CD.Methods.Count - 1 do
+      if TMethodDecl(CD.Methods.Items[J]).IsPublished then
+        Inc(PubCount);
+    if PubCount > 0 then
+      MethStr := 'methods_' + TD.Name
+    else
+      MethStr := '0';
+
+    Self.Emit('.balign 8');
+    Self.Emit('.globl typeinfo_' + TD.Name);
+    Self.Emit('typeinfo_' + TD.Name + ':');
+    Self.Emit(#9'.quad ' + ParentStr);
+    Self.Emit(#9'.quad ' + ImplStr);
+    Self.Emit(Format(#9'.quad __cn_%s + 12', [NativeMangle(TD.Name)]));
+    Self.Emit(#9'.quad ' + MethStr);
+    Self.Emit(Format(#9'.quad %d', [RT.TotalSize]));
+    Self.Emit(#9'.quad _FieldCleanup_' + TD.Name);
+    Self.Emit(#9'.quad vtable_' + TD.Name);
+    Self.Emit(#9'.quad 0');   { attrs }
+  end;
+
+  { Field cleanup functions for the fixed RTL classes. }
+  Self.EmitFieldCleanupFn('TObject', nil);
+  Self.EmitFieldCleanupFn('TCustomAttribute', nil);
+  { Field cleanup for user classes. }
+  for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);
+    if not (TD.Def is TClassTypeDef) then Continue;
+    TDesc := AProg.SymbolTable.FindType(TD.Name);
+    if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
+    RT := TRecordTypeDesc(TDesc);
+    Self.EmitFieldCleanupFn(TD.Name, RT);
+  end;
+
+  { Vtables — must be in .data (pointers to other data symbols). }
+  Self.Emit('.data');
+  Self.Emit('.balign 8');
+  Self.Emit('vtable_TObject:');
+  Self.Emit(#9'.quad typeinfo_TObject');
+  Self.Emit(#9'.quad TObject_Destroy');
+  Self.Emit(#9'.quad TObject_ToString');
+
+  Self.Emit('.balign 8');
+  Self.Emit('vtable_TCustomAttribute:');
+  Self.Emit(#9'.quad typeinfo_TCustomAttribute');
+  Self.Emit(#9'.quad TObject_Destroy');
+  Self.Emit(#9'.quad TObject_ToString');
+
+  for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);
+    if not (TD.Def is TClassTypeDef) then Continue;
+    TDesc := AProg.SymbolTable.FindType(TD.Name);
+    if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
+    RT := TRecordTypeDesc(TDesc);
+    if not RT.HasVTable then Continue;
+
+    Self.Emit('.balign 8');
+    Self.Emit('.globl vtable_' + TD.Name);
+    Self.Emit('vtable_' + TD.Name + ':');
+    Self.Emit(#9'.quad typeinfo_' + TD.Name);
+    for S := 0 to RT.VTableCount - 1 do
+    begin
+      E := RT.VTableEntryAt(S);
+      if E.IsAbstract then
+        Line := #9'.quad _AbstractMethodError'
+      else
+      begin
+        { E.ImplName may have a '$' prefix (QBE convention) — strip it for native.
+          Use StrAt for 0-based string indexing. }
+        if (Length(E.ImplName) > 0) and (StrAt(E.ImplName, 0) = 36) then
+          Line := #9'.quad ' + NativeMangle(StrCopyTail(E.ImplName, 1))
+        else
+          Line := #9'.quad ' + NativeMangle(E.ImplName);
+      end;
+      Self.Emit(Line);
+    end;
+  end;
+end;
+
+procedure TX86_64Backend.EmitClassMethods(AProg: TProgram);
+var
+  I, J: Integer;
+  TD:   TTypeDecl;
+  CD:   TClassTypeDef;
+  Decl: TMethodDecl;
+begin
+  { Class method bodies live in CD.Methods (the class type definition), NOT in
+    AProg.Block.ProcDecls — after LinkClassMethodImpls the method stubs in
+    ProcDecls have nil bodies and unresolved params. }
+  for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+  begin
+    TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);
+    if not (TD.Def is TClassTypeDef) then Continue;
+    CD := TClassTypeDef(TD.Def);
+    for J := 0 to CD.Methods.Count - 1 do
+    begin
+      Decl := TMethodDecl(CD.Methods.Items[J]);
+      if Decl.Body = nil then Continue;
+      Self.EmitFunctionDef(Decl);
+    end;
   end;
 end;
 
@@ -445,6 +780,11 @@ begin
   FFrameTypes := TDictionary<>.Create;
   Offset   := 0;
   StackOff := 16;  { first stack arg: +16(%rbp) — above saved %rbp and ret addr }
+  { For class methods, Self is the implicit first integer param (%rdi).
+    Allocate a pointer-size slot for it; normal params start at IntIdx=1. }
+  if ADecl.OwnerTypeName <> '' then
+    Self.AddSlot('Self', nil, Offset);  { nil = pointer size (8 bytes) }
+
   { Params: first 6 are register-passed (spilled to negative slots in prologue);
     args 7+ are already on the stack at positive %rbp offsets. }
   for I := 0 to ADecl.Params.Count - 1 do
@@ -779,6 +1119,26 @@ begin
   if AExpr is TFuncCallExpr then
   begin
     FC := TFuncCallExpr(AExpr);
+    { MethodAddress(Instance, 'MethodName') — runtime method table lookup.
+      The method name string blob (__cn_Name) must exist in the data section;
+      the class section emits it for published methods.  Just reference it here
+      via a forward label without re-emitting the blob. }
+    if SameText(FC.Name, 'MethodAddress') and (FC.Args.Count = 2) then
+    begin
+      { Arg0: class instance → class pointer in %rdi }
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      { Arg1: pointer to method name string data (offset +12 past ARC header). }
+      if TASTExpr(FC.Args.Items[1]) is TStringLiteral then
+        Self.Emit(Format(#9'leaq __cn_%s + 12(%%rip), %%rsi',
+          [NativeMangle(TStringLiteral(TASTExpr(FC.Args.Items[1])).Value)]))
+      else
+        raise ENativeCodeGenError.Create(
+          'native backend: MethodAddress second arg must be a string literal');
+      Self.Emit(#9'callq _MethodAddress');
+      { Result = method code pointer in %rax. }
+      Exit;
+    end;
     if FC.IsIndirectCall then
     begin
       { Bare function-pointer call: load the pointer from the variable slot
@@ -888,18 +1248,35 @@ begin
     Exit;
   end;
 
-  { Record field read: Rec.Field.  Handles local and global record bases;
-    defers class fields, chained access, implicit-Self, and var-param bases. }
+  { Record/class field read: Rec.Field or Class.Field.
+    Handles local/global record bases and class (pointer-deref) bases. }
   if (AExpr is TFieldAccessExpr) and
      (TFieldAccessExpr(AExpr).FieldInfo <> nil) and
-     not TFieldAccessExpr(AExpr).IsClassAccess and
-     not TFieldAccessExpr(AExpr).IsImplicitSelf and
      not TFieldAccessExpr(AExpr).IsMethodCall and
      not TFieldAccessExpr(AExpr).IsConstructorCall and
      (TFieldAccessExpr(AExpr).Base = nil) then
   begin
     FAE := TFieldAccessExpr(AExpr);
-    if Self.IsLocal(FAE.RecordName) then
+    if FAE.IsClassAccess then
+    begin
+      { Class field: FAE.RecordName is a class variable (holds a pointer).
+        Load the pointer (always 8 bytes = movq), then dereference at FieldInfo.Offset. }
+      if Self.IsLocal(FAE.RecordName) then
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FAE.RecordName]));
+      Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
+        FAE.FieldInfo.TypeDesc);
+    end
+    else if FAE.IsImplicitSelf then
+    begin
+      { Bare field name inside a class method: RecordName is empty/irrelevant;
+        load Self from its frame slot, then dereference at FieldInfo.Offset. }
+      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+      Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
+        FAE.FieldInfo.TypeDesc);
+    end
+    else if Self.IsLocal(FAE.RecordName) then
     begin
       if FAE.FieldInfo.Offset = 0 then
         Self.EmitLoadVar(Self.VarOperand(FAE.RecordName), FAE.FieldInfo.TypeDesc)
@@ -937,8 +1314,147 @@ begin
     Exit;
   end;
 
+  { TypeName.Create — allocate a new class instance.
+    Returns the instance pointer in %rax.  Does NOT do ARC (caller's job). }
+  if (AExpr is TFieldAccessExpr) and
+     TFieldAccessExpr(AExpr).IsConstructorCall then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    if (FAE.ResolvedType = nil) or not (FAE.ResolvedType is TRecordTypeDesc) then
+      raise ENativeCodeGenError.Create('native backend: constructor call has no class type');
+    { _ClassAlloc(size, fieldcleanup_fn): returns zeroed instance ptr (after header). }
+    Self.Emit(Format(#9'movq $%d, %%rdi',
+      [TRecordTypeDesc(FAE.ResolvedType).TotalSize]));
+    Self.Emit(Format(#9'leaq _FieldCleanup_%s(%%rip), %%rsi',
+      [NativeMangle(FAE.ResolvedType.Name)]));
+    Self.Emit(#9'callq _ClassAlloc');
+    { Store vtable pointer at offset 0 if the class has virtual methods. }
+    if TRecordTypeDesc(FAE.ResolvedType).HasVTable then
+    begin
+      Self.Emit(Format(#9'leaq vtable_%s(%%rip), %%rcx',
+        [NativeMangle(FAE.ResolvedType.Name)]));
+      Self.Emit(#9'movq %rcx, (%rax)');
+    end;
+    { Call user-defined Create body if present. }
+    if FAE.ResolvedMethod <> nil then
+    begin
+      Self.Emit(#9'pushq %rax');              { save instance pointer }
+      Self.Emit(#9'movq %rax, %rdi');         { Self = instance }
+      Self.Emit(#9'callq ' + MethodEmitNameNative(
+        TMethodDecl(FAE.ResolvedMethod), FAE.ResolvedType.Name, FAE.FieldName));
+      Self.Emit(#9'popq %rax');               { restore instance pointer }
+    end;
+    { %rax = new instance pointer. }
+    Exit;
+  end;
+
+  { Class method call: C.Method() or C.Method(args) returning a scalar. }
+  if AExpr is TMethodCallExpr then
+  begin
+    Self.EmitMethodCallExpr(TMethodCallExpr(AExpr));
+    Exit;
+  end;
+
   raise ENativeCodeGenError.Create(
     'native backend: unsupported expression form ' + AExpr.ClassName);
+end;
+
+{ Emit a class method call: load Self into %rdi, then scalar args starting at
+  %rsi/%rdx/etc.  The method symbol is OwnerTypeName_MethodName. }
+procedure TX86_64Backend.EmitMethodCallExpr(ACall: TMethodCallExpr);
+var
+  I:       Integer;
+  MD:      TMethodDecl;
+  Sym:     string;
+  Arg:     TASTExpr;
+begin
+  MD := TMethodDecl(ACall.ResolvedMethod);
+  if MD = nil then
+    raise ENativeCodeGenError.Create(
+      'native backend: TMethodCallExpr has no ResolvedMethod (' + ACall.Name + ')');
+  Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
+
+  { Evaluate args left-to-right and push them. }
+  for I := 0 to ACall.Args.Count - 1 do
+  begin
+    Arg := TASTExpr(ACall.Args.Items[I]);
+    Self.EmitExprToEax(Arg);
+    Self.Emit(#9'pushq %rax');
+  end;
+
+  { Load Self (the receiver) into %r10 to survive the pop loop. }
+  if ACall.ObjectName <> '' then
+  begin
+    { Named receiver: load the class pointer (always 8-byte movq). }
+    if Self.IsLocal(ACall.ObjectName) then
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
+    else
+      Self.Emit(Format(#9'movq %s(%%rip), %%r10', [ACall.ObjectName]));
+  end
+  else if ACall.ObjExpr <> nil then
+  begin
+    Self.EmitExprToEax(ACall.ObjExpr);
+    Self.Emit(#9'movq %rax, %r10');
+  end
+  else
+  begin
+    { Implicit self: load from Self slot. }
+    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+  end;
+
+  { Pop args into %rsi/%rdx/... (shift by 1 for %rdi = Self). }
+  for I := ACall.Args.Count - 1 downto 0 do
+    Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+  { Place Self as first arg. }
+  Self.Emit(#9'movq %r10, %rdi');
+  Self.Emit(#9'callq ' + Sym);
+  { Result in %rax (int) or %xmm0 (float). }
+end;
+
+{ Emit a TMethodCallStmt (class method call in statement position).
+  Same as EmitMethodCallExpr but for statement nodes. }
+procedure TX86_64Backend.EmitMethodCallStmt(ACall: TMethodCallStmt);
+var
+  I:   Integer;
+  MD:  TMethodDecl;
+  Sym: string;
+  Arg: TASTExpr;
+begin
+  MD := TMethodDecl(ACall.ResolvedMethod);
+  if MD = nil then
+    raise ENativeCodeGenError.Create(
+      'native backend: TMethodCallStmt has no ResolvedMethod (' + ACall.Name + ')');
+  Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
+
+  { Evaluate args left-to-right and push them. }
+  for I := 0 to ACall.Args.Count - 1 do
+  begin
+    Arg := TASTExpr(ACall.Args.Items[I]);
+    Self.EmitExprToEax(Arg);
+    Self.Emit(#9'pushq %rax');
+  end;
+
+  { Load Self (the receiver) into %r10 (movq for class pointer). }
+  if ACall.ObjectName <> '' then
+  begin
+    if Self.IsLocal(ACall.ObjectName) then
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
+    else
+      Self.Emit(Format(#9'movq %s(%%rip), %%r10', [ACall.ObjectName]));
+  end
+  else if ACall.ObjExpr <> nil then
+  begin
+    Self.EmitExprToEax(ACall.ObjExpr);
+    Self.Emit(#9'movq %rax, %r10');
+  end
+  else
+    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+
+  { Pop args into %rsi/%rdx/... (shift by 1 for %rdi = Self). }
+  for I := ACall.Args.Count - 1 downto 0 do
+    Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+  Self.Emit(#9'movq %r10, %rdi');
+  Self.Emit(#9'callq ' + Sym);
 end;
 
 procedure TX86_64Backend.EmitCondBranch(AExpr: TASTExpr;
@@ -1151,6 +1667,38 @@ begin
   if AStmt is TAssignment then
   begin
     Asgn := TAssignment(AStmt);
+    { Method-pointer (of-object) assignment from a TMethod/TAddProc cast:
+      P := TAddProc(M) — both sides are 16-byte Code+Data blocks.
+      Emit as memcpy(dest, src, 16). }
+    if (Asgn.ResolvedLhsType <> nil) and
+       (Asgn.ResolvedLhsType.Kind = tyProcedural) and
+       (TProceduralTypeDesc(Asgn.ResolvedLhsType).IsMethodPtr) and
+       (Asgn.Expr is TFuncCallExpr) and
+       (TFuncCallExpr(Asgn.Expr).ResolvedDecl = nil) and
+       (TFuncCallExpr(Asgn.Expr).Args.Count = 1) then
+    begin
+      { Destination address → %rdi }
+      if Self.IsLocal(Asgn.Name) then
+        Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand(Asgn.Name)]))
+      else
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rdi', [Asgn.Name]));
+      { Source address: the cast argument (a TMethod record or another method ptr). }
+      if TASTExpr(TFuncCallExpr(Asgn.Expr).Args.Items[0]) is TIdentExpr then
+      begin
+        if Self.IsLocal(TIdentExpr(TASTExpr(TFuncCallExpr(Asgn.Expr).Args.Items[0])).Name) then
+          Self.Emit(Format(#9'leaq %s, %%rsi',
+            [Self.VarOperand(TIdentExpr(TASTExpr(TFuncCallExpr(Asgn.Expr).Args.Items[0])).Name)]))
+        else
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rsi',
+            [TIdentExpr(TASTExpr(TFuncCallExpr(Asgn.Expr).Args.Items[0])).Name]));
+      end
+      else
+        raise ENativeCodeGenError.Create(
+          'native backend: method-ptr cast source must be a simple variable');
+      Self.Emit(#9'movq $16, %rdx');
+      Self.Emit(#9'callq memcpy');
+      Exit;
+    end;
     { sret assignment: LHS is a record variable; RHS is a record-returning call.
       Pass the destination buffer address as the hidden first arg (%rdi). }
     if (Asgn.ResolvedLhsType <> nil) and
@@ -1191,6 +1739,32 @@ begin
       begin
         Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
         Self.EmitStoreFloat(Asgn.Name + '(%rip)', Asgn.ResolvedLhsType);
+      end;
+    end
+    else if (Asgn.ResolvedLhsType <> nil) and
+            (Asgn.ResolvedLhsType.Kind = tyClass) then
+    begin
+      { Class assignment: new := eval(RHS); _ClassAddRef(new); old := load(LHS);
+        _ClassRelease(old); store(LHS) := new. }
+      Self.EmitExprToEax(Asgn.Expr);   { new instance -> %rax }
+      Self.Emit(#9'pushq %rax');         { save new }
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ClassAddRef');
+      { Load the old value — always a pointer (8 bytes), use movq. }
+      if Self.IsLocal(Asgn.Name) then
+        Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(Asgn.Name)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rax', [Asgn.Name]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rax');          { restore new }
+      { Store the new value. }
+      if Self.IsLocal(Asgn.Name) then
+        Self.Emit(Format(#9'movq %%rax, %s', [Self.VarOperand(Asgn.Name)]))
+      else
+      begin
+        Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
+        Self.Emit(Format(#9'movq %%rax, %s(%%rip)', [Asgn.Name]));
       end;
     end
     else
@@ -1234,10 +1808,15 @@ begin
     end;
     if PC.IsIndirectCall then
     begin
-      Self.EmitCallIndirect(
-        Self.VarOperand(PC.Name),
-        TProceduralTypeDesc(PC.ResolvedProcType),
-        PC.Args);
+      if (PC.ResolvedProcType <> nil) and
+         TProceduralTypeDesc(PC.ResolvedProcType).IsMethodPtr then
+        Self.EmitMethodPtrCall(Self.VarOperand(PC.Name),
+          TProceduralTypeDesc(PC.ResolvedProcType), PC.Args)
+      else
+        Self.EmitCallIndirect(
+          Self.VarOperand(PC.Name),
+          TProceduralTypeDesc(PC.ResolvedProcType),
+          PC.Args);
       Exit;
     end;
     { User procedure call (result, if any, ignored in statement position). }
@@ -1346,15 +1925,19 @@ begin
     Exit;
   end;
 
+  if AStmt is TMethodCallStmt then
+  begin
+    { Class method call in statement position (result discarded). }
+    Self.EmitMethodCallStmt(TMethodCallStmt(AStmt));
+    Exit;
+  end;
+
   if AStmt is TFieldAssignment then
   begin
     FA := TFieldAssignment(AStmt);
-    { Only plain record-variable.field := expr is handled; class fields,
-      implicit-Self, and var-param bases are deferred. }
-    if FA.IsClassAccess or FA.IsImplicitSelf or FA.IsVarParam or
-       (FA.FieldInfo = nil) then
+    if FA.FieldInfo = nil then
       raise ENativeCodeGenError.Create(
-        'native backend: unsupported field assignment form');
+        'native backend: field assignment has no resolved field info');
     Self.EmitExprToEax(FA.Expr);
     { Compute destination address: base address + field byte offset. }
     if FSretFunc and (FA.RecordName = 'Result') then
@@ -1364,6 +1947,25 @@ begin
       Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Result')]));
       Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]),
         FA.FieldInfo.TypeDesc);
+    end
+    else if FA.IsClassAccess then
+    begin
+      { Class field write: load the class ptr from its slot (movq), store through it. }
+      Self.Emit(#9'pushq %rax');
+      if Self.IsLocal(FA.RecordName) then
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FA.RecordName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FA.RecordName]));
+      Self.Emit(#9'popq %rax');
+      Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]), FA.FieldInfo.TypeDesc);
+    end
+    else if FA.IsImplicitSelf then
+    begin
+      { Bare field assignment inside a class method: write through Self. }
+      Self.Emit(#9'pushq %rax');
+      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+      Self.Emit(#9'popq %rax');
+      Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]), FA.FieldInfo.TypeDesc);
     end
     else if Self.IsLocal(FA.RecordName) then
     begin
@@ -1727,6 +2329,42 @@ begin
   Self.Emit(#9'callq ' + AFuncSym);
 end;
 
+{ Emit a method-pointer (of-object) call through a TMethod block.
+  APtrOperand is the AT&T memory operand for the 16-byte Code+Data block.
+  Load Code into %r10, Data into %rdi, push/pop other args, then callq *%r10. }
+procedure TX86_64Backend.EmitMethodPtrCall(const APtrOperand: string;
+                                           AProcType: TProceduralTypeDesc;
+                                           AArgs: TObjectList);
+var
+  I:     Integer;
+  Arg:   TASTExpr;
+begin
+  { Get the base address of the TMethod block into %rcx. }
+  Self.Emit(Format(#9'leaq %s, %%rcx', [APtrOperand]));
+  { Load Code (offset 0) into %r10 for later dispatch. }
+  Self.Emit(#9'movq (%rcx), %r10');
+  { Load Data (offset 8) into %r11 to survive arg evaluation. }
+  Self.Emit(#9'movq 8(%rcx), %r11');
+
+  { Evaluate normal args left-to-right and push them. }
+  for I := 0 to AArgs.Count - 1 do
+  begin
+    Arg := TASTExpr(AArgs.Items[I]);
+    Self.EmitExprToEax(Arg);
+    Self.Emit(#9'pushq %rax');
+  end;
+  { Pop args into %rsi/%rdx/... (index 1+; index 0 = %rdi = Self = Data). }
+  if AArgs.Count > 5 then
+    raise ENativeCodeGenError.Create(
+      'native backend: method-ptr call with more than 5 explicit args');
+  for I := AArgs.Count - 1 downto 0 do
+    Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+  { Place Data (Self) as first arg. }
+  Self.Emit(#9'movq %r11, %rdi');
+  { Dispatch through Code pointer. }
+  Self.Emit(#9'callq *%r10');
+end;
+
 { True when AType is an integer-family type the backend can place in a
   general-purpose register (Byte..Int64).  Floats, records, strings, etc. are
   not yet handled and must fail loudly. }
@@ -1791,6 +2429,13 @@ begin
     { Save the sret buffer pointer from %rdi into the Result slot. }
     Self.Emit(Format(#9'movq %%rdi, %s', [Self.VarOperand('Result')]));
     IntIdx := 1;
+  end;
+  if ADecl.OwnerTypeName <> '' then
+  begin
+    { Class method: spill Self from the first int arg register into its slot. }
+    Self.Emit(Format(#9'movq %s, %s',
+      [SysVArgRegs64[IntIdx], Self.VarOperand('Self')]));
+    Inc(IntIdx);
   end;
   for I := 0 to ADecl.Params.Count - 1 do
   begin
@@ -1886,23 +2531,26 @@ var
   VD:    TVarDecl;
   Decl:  TMethodDecl;
 begin
-  { Register declared program-level variables as global slots.  Integer-family,
-    float, and record types are supported; others are skipped (fail loudly on use). }
+  { Register declared program-level variables as global slots. }
   for I := 0 to AProg.Block.Decls.Count - 1 do
   begin
     VD := TVarDecl(AProg.Block.Decls.Items[I]);
     if IsIntFamily(VD.ResolvedType) or IsFloatFamily(VD.ResolvedType) or
        ((VD.ResolvedType <> nil) and
-        (VD.ResolvedType.Kind in [tyRecord, tyStaticArray])) then
+        (VD.ResolvedType.Kind in [tyRecord, tyStaticArray, tyClass,
+                                  tyProcedural, tyPointer, tyString, tyPChar])) then
       for J := 0 to VD.Names.Count - 1 do
         Self.AddGlobal(VD.Names.Strings[J], VD.ResolvedType);
   end;
 
-  { Standalone procedures/functions first, then $main. }
+  { Class method bodies before standalone procedures. }
+  Self.EmitClassMethods(AProg);
+
+  { Standalone procedures/functions, then $main. }
   for I := 0 to AProg.Block.ProcDecls.Count - 1 do
   begin
     Decl := TMethodDecl(AProg.Block.ProcDecls.Items[I]);
-    if Decl.OwnerTypeName <> '' then Continue;     { class methods: later }
+    if Decl.OwnerTypeName <> '' then Continue;     { class methods: above }
     if Decl.TypeParams <> nil then Continue;       { generic templates: later }
     if Decl.Body = nil then Continue;              { forward decls }
     if Decl.IsExternal then Continue;              { external: later }
@@ -1928,8 +2576,10 @@ begin
   { Mark the stack non-executable (matches QBE output). }
   Self.Emit('.section .note.GNU-stack,"",@progbits');
 
-  { Data section: all registered global integer slots. }
+  { Data section: all registered global integer/float/record slots. }
   Self.EmitDataSection;
+  { Class data section: typeinfo, vtables, field-cleanup functions. }
+  Self.EmitClassSection(AProg);
 end;
 
 end.

@@ -48,6 +48,7 @@ begin
   WriteLn('  --target <os>-<cpu> linux-x86_64 (default), linux-i386, linux-arm64,');
   WriteLn('                      freebsd-x86_64, windows-x86_64, macos-arm64');
   WriteLn('  --emit-ir           Print QBE IR to stdout and exit');
+  WriteLn('  --emit-asm          Print native assembly to stdout (requires --backend native)');
   WriteLn('  --debug             Enable runtime memory leak reporting on exit');
   WriteLn('  --debug-opdf        Emit OPDF debug info (.opdf.s companion file)');
   WriteLn('');
@@ -184,6 +185,7 @@ function ParseArgs(
   out SourceFile:  string;
   out OutputFile:  string;
   out EmitIR:      Boolean;
+  out EmitAsm:     Boolean;
   out OPDFEnabled: Boolean;
   out DebugMode:   Boolean;
   out UseNative:   Boolean;
@@ -197,6 +199,7 @@ begin
   SourceFile  := '';
   OutputFile  := '';
   EmitIR      := False;
+  EmitAsm     := False;
   OPDFEnabled := False;
   DebugMode   := False;
   UseNative   := False;
@@ -224,6 +227,8 @@ begin
     end
     else if Arg = '--emit-ir' then
       EmitIR := True
+    else if Arg = '--emit-asm' then
+      EmitAsm := True
     else if Arg = '--debug' then
       DebugMode := True
     else if Arg = '--debug-opdf' then
@@ -272,9 +277,9 @@ begin
     SearchPaths.Free;
     Exit;
   end;
-  if (not EmitIR) and (OutputFile = '') then
+  if (not EmitIR) and (not EmitAsm) and (OutputFile = '') then
   begin
-    WriteLn(StdErr, 'Error: --output is required (or use --emit-ir)');
+    WriteLn(StdErr, 'Error: --output is required (or use --emit-ir / --emit-asm)');
     SearchPaths.Free;
     Exit;
   end;
@@ -429,6 +434,7 @@ var
   SearchPaths: TStringList;
   ConfigPaths: TStringList;
   EmitIR:      Boolean;
+  EmitAsm:     Boolean;
   OPDFEnabled: Boolean;
   DebugMode:   Boolean;
   UseNative:   Boolean;
@@ -461,11 +467,12 @@ begin
       PrintUsage;
       Halt(1);
     end;
-    EmitIR := False;
+    EmitIR  := False;
+    EmitAsm := False;
   end
   else
   begin
-    if not ParseArgs(SourceFile, OutputFile, EmitIR, OPDFEnabled, DebugMode, UseNative, Target, SearchPaths) then
+    if not ParseArgs(SourceFile, OutputFile, EmitIR, EmitAsm, OPDFEnabled, DebugMode, UseNative, Target, SearchPaths) then
     begin
       PrintUsage;
       Halt(1);
@@ -556,9 +563,9 @@ begin
       { CG is an ICodeGen (ARC-managed) — no manual Free.  Backend selection:
         --emit-ir ALWAYS uses the QBE backend (fixpoint + RTL Makefile depend
         on byte-identical QBE IR), so the native backend is engaged only for
-        actual native output.  Otherwise --backend native selects
-        TCodeGenNative for the configured target. }
-      if UseNative and not EmitIR then
+        actual native output.  --emit-asm implies --backend native.
+        Otherwise --backend native selects TCodeGenNative for the configured target. }
+      if (UseNative or EmitAsm) and not EmitIR then
       begin
         NativeCG := TCodeGenNative.Create;
         NativeCG.SetTarget(Target);
@@ -613,12 +620,13 @@ begin
     Source.Free;
   end;
 
-  { --emit-ir: write the IR to stdout and fall through to normal program
-    exit so the main block's scope-exit ARC cleanup runs.  Calling Halt(0)
-    here would lower to libc exit(), which skips every Pascal stack frame and
-    leaves main's locals unreleased — defeating the leak tracker and leaking
-    anything not freed in the finally block above. }
+  { --emit-ir / --emit-asm: write output to stdout and fall through to normal
+    program exit so the main block's scope-exit ARC cleanup runs.  Calling
+    Halt(0) here would lower to libc exit(), skipping every Pascal stack frame
+    and leaving main's locals unreleased — defeating the leak tracker. }
   if EmitIR then
+    Write(IR)
+  else if EmitAsm then
     Write(IR)
   else if UseNative then
   begin
