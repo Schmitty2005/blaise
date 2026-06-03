@@ -1,0 +1,138 @@
+= Bootstrapping a development checkout
+:icons: font
+:source-highlighter: rouge
+:toc: macro
+
+This document describes `scripts/rolling-bootstrap.sh`: when it is required, the
+prerequisite it depends on, how to run it, and how to interpret its output.
+
+toc::[]
+
+== Background
+
+Blaise is self-hosting: each compiler binary is built by the previous compiler
+binary. A released binary can compile source only up to its own feature set.
+
+Within a single release this is never a problem, because every commit needs only
+the *previous* commit's binary. New language features are introduced in two
+steps: one commit teaches the parser and code generator to understand the
+feature, and a later commit uses it in the runtime or compiler source. The
+binary built at the first commit can compile the second.
+
+The consequence is that no single old binary spans an entire development cycle.
+Shortly after a release, the first feature commit plus its first use commit make
+the release binary unable to cold-bootstrap `master` directly. A contributor who
+checks out `master` between releases therefore has no single binary new enough to
+build the current source in one step.
+
+`scripts/rolling-bootstrap.sh` resolves this by replaying the chain: starting
+from the last release binary, it checks out each intervening commit in order and
+rebuilds the compiler and runtime using the binary produced at the previous step,
+carrying that binary forward until it reaches the target revision.
+
+== Prerequisite: the release binary
+
+The script needs a known-good starting binary. Release binaries are *not*
+committed to the repository — `releases/` is listed in `.gitignore` — so a fresh
+clone does not contain one. Before running the script, place the most recent
+release binary (and its runtime archive) at:
+
+[source]
+----
+releases/vX.Y.Z/blaise
+releases/vX.Y.Z/blaise_rtl.a
+----
+
+where `vX.Y.Z` is the release tag (for example `releases/v0.9.0/blaise`). The tag
+must exist in the repository history so the script can resolve it to a commit.
+
+The script auto-selects the newest `releases/v*/blaise` whose tag is an ancestor
+of the target revision. A specific starting point can be forced with `--from`.
+
+The vendored QBE backend must also be built once:
+
+[source,shell]
+----
+cd vendor/qbe && make && cd ../..
+----
+
+== Usage
+
+Run from the project root.
+
+[source,shell]
+----
+# Replay from the auto-selected release up to HEAD, then install the
+# resulting binary under releases/v<version>-pre/:
+./scripts/rolling-bootstrap.sh
+
+# Replay an explicit range without installing the result:
+./scripts/rolling-bootstrap.sh --from v0.9.0 --to HEAD --no-install
+
+# Keep the temporary worktree for inspection after a run:
+./scripts/rolling-bootstrap.sh --keep
+----
+
+=== Options
+
+[cols="1,3", options="header"]
+|===
+| Option | Effect
+
+| `--from REF`
+| Commit or tag to start from. A binary must exist at `releases/<REF>/blaise`.
+  Defaults to the newest release tag that is an ancestor of `--to`.
+
+| `--to REF`
+| Target revision to bootstrap up to. Defaults to `HEAD`.
+
+| `--keep`
+| Retain the temporary worktree on success rather than removing it.
+
+| `--no-install`
+| Report the final binary path without copying it into `releases/`.
+|===
+
+== Behaviour
+
+The script operates entirely inside a throwaway git worktree. The live working
+tree — including any uncommitted changes — is never modified.
+
+At each commit it rebuilds the runtime and the compiler with the binary carried
+from the previous step, then runs a small, feature-agnostic smoke test (integer
+arithmetic and `WriteLn`) to confirm the freshly built binary is functional. On
+reaching the target it installs the final binary to `releases/v<version>-pre/`,
+where `<version>` is read from the `Version` constant in `Blaise.pas`. The
+`-pre` binary is the same artefact otherwise produced by a manual rolling build,
+suitable for use as the next stage-1.
+
+== Exit status and failure modes
+
+[cols="1,4", options="header"]
+|===
+| Status | Meaning
+
+| `0`
+| The target revision was reached and the final binary produced.
+
+| `BOOTSTRAP_BROKEN at <commit>`
+| The previous step's binary could not build the named commit. This indicates a
+  broken self-hosting two-step: a feature was used before, or without, a prior
+  commit teaching the parser to understand it. The fix is to split the change so
+  the feature is introduced in one commit and used in the next.
+
+| `SMOKE_FAILED at <commit>`
+| The binary built but produced incorrect output for the smoke probe, indicating
+  a regression in basic code generation at that commit.
+|===
+
+A non-zero exit names the exact offending commit, which makes the script useful
+as a continuous-integration check that the self-hosting chain remains unbroken.
+
+== Relationship to other scripts
+
+`scripts/fixpoint.sh` verifies that a *single* binary reproduces itself
+(stage-2 IR equals stage-3 IR). `scripts/rolling-bootstrap.sh` produces that
+binary in the first place when the latest release is too old to do so directly.
+The two are complementary: run the rolling bootstrap to obtain a current `-pre`
+binary, then run the fixpoint check to confirm it is self-consistent.

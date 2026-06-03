@@ -1,0 +1,305 @@
+#!/bin/bash
+# Rolling bootstrap for the Blaise self-hosting chain.
+#
+# Problem this solves:
+#   A release binary (e.g. v0.9.0) can only compile source up to its own
+#   feature set. The moment a post-release commit adds a new language feature
+#   AND a later commit uses it in the runtime/compiler, the release binary can
+#   no longer cold-bootstrap HEAD. End-users following `master` between releases
+#   are then stuck — they have no binary new enough to build current source.
+#
+#   This is fine *during* development because each commit only needs the
+#   PREVIOUS commit's binary: a feature is taught to the parser in one commit
+#   and used in the next (the self-hosting two-step). The chain is therefore
+#   continuous even though no single old binary spans the whole range.
+#
+# What this script does:
+#   Replays that chain. Starting from a known-good release binary, it checks
+#   out each commit in order and rebuilds the compiler + RTL using the PREVIOUS
+#   step's freshly-built binary, carrying the result forward, until it reaches
+#   the target ref (HEAD by default). The final binary is a working `-pre`
+#   bootstrap binary for the current source — the same way the committed
+#   v0.10.0-pre binary was produced by hand.
+#
+#   All work happens in a throwaway git worktree, so your live working tree
+#   (including uncommitted changes) is never touched.
+#
+# Usage:
+#   ./scripts/rolling-bootstrap.sh [--from <tag-or-commit>] [--to <ref>]
+#                                  [--keep] [--no-install]
+#
+#   --from REF   Commit/tag to start from. Its release binary must exist at
+#                releases/<REF>/blaise. Default: latest releases/v* with a
+#                binary that is an ancestor of --to.
+#   --to REF     Target ref to bootstrap up to. Default: HEAD.
+#   --keep       Keep the temporary worktree on success (for inspection).
+#   --no-install Do not copy the final binary into releases/. Just report.
+#
+# Exit codes:
+#   0  reached target; final binary produced (and installed unless --no-install)
+#   1  usage / environment error
+#   2  a step failed to build — the offending commit is reported (likely a
+#      broken two-step: a feature was used before/without teaching the parser)
+
+set -u
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+FROM_REF=""
+TO_REF="HEAD"
+KEEP_WORKTREE=0
+DO_INSTALL=1
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --from)       FROM_REF="$2"; shift 2 ;;
+    --to)         TO_REF="$2";   shift 2 ;;
+    --keep)       KEEP_WORKTREE=1; shift ;;
+    --no-install) DO_INSTALL=0;    shift ;;
+    -h|--help)    grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [ ! -f "compiler/src/main/pascal/Blaise.pas" ]; then
+  echo "Run this script from the project root." >&2
+  exit 1
+fi
+
+ROOT="$(pwd)"
+TO_SHA="$(git rev-parse --verify "$TO_REF^{commit}" 2>/dev/null)" || {
+  echo "Bad --to ref: $TO_REF" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Pick the start binary: explicit --from, else the newest release tag whose
+# binary exists and is an ancestor of the target.
+# ---------------------------------------------------------------------------
+pick_start() {
+  if [ -n "$FROM_REF" ]; then
+    echo "$FROM_REF"
+    return
+  fi
+  # Newest-first over release dirs that have a binary and lie on the path to TO.
+  local d ref
+  for d in $(ls -d releases/v* 2>/dev/null | sort -rV); do
+    ref="${d#releases/}"
+    [ -x "$d/blaise" ] || continue
+    git rev-parse --verify "$ref^{commit}" >/dev/null 2>&1 || continue
+    if git merge-base --is-ancestor "$ref" "$TO_SHA" 2>/dev/null; then
+      echo "$ref"
+      return
+    fi
+  done
+}
+
+START_REF="$(pick_start)"
+if [ -z "$START_REF" ]; then
+  echo "No usable start binary found under releases/ that is an ancestor of $TO_REF." >&2
+  echo "Pass --from <tag> where releases/<tag>/blaise exists." >&2
+  exit 1
+fi
+
+START_BIN="$ROOT/releases/$START_REF/blaise"
+START_RTL="$ROOT/releases/$START_REF/blaise_rtl.a"
+if [ ! -x "$START_BIN" ]; then
+  echo "Start binary not found: $START_BIN" >&2
+  exit 1
+fi
+
+START_SHA="$(git rev-parse --verify "$START_REF^{commit}")"
+if ! git merge-base --is-ancestor "$START_SHA" "$TO_SHA"; then
+  echo "Start ref $START_REF is not an ancestor of $TO_REF — cannot replay linearly." >&2
+  exit 1
+fi
+
+# Ordered list of commits to replay: every commit strictly after START up to TO.
+mapfile -t COMMITS < <(git rev-list --reverse --first-parent "${START_SHA}..${TO_SHA}")
+
+echo "Rolling bootstrap"
+echo "  from : $START_REF ($START_SHA)"
+echo "  to   : $TO_REF ($TO_SHA)"
+echo "  steps: ${#COMMITS[@]} commit(s) to replay"
+echo
+
+if [ "${#COMMITS[@]}" -eq 0 ]; then
+  echo "Target is the start commit — nothing to replay. Start binary is already current."
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Throwaway worktree so the live tree is never disturbed.
+# ---------------------------------------------------------------------------
+WT="$(mktemp -d /tmp/blaise-rollboot.XXXXXX)"
+cleanup() {
+  if [ "$KEEP_WORKTREE" -eq 1 ]; then
+    echo "Worktree kept at: $WT"
+  else
+    git -C "$ROOT" worktree remove --force "$WT" 2>/dev/null
+    rm -rf "$WT"
+  fi
+}
+trap cleanup EXIT
+
+git worktree add --detach "$WT" "$START_SHA" >/dev/null 2>&1 || {
+  echo "Failed to create worktree." >&2; exit 1; }
+
+# The worktree checks out vendored QBE *source* but not a built binary. The
+# runtime Makefile invokes $(QBE) (default ../vendor/qbe/qbe) and we call QBE
+# directly for the compiler link. Use the main repo's already-built QBE for
+# both. The QBE binary is stable across the replayed range; if a step bumps the
+# vendored QBE version, rebuild vendor/qbe in the main repo before replaying.
+QBE_BIN="$ROOT/vendor/qbe/qbe"
+if [ ! -x "$QBE_BIN" ]; then
+  echo "QBE binary not built: $QBE_BIN  (run 'make' in vendor/qbe)" >&2
+  exit 1
+fi
+
+# CUR_BIN / CUR_RTL hold the most recently built (or starting) artifacts.
+CUR_BIN="$START_BIN"
+CUR_RTL="$START_RTL"
+# If the start release shipped no RTL, we will build one at the first step.
+
+# ---------------------------------------------------------------------------
+# build_step <worktree-dir> <compiler-binary> <rtl-archive-or-empty>
+#   Builds RTL (with the given compiler) then the compiler itself, in WT.
+#   Writes WT/_boot/blaise and WT/_boot/blaise_rtl.a on success.
+# ---------------------------------------------------------------------------
+build_step() {
+  local wt="$1" cc="$2"
+  local out="$wt/_boot"
+  mkdir -p "$out"
+
+  # 1. Build + install the RTL using the previous-step compiler.
+  #    runtime/Makefile honours BLAISE=<compiler> and COMPILER_BIN for install.
+  if ! ( cd "$wt/runtime" && make clean >/dev/null 2>&1 && \
+         make BLAISE="$cc" QBE="$QBE_BIN" >"$out/rtl.log" 2>&1 && \
+         make BLAISE="$cc" QBE="$QBE_BIN" install >>"$out/rtl.log" 2>&1 ); then
+    echo "    RTL build failed:"; tail -8 "$out/rtl.log" | sed 's/^/      /'
+    return 1
+  fi
+  # FindRTL looks beside the compiler binary; the Makefile install target
+  # places blaise_rtl.a under compiler/target/. Use that as the link archive.
+  local rtl="$wt/compiler/target/blaise_rtl.a"
+  if [ ! -s "$rtl" ]; then
+    echo "    RTL archive missing after build"; return 1
+  fi
+
+  # 2. Compile the compiler to IR with the previous-step binary, then
+  #    assemble + link. Mirrors fixpoint.sh's direct-invocation approach so we
+  #    do not depend on pasbuild internals varying across history.
+  if ! "$cc" --source "$wt/compiler/src/main/pascal/Blaise.pas" \
+        --unit-path "$wt/compiler/src/main/pascal" \
+        --unit-path "$wt/runtime/src/main/pascal" \
+        --unit-path "$wt/stdlib/src/main/pascal" \
+        --emit-ir > "$out/blaise.ssa" 2>"$out/compile.err"; then
+    echo "    compiler IR generation failed:"; head -5 "$out/compile.err" | sed 's/^/      /'
+    return 1
+  fi
+  if [ ! -s "$out/blaise.ssa" ] || \
+     head -1 "$out/blaise.ssa" | grep -qiE 'error|exception'; then
+    echo "    compiler IR invalid:"; head -3 "$out/blaise.ssa" | sed 's/^/      /'
+    head -3 "$out/compile.err" | sed 's/^/      /'
+    return 1
+  fi
+
+  if ! "$QBE_BIN" -o "$out/blaise.s" "$out/blaise.ssa" 2>"$out/qbe.err"; then
+    echo "    QBE failed:"; head -5 "$out/qbe.err" | sed 's/^/      /'; return 1
+  fi
+  if ! gcc -o "$out/blaise" "$out/blaise.s" "$rtl" 2>"$out/gcc.err"; then
+    echo "    link failed:"; head -5 "$out/gcc.err" | sed 's/^/      /'; return 1
+  fi
+
+  cp "$rtl" "$out/blaise_rtl.a"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# smoke_test <compiler-binary> <rtl-archive>
+#   Compiles + runs a trivial program to prove the freshly-built binary is
+#   functional (compiles → valid QBE → links → runs → correct stdout). Kept
+#   deliberately feature-agnostic: it must pass at EVERY commit in history, so
+#   it probes only arithmetic + WriteLn, not any specific later feature.
+# ---------------------------------------------------------------------------
+smoke_test() {
+  local cc="$1" rtl="$2"
+  local d; d="$(mktemp -d)"
+  cat > "$d/s.pas" <<'PAS'
+program P;
+var X: Integer;
+begin
+  X := 6 * 7;
+  WriteLn(X)
+end.
+PAS
+  local ok=1
+  if "$cc" --source "$d/s.pas" --emit-ir > "$d/s.ssa" 2>"$d/s.err" \
+     && "$QBE_BIN" -o "$d/s.s" "$d/s.ssa" 2>>"$d/s.err" \
+     && gcc -o "$d/s" "$d/s.s" "$rtl" 2>>"$d/s.err"; then
+    [ "$("$d/s" 2>/dev/null)" = "42" ] && ok=0
+  fi
+  rm -rf "$d"
+  return $ok
+}
+
+# ---------------------------------------------------------------------------
+# Replay loop.
+# ---------------------------------------------------------------------------
+STEP=0
+for sha in "${COMMITS[@]}"; do
+  STEP=$((STEP + 1))
+  short="$(git rev-parse --short "$sha")"
+  subj="$(git log -1 --format=%s "$sha")"
+  printf '[%d/%d] %s  %s\n' "$STEP" "${#COMMITS[@]}" "$short" "$subj"
+
+  git -C "$WT" checkout --quiet --detach "$sha" 2>/dev/null || {
+    echo "    checkout failed"; exit 2; }
+
+  if ! build_step "$WT" "$CUR_BIN"; then
+    echo
+    echo "BOOTSTRAP_BROKEN at $short ($subj)"
+    echo "  The previous step's binary could not build this commit. This usually"
+    echo "  means a language feature was USED here before (or without) a prior"
+    echo "  commit teaching the parser/codegen to understand it — a broken"
+    echo "  self-hosting two-step. Fix by splitting: introduce the feature in one"
+    echo "  commit, use it in the next."
+    exit 2
+  fi
+
+  if ! smoke_test "$WT/_boot/blaise" "$WT/_boot/blaise_rtl.a"; then
+    echo
+    echo "SMOKE_FAILED at $short ($subj)"
+    echo "  The binary built but produced wrong output for the local-const-array"
+    echo "  probe. Treating as a broken step."
+    exit 2
+  fi
+
+  # Carry this step's artifacts forward as the compiler for the next commit.
+  cp "$WT/_boot/blaise"        "$WT/_carry_blaise"
+  cp "$WT/_boot/blaise_rtl.a"  "$WT/_carry_rtl.a"
+  CUR_BIN="$WT/_carry_blaise"
+  CUR_RTL="$WT/_carry_rtl.a"
+done
+
+echo
+echo "REACHED $TO_REF — rolling bootstrap succeeded through ${#COMMITS[@]} commit(s)."
+
+# ---------------------------------------------------------------------------
+# Install the final binary as the current -pre release.
+# ---------------------------------------------------------------------------
+VER="$(grep -m1 -oE "Version = '[^']+'" "$WT/compiler/src/main/pascal/Blaise.pas" \
+        | sed "s/Version = '//; s/'//")"
+# 0.10.0-dev -> v0.10.0-pre ; 0.10.0 -> v0.10.0-pre
+PRE="v${VER%-dev}"
+case "$PRE" in *-pre) ;; *) PRE="${PRE}-pre" ;; esac
+
+if [ "$DO_INSTALL" -eq 1 ]; then
+  DEST="$ROOT/releases/$PRE"
+  mkdir -p "$DEST"
+  cp "$CUR_BIN" "$DEST/blaise"
+  cp "$CUR_RTL" "$DEST/blaise_rtl.a"
+  chmod +x "$DEST/blaise"
+  echo "Installed: $DEST/blaise (+ blaise_rtl.a)  [version $VER]"
+else
+  echo "Final binary: $CUR_BIN  [version $VER, would install to releases/$PRE]"
+fi

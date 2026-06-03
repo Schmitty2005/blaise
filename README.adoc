@@ -207,6 +207,18 @@ Once `compiler/target/blaise` exists, subsequent RTL rebuilds (`make && make ins
 work without the override. The QBE build in step 0 is a one-off and does not
 need to be repeated when rebuilding the compiler.
 
+=== Bootstrap a development checkout
+
+The procedure above works while the latest release binary is new enough to
+compile the current source. Between releases that ceases to hold: once a commit
+teaches the parser a new feature and a later commit uses it in the
+runtime/compiler, the release binary can no longer build `master` directly.
+
+`scripts/rolling-bootstrap.sh` rebuilds the chain commit-by-commit from the last
+release binary up to the checked-out revision, producing a working `-pre`
+bootstrap binary. See link:scripts/BOOTSTRAP.adoc[scripts/BOOTSTRAP.adoc] for the
+prerequisite (placing the release binary under `releases/`) and usage.
+
 === Build via PasBuild
 
 PasBuild can drive the full compile and test cycle using a Blaise binary:
