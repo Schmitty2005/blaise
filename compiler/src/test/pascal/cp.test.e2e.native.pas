@@ -132,6 +132,16 @@ type
     procedure TestRun_Native_TryExcept_BareRaisePropagate;
     procedure TestRun_Native_TryExcept_ElseBody;
     procedure TestRun_Native_ExitThroughNestedFinally;
+
+    { M7e — open arrays and dynamic arrays }
+    procedure TestRun_Native_OpenArray_Sum;
+    procedure TestRun_Native_OpenArray_HighLow;
+    procedure TestRun_Native_OpenArray_Length;
+    procedure TestRun_Native_StaticToOpen_Length;
+    procedure TestRun_Native_StaticToOpen_Sum;
+    procedure TestRun_Native_StaticToOpen_PassToNested;
+    procedure TestRun_Native_DynArray_SetLengthAndAccess;
+    procedure TestRun_Native_DynArray_LengthAndHigh;
   end;
 
 implementation
@@ -1768,6 +1778,178 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcExitNestedFinally,
     'inner_fin' + LE + 'outer_fin' + LE + 'after' + LE, 0);
+end;
+
+{ M7e — open arrays and dynamic arrays }
+
+const
+  SrcOASum =
+    '''
+    program P;
+    function Sum(const A: array of Integer): Integer;
+    var I: Integer;
+    begin
+      Result := 0;
+      for I := 0 to High(A) do
+        Result := Result + A[I]
+    end;
+    begin
+      WriteLn(Sum([1, 2, 3, 4, 5]))
+    end.
+    ''';
+
+  SrcOAHighLow =
+    '''
+    program P;
+    procedure PrintBounds(const A: array of Integer);
+    begin
+      WriteLn(Low(A));
+      WriteLn(High(A))
+    end;
+    begin
+      PrintBounds([10, 20, 30])
+    end.
+    ''';
+
+  SrcOALength =
+    '''
+    program P;
+    function Count(const A: array of Integer): Integer;
+    begin
+      Result := Length(A)
+    end;
+    begin
+      WriteLn(Count([10, 20, 30]))
+    end.
+    ''';
+
+  SrcStaticToOpenLen =
+    '''
+    program P;
+    procedure PrintLen(const A: array of Integer);
+    begin
+      WriteLn(Length(A))
+    end;
+    var B: array[0..4] of Integer;
+    begin
+      PrintLen(B)
+    end.
+    ''';
+
+  SrcStaticToOpenSum =
+    '''
+    program P;
+    function Sum(const A: array of Integer): Integer;
+    var I: Integer;
+    begin
+      Result := 0;
+      for I := 0 to High(A) do
+        Result := Result + A[I]
+    end;
+    var B: array[0..2] of Integer;
+    begin
+      B[0] := 10;
+      B[1] := 20;
+      B[2] := 30;
+      WriteLn(Sum(B))
+    end.
+    ''';
+
+  SrcStaticToOpenNested =
+    '''
+    program P;
+    function Sum(const A: array of Integer): Integer;
+    var I: Integer;
+    begin
+      Result := 0;
+      for I := 0 to High(A) do
+        Result := Result + A[I]
+    end;
+    procedure Process(const A: array of Integer);
+    begin
+      WriteLn(Sum(A))
+    end;
+    var B: array[0..2] of Integer;
+    begin
+      B[0] := 5;
+      B[1] := 10;
+      B[2] := 15;
+      Process(B)
+    end.
+    ''';
+
+  SrcDynArrayBasic =
+    '''
+    program P;
+    var A: array of Integer;
+        I: Integer;
+    begin
+      SetLength(A, 3);
+      A[0] := 10;
+      A[1] := 20;
+      A[2] := 30;
+      for I := 0 to High(A) do
+        WriteLn(A[I])
+    end.
+    ''';
+
+  SrcDynArrayLenHigh =
+    '''
+    program P;
+    var A: array of Integer;
+    begin
+      SetLength(A, 5);
+      WriteLn(Length(A));
+      WriteLn(High(A))
+    end.
+    ''';
+
+procedure TE2ENativeTests.TestRun_Native_OpenArray_Sum;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcOASum, '15' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_OpenArray_HighLow;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcOAHighLow, '0' + LE + '2' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_OpenArray_Length;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcOALength, '3' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_StaticToOpen_Length;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcStaticToOpenLen, '5' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_StaticToOpen_Sum;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcStaticToOpenSum, '60' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_StaticToOpen_PassToNested;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcStaticToOpenNested, '30' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_DynArray_SetLengthAndAccess;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcDynArrayBasic, '10' + LE + '20' + LE + '30' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_DynArray_LengthAndHigh;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcDynArrayLenHigh, '5' + LE + '4' + LE, 0);
 end;
 
 initialization

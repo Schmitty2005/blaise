@@ -170,6 +170,10 @@ type
     procedure EmitTryExceptStmt(AStmt: TTryExceptStmt);
     { Lower raise / bare raise. }
     procedure EmitRaiseStmt(AStmt: TRaiseStmt);
+    { Allocate stack storage for an inline array literal [a,b,...], fill each
+      element, and leave the base pointer in %rax.  Returns the number of bytes
+      allocated on the stack (caller must addq that amount after the call). }
+    function EmitOpenArrayLiteral(ALit: TArrayLiteralExpr): Integer;
     { Emit a direct call to a user procedure/function; result (if any) in %eax.
       ADecl is the callee's declaration (needed for var/out param handling);
       nil for type-cast calls. }
@@ -262,7 +266,7 @@ begin
     tyInteger, tyUInt32, tyEnum:                Result := 4;
     tyInt64, tyUInt64,
     tyProcedural, tyPointer, tyPChar, tyClass,
-    tyString, tyMetaClass:                      Result := 8;
+    tyString, tyMetaClass, tyDynArray:          Result := 8;
     tyDouble:                                   Result := 8;
     tySingle:                                   Result := 4;
   else
@@ -913,7 +917,7 @@ end;
 
 procedure TX86_64Backend.BuildFrame(ADecl: TMethodDecl);
 var
-  I, J, K, Offset, StackOff, TryCount: Integer;
+  I, J, K, Offset, StackOff, TryCount, IntIdx2: Integer;
   P:    TMethodParam;
   VD:   TVarDecl;
 begin
@@ -927,19 +931,52 @@ begin
   if ADecl.OwnerTypeName <> '' then
     Self.AddSlot('Self', nil, Offset);  { nil = pointer size (8 bytes) }
 
-  { Params: first 6 are register-passed (spilled to negative slots in prologue);
-    args 7+ are already on the stack at positive %rbp offsets. }
-  for I := 0 to ADecl.Params.Count - 1 do
+  { Params: first 6 integer register slots are register-passed (spilled to
+    negative slots in prologue); slots 7+ are on the stack at positive %rbp
+    offsets.  Open-array params consume TWO register slots each: data ptr and
+    high index.  Track IntIdx2 separately from the logical param index I. }
   begin
-    P := TMethodParam(ADecl.Params.Items[I]);
-    if I < 6 then
-      Self.AddSlot(P.ParamName, P.ResolvedType, Offset)
-    else
+    IntIdx2 := 0;
+    if (ADecl.OwnerTypeName <> '') or FSretFunc then
+      Inc(IntIdx2);  { Self / sret already consumed one register }
+    for I := 0 to ADecl.Params.Count - 1 do
     begin
-      { Stack-passed param: lives at +StackOff(%rbp), pushed by caller. }
-      FFrame.Add(P.ParamName, StackOff);
-      FFrameTypes.Add(P.ParamName, P.ResolvedType);
-      Inc(StackOff, 8);
+      P := TMethodParam(ADecl.Params.Items[I]);
+      if P.IsOpenArray then
+      begin
+        { Two register slots: data pointer and high index. }
+        if IntIdx2 < 6 then
+          Self.AddSlot(P.ParamName, nil, Offset)   { nil = pointer-size (8 bytes) }
+        else
+        begin
+          FFrame.Add(P.ParamName, StackOff);
+          FFrameTypes.Add(P.ParamName, nil);
+          Inc(StackOff, 8);
+        end;
+        Inc(IntIdx2);
+        if IntIdx2 < 6 then
+          Self.AddSlot(P.ParamName + '_high', nil, Offset)
+        else
+        begin
+          FFrame.Add(P.ParamName + '_high', StackOff);
+          FFrameTypes.Add(P.ParamName + '_high', nil);
+          Inc(StackOff, 8);
+        end;
+        Inc(IntIdx2);
+      end
+      else
+      begin
+        if IntIdx2 < 6 then
+          Self.AddSlot(P.ParamName, P.ResolvedType, Offset)
+        else
+        begin
+          { Stack-passed param: lives at +StackOff(%rbp), pushed by caller. }
+          FFrame.Add(P.ParamName, StackOff);
+          FFrameTypes.Add(P.ParamName, P.ResolvedType);
+          Inc(StackOff, 8);
+        end;
+        Inc(IntIdx2);
+      end;
     end;
   end;
   { Result slot for a function (not a procedure).
@@ -1314,16 +1351,101 @@ begin
       { Result = method code pointer in %rax. }
       Exit;
     end;
-    { String built-ins: delegate to RTL helpers (M7c).
-      All string pointers are 64-bit (pointer-size) arguments. }
-    if SameText(FC.Name, 'Length') and (FC.Args.Count = 1) and
-       (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
-       (TASTExpr(FC.Args.Items[0]).ResolvedType.Kind = tyString) then
+    { Length/High/Low built-ins for arrays and strings. }
+    if SameText(FC.Name, 'High') and (FC.Args.Count = 1) and
+       (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) then
     begin
-      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
-      Self.Emit(#9'movq %rax, %rdi');
-      Self.Emit(#9'callq _StringLength');
-      Self.Emit(#9'movslq %eax, %rax');
+      case TASTExpr(FC.Args.Items[0]).ResolvedType.Kind of
+        tyStaticArray:
+          Self.Emit(Format(#9'movq $%d, %%rax',
+            [TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).HighBound]));
+        tyOpenArray:
+        begin
+          { Load the _high slot for this open-array param. }
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(FC.Args.Items[0]).Name + '_high')]));
+        end;
+        tyDynArray:
+        begin
+          { High(A) = Length(A) - 1; delegate to RTL. }
+          Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+          Self.Emit(#9'movq %rax, %rdi');
+          Self.Emit(#9'callq _DynArrayLength');
+          Self.Emit(#9'movslq %eax, %rax');
+          Self.Emit(#9'decq %rax');
+        end;
+        tyString:
+        begin
+          Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+          Self.Emit(#9'movq %rax, %rdi');
+          Self.Emit(#9'callq _StringLength');
+          Self.Emit(#9'movslq %eax, %rax');
+          Self.Emit(#9'decq %rax');
+        end;
+      else
+        { Integer/enum types: type-level High (min/max). }
+        case TASTExpr(FC.Args.Items[0]).ResolvedType.Kind of
+          tyByte:     Self.Emit(#9'movq $255, %rax');
+          tyBoolean:  Self.Emit(#9'movq $1, %rax');
+          tySmallInt: Self.Emit(#9'movq $32767, %rax');
+          tyWord:     Self.Emit(#9'movq $65535, %rax');
+          tyInteger:  Self.Emit(#9'movq $2147483647, %rax');
+          tyUInt32:   Self.Emit(#9'movq $4294967295, %rax');
+          tyEnum:     Self.Emit(Format(#9'movq $%d, %%rax',
+            [TEnumTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).Members.Count - 1]));
+        else
+          Self.Emit(#9'movq $0, %rax');
+        end;
+      end;
+      Exit;
+    end;
+
+    if SameText(FC.Name, 'Low') and (FC.Args.Count = 1) and
+       (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) then
+    begin
+      case TASTExpr(FC.Args.Items[0]).ResolvedType.Kind of
+        tyStaticArray:
+          Self.Emit(Format(#9'movq $%d, %%rax',
+            [TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).LowBound]));
+        tySmallInt: Self.Emit(#9'movq $-32768, %rax');
+        tyInteger:  Self.Emit(#9'movq $-2147483648, %rax');
+      else
+        Self.Emit(#9'movq $0, %rax');  { 0 for all array/byte/bool/word/unsigned/open/dyn }
+      end;
+      Exit;
+    end;
+
+    if SameText(FC.Name, 'Length') and (FC.Args.Count = 1) and
+       (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) then
+    begin
+      case TASTExpr(FC.Args.Items[0]).ResolvedType.Kind of
+        tyStaticArray:
+        begin
+          Self.Emit(Format(#9'movq $%d, %%rax',
+            [TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).HighBound -
+             TStaticArrayTypeDesc(TASTExpr(FC.Args.Items[0]).ResolvedType).LowBound + 1]));
+        end;
+        tyOpenArray:
+        begin
+          { Length = High + 1: load _high slot and add 1. }
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(FC.Args.Items[0]).Name + '_high')]));
+          Self.Emit(#9'incq %rax');
+        end;
+        tyDynArray:
+        begin
+          Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+          Self.Emit(#9'movq %rax, %rdi');
+          Self.Emit(#9'callq _DynArrayLength');
+          Self.Emit(#9'movslq %eax, %rax');
+        end;
+      else
+        { String: delegate to RTL. }
+        Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(#9'callq _StringLength');
+        Self.Emit(#9'movslq %eax, %rax');
+      end;
       Exit;
     end;
     if SameText(FC.Name, 'Pos') and (FC.Args.Count = 2) then
@@ -1536,6 +1658,47 @@ begin
       raise ENativeCodeGenError.Create(
         'native backend: unsupported binary operator in integer expression');
     end;
+    Exit;
+  end;
+
+  { Open-array element read: A[I] where A is an open-array parameter.
+    The data pointer lives in the _var_A slot (not _var_A_high). }
+  if (AExpr is TStringSubscriptExpr) and
+     (TStringSubscriptExpr(AExpr).StrExpr is TIdentExpr) and
+     (TStringSubscriptExpr(AExpr).StrExpr.ResolvedType <> nil) and
+     (TStringSubscriptExpr(AExpr).StrExpr.ResolvedType.Kind = tyOpenArray) then
+  begin
+    SAE := TStringSubscriptExpr(AExpr);
+    { Load data pointer from the param slot into %rcx. }
+    Self.Emit(Format(#9'movq %s, %%rcx',
+      [Self.VarOperand(TIdentExpr(SAE.StrExpr).Name)]));
+    { Index * elem_size → element address. }
+    Self.EmitExprToEax(SAE.IndexExpr);
+    Self.Emit(Format(#9'imulq $%d, %%rax',
+      [TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize]));
+    Self.Emit(#9'addq %rcx, %rax');
+    Self.EmitLoadVar('(%rax)',
+      TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
+    Exit;
+  end;
+
+  { Dynamic-array element read: A[I] where A is a dynamic array variable.
+    Data pointer is stored directly in the variable slot. }
+  if (AExpr is TStringSubscriptExpr) and
+     (TStringSubscriptExpr(AExpr).StrExpr.ResolvedType <> nil) and
+     (TStringSubscriptExpr(AExpr).StrExpr.ResolvedType.Kind = tyDynArray) then
+  begin
+    SAE := TStringSubscriptExpr(AExpr);
+    { Load data pointer. }
+    Self.EmitExprToEax(SAE.StrExpr);
+    Self.Emit(#9'movq %rax, %rcx');
+    { Index * elem_size → element address. }
+    Self.EmitExprToEax(SAE.IndexExpr);
+    Self.Emit(Format(#9'imulq $%d, %%rax',
+      [TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize]));
+    Self.Emit(#9'addq %rcx, %rax');
+    Self.EmitLoadVar('(%rax)',
+      TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
     Exit;
   end;
 
@@ -2288,6 +2451,8 @@ var
   I:     Integer;
   LThen, LElse, LEnd:    string;
   LCond, LBody:          string;
+  FDynArgName: string;
+  FDynElemSz:  Integer;
 begin
   if AStmt is TAssignment then
   begin
@@ -2488,6 +2653,35 @@ begin
         else
           Self.Emit(Format(#9'movq %%rax, %s(%%rip)',
             [TIdentExpr(TASTExpr(PC.Args.Items[0])).Name]));
+      end;
+      Exit;
+    end;
+    { SetLength(A, N) for dynamic arrays: A := _DynArraySetLength(A, N, ElemSize). }
+    if SameText(PC.Name, 'SetLength') and (PC.Args.Count = 2) and
+       (TASTExpr(PC.Args.Items[0]).ResolvedType <> nil) and
+       (TASTExpr(PC.Args.Items[0]).ResolvedType.Kind = tyDynArray) then
+    begin
+      if TASTExpr(PC.Args.Items[0]) is TIdentExpr then
+      begin
+        FDynArgName := TIdentExpr(TASTExpr(PC.Args.Items[0])).Name;
+        FDynElemSz :=
+          TDynArrayTypeDesc(TASTExpr(PC.Args.Items[0]).ResolvedType).ElementType.RawSize;
+        { Load current data ptr into %rdi. }
+        if Self.IsLocal(FDynArgName) then
+          Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(FDynArgName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [FDynArgName]));
+        { New length into %esi. }
+        Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
+        Self.Emit(#9'movl %eax, %esi');
+        { Element size into %edx. }
+        Self.Emit(Format(#9'movl $%d, %%edx', [FDynElemSz]));
+        Self.Emit(#9'callq _DynArraySetLength');
+        { Store new data ptr back. }
+        if Self.IsLocal(FDynArgName) then
+          Self.Emit(Format(#9'movq %%rax, %s', [Self.VarOperand(FDynArgName)]))
+        else
+          Self.Emit(Format(#9'movq %%rax, %s(%%rip)', [FDynArgName]));
       end;
       Exit;
     end;
@@ -2744,7 +2938,29 @@ begin
   if AStmt is TStaticSubscriptAssign then
   begin
     SSA := TStaticSubscriptAssign(AStmt);
-    { Only integer-family element types handled for now. }
+    if (SSA.ResolvedArrayType <> nil) and
+       (SSA.ResolvedArrayType.Kind = tyDynArray) then
+    begin
+      { Dynamic array element write: A[I] := V.
+        Data pointer lives directly in the variable slot. }
+      Self.EmitExprToEax(SSA.ValueExpr);
+      Self.Emit(#9'pushq %rax');
+      { Index * elem_size. }
+      Self.EmitExprToEax(SSA.IndexExpr);
+      Self.Emit(Format(#9'imulq $%d, %%rax',
+        [TDynArrayTypeDesc(SSA.ResolvedArrayType).ElementType.RawSize]));
+      { Base pointer into %rcx. }
+      if Self.IsLocal(SSA.ArrayName) then
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [SSA.ArrayName]));
+      Self.Emit(#9'addq %rcx, %rax');
+      Self.Emit(#9'movq %rax, %rcx');
+      Self.Emit(#9'popq %rax');
+      Self.EmitStoreVar('(%rcx)', TDynArrayTypeDesc(SSA.ResolvedArrayType).ElementType);
+      Exit;
+    end;
+    { Static array element write. }
     if (SSA.ResolvedArrayType = nil) or
        (SSA.ResolvedArrayType.Kind <> tyStaticArray) then
       raise ENativeCodeGenError.Create(
@@ -2780,6 +2996,42 @@ end;
 { Calls and function definitions                                       }
 { ------------------------------------------------------------------ }
 
+{ Allocate stack storage for an inline open-array literal, fill elements in
+  order, and leave a pointer to element 0 in %rax.  Returns the bytes allocated
+  on the stack; caller must addq that after the call to reclaim them. }
+function TX86_64Backend.EmitOpenArrayLiteral(ALit: TArrayLiteralExpr): Integer;
+var
+  OAType:   TOpenArrayTypeDesc;
+  ElemType: TTypeDesc;
+  ElemSize: Integer;
+  TotalSz:  Integer;
+  I:        Integer;
+begin
+  OAType   := TOpenArrayTypeDesc(ALit.ResolvedType);
+  ElemType := OAType.ElementType;
+  ElemSize := ElemType.RawSize;
+  TotalSz  := ALit.Elements.Count * ElemSize;
+  if TotalSz < 1 then TotalSz := 1;
+  { Align to 16 bytes for ABI compliance. }
+  TotalSz := (TotalSz + 15) and (-16);
+  Self.Emit(Format(#9'subq $%d, %%rsp', [TotalSz]));
+  Self.Emit(#9'movq %rsp, %rax');  { %rax = base of element storage }
+  for I := 0 to ALit.Elements.Count - 1 do
+  begin
+    Self.EmitExprToEax(TASTExpr(ALit.Elements.Items[I]));
+    case ElemSize of
+      1: Self.Emit(Format(#9'movb %%al, %d(%%rsp)', [I * ElemSize]));
+      2: Self.Emit(Format(#9'movw %%ax, %d(%%rsp)', [I * ElemSize]));
+      4: Self.Emit(Format(#9'movl %%eax, %d(%%rsp)', [I * ElemSize]));
+    else
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [I * ElemSize]));
+    end;
+  end;
+  { Re-load %rax with the base ptr (EmitExprToEax may have clobbered it). }
+  Self.Emit(#9'movq %rsp, %rax');
+  Exit(TotalSz);
+end;
+
 { Emit a direct call.  SysV AMD64: integer args in rdi/rsi/rdx/rcx/r8/r9;
   float args in xmm0..xmm5 (independent counters).  Stack args (args 7+ in
   total, after registers are exhausted) go right-to-left.  For M6 the common
@@ -2792,36 +3044,97 @@ end;
 procedure TX86_64Backend.EmitCall(const AFuncSym: string; ADecl: TMethodDecl;
                                   AArgs: TObjectList);
 var
-  I:         Integer;
-  Arg:       TASTExpr;
-  IsVar:     Boolean;
-  ParamType: TTypeDesc;
-  HasFloat:  Boolean;
+  I:              Integer;
+  Arg:            TASTExpr;
+  IsVar:          Boolean;
+  IsOA:           Boolean;
+  ParamType:      TTypeDesc;
+  HasFloat:       Boolean;
+  SlotCount:      Integer;
   IntIdx, XmmIdx: Integer;
   AllocSz, SlotOff: Integer;
+  ExtraStackBytes: Integer;
+  CleanUp:        Integer;
 begin
-  { Detect whether any arg is float-typed. }
-  HasFloat := False;
+  { Detect whether any arg is float-typed.
+    Also compute SlotCount: open-array args expand to 2 register slots each. }
+  HasFloat  := False;
+  SlotCount := 0;
   for I := 0 to AArgs.Count - 1 do
   begin
     Arg := TASTExpr(AArgs.Items[I]);
+    IsOA := (ADecl <> nil) and (I < ADecl.Params.Count) and
+            TMethodParam(ADecl.Params.Items[I]).IsOpenArray;
     ParamType := nil;
     if (ADecl <> nil) and (I < ADecl.Params.Count) then
       ParamType := TMethodParam(ADecl.Params.Items[I]).ResolvedType;
     if ParamType = nil then
       ParamType := Arg.ResolvedType;
-    if IsFloatFamily(ParamType) then begin HasFloat := True; Break; end;
+    if IsFloatFamily(ParamType) then
+      HasFloat := True;
+    if IsOA then
+      Inc(SlotCount, 2)
+    else
+      Inc(SlotCount);
   end;
+
+  ExtraStackBytes := 0;
 
   if not HasFloat then
   begin
-    { Pure integer (or var-param) call: original push/pop strategy. }
+    { Pure integer (or var-param/open-array) call: push/pop strategy.
+      Open-array arg A pushes: data ptr first, then high index.
+      SlotCount counts register slots after expansion. }
     for I := 0 to AArgs.Count - 1 do
     begin
       Arg := TASTExpr(AArgs.Items[I]);
       IsVar := (ADecl <> nil) and (I < ADecl.Params.Count) and
                TMethodParam(ADecl.Params.Items[I]).IsVarParam;
-      if IsVar then
+      IsOA  := (ADecl <> nil) and (I < ADecl.Params.Count) and
+               TMethodParam(ADecl.Params.Items[I]).IsOpenArray;
+      if IsOA then
+      begin
+        { Push data pointer. }
+        if Arg is TArrayLiteralExpr then
+        begin
+          { Inline literal [a, b, c]: allocate stack storage and fill.
+            ExtraStackBytes accumulates bytes to reclaim after the call. }
+          ExtraStackBytes := ExtraStackBytes +
+            Self.EmitOpenArrayLiteral(TArrayLiteralExpr(Arg));
+          { %rax = data ptr; high = Count-1. }
+          Self.Emit(#9'pushq %rax');
+          Self.Emit(Format(#9'pushq $%d',
+            [TArrayLiteralExpr(Arg).Elements.Count - 1]));
+        end
+        else if (Arg is TIdentExpr) and
+                (TIdentExpr(Arg).ResolvedType <> nil) and
+                (TIdentExpr(Arg).ResolvedType.Kind = tyStaticArray) then
+        begin
+          { Static array coerced to open array: push base ptr + compile-time high. }
+          if Self.IsLocal(TIdentExpr(Arg).Name) then
+            Self.Emit(Format(#9'leaq %s, %%rax',
+              [Self.VarOperand(TIdentExpr(Arg).Name)]))
+          else
+            Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+              [TIdentExpr(Arg).Name]));
+          Self.Emit(#9'pushq %rax');
+          Self.Emit(Format(#9'pushq $%d',
+            [TStaticArrayTypeDesc(TIdentExpr(Arg).ResolvedType).HighBound -
+             TStaticArrayTypeDesc(TIdentExpr(Arg).ResolvedType).LowBound]));
+        end
+        else
+        begin
+          { Open-array param forwarded to another open-array param:
+            push both data ptr and high from the caller's local slots. }
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name)]));
+          Self.Emit(#9'pushq %rax');
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name + '_high')]));
+          Self.Emit(#9'pushq %rax');
+        end;
+      end
+      else if IsVar then
       begin
         if (Arg is TIdentExpr) and TIdentExpr(Arg).IsVarParam then
           Self.Emit(Format(#9'movq %s, %%rax',
@@ -2841,24 +3154,30 @@ begin
       end;
     end;
 
-    if AArgs.Count <= 6 then
+    { Note: for open-array args the pushes are ordered as (high, ptr) on the
+      stack (last pushed is high) but the pop order reverses back so register
+      I=0 gets ptr and I=1 gets high — the two pushes above are in order
+      (ptr first, then high) so they pop in reverse: high first (higher slot),
+      ptr second (lower slot). This yields %rdi=ptr, %rsi=high for the first
+      open-array arg, matching what the callee spills in its prologue. }
+    if SlotCount <= 6 then
     begin
-      for I := AArgs.Count - 1 downto 0 do
+      for I := SlotCount - 1 downto 0 do
         Self.Emit(#9'popq ' + SysVArgRegs64[I]);
     end
     else
     begin
-      if AArgs.Count > 8 then
+      if SlotCount > 8 then
         raise ENativeCodeGenError.Create(
-          'native backend: more than 8 arguments not yet supported');
-      for I := AArgs.Count - 1 downto 6 do
+          'native backend: more than 8 argument slots not yet supported');
+      for I := SlotCount - 1 downto 6 do
       begin
         if (I - 6) = 0 then Self.Emit(#9'popq %r10')
         else               Self.Emit(#9'popq %r11');
       end;
       for I := 5 downto 0 do
         Self.Emit(#9'popq ' + SysVArgRegs64[I]);
-      for I := AArgs.Count - 1 downto 6 do
+      for I := SlotCount - 1 downto 6 do
       begin
         if (I - 6) = 0 then Self.Emit(#9'pushq %r10')
         else               Self.Emit(#9'pushq %r11');
@@ -2957,9 +3276,16 @@ begin
   end;
 
   Self.Emit(#9'callq ' + AFuncSym);
-  { Caller cleans up stack args (SysV caller-cleans-up convention). }
-  if (not HasFloat) and (AArgs.Count > 6) then
-    Self.Emit(Format(#9'addq $%d, %%rsp', [(AArgs.Count - 6) * 8]));
+  { Caller cleans up stack args (SysV caller-cleans-up convention) and any
+    extra bytes allocated by EmitOpenArrayLiteral for inline array literals. }
+  if (not HasFloat) then
+  begin
+    CleanUp := ExtraStackBytes;
+    if SlotCount > 6 then
+      Inc(CleanUp, (SlotCount - 6) * 8);
+    if CleanUp > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
+  end;
 end;
 
 { Spill the incoming argument register at index AIdx into the param slot
@@ -3206,9 +3532,11 @@ begin
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
+    if P.IsOpenArray then Continue;  { open array: (ptr, high) pair — always ok }
     if not IsIntFamily(P.ResolvedType) and not IsFloatFamily(P.ResolvedType) and
        ((P.ResolvedType = nil) or
-        not (P.ResolvedType.Kind in [tyString, tyPChar, tyPointer, tyClass])) then
+        not (P.ResolvedType.Kind in [tyString, tyPChar, tyPointer,
+                                     tyClass, tyOpenArray, tyDynArray])) then
       raise ENativeCodeGenError.Create(
         'native backend: unsupported parameter type (param ' + P.ParamName + ')');
   end;
@@ -3253,7 +3581,23 @@ begin
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
-    if IsFloatFamily(P.ResolvedType) then
+    if P.IsOpenArray then
+    begin
+      { Open array: two consecutive integer registers — data ptr then high index. }
+      if IntIdx < 6 then
+      begin
+        Self.Emit(Format(#9'movq %s, %s',
+          [SysVArgRegs64[IntIdx], Self.VarOperand(P.ParamName)]));
+        Inc(IntIdx);
+      end;
+      if IntIdx < 6 then
+      begin
+        Self.Emit(Format(#9'movq %s, %s',
+          [SysVArgRegs64[IntIdx], Self.VarOperand(P.ParamName + '_high')]));
+        Inc(IntIdx);
+      end;
+    end
+    else if IsFloatFamily(P.ResolvedType) then
     begin
       if XmmIdx < 6 then
       begin
@@ -3371,7 +3715,8 @@ begin
     if IsIntFamily(VD.ResolvedType) or IsFloatFamily(VD.ResolvedType) or
        ((VD.ResolvedType <> nil) and
         (VD.ResolvedType.Kind in [tyRecord, tyStaticArray, tyClass,
-                                  tyProcedural, tyPointer, tyString, tyPChar])) then
+                                  tyProcedural, tyPointer, tyString, tyPChar,
+                                  tyDynArray])) then
       for J := 0 to VD.Names.Count - 1 do
         Self.AddGlobal(VD.Names.Strings[J], VD.ResolvedType);
   end;
