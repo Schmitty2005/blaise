@@ -75,6 +75,8 @@ type
     procedure TestRun_Native_WhileContinue;
     procedure TestRun_Native_ExitFromFunction;
     procedure TestRun_Native_ExitValueShorthand;
+    procedure TestRun_Native_SevenArgs;
+    procedure TestRun_Native_EightArgs;
   end;
 
 implementation
@@ -510,6 +512,35 @@ const
     end.
     ''';
 
+  { 7 integer args: first 6 in registers, 7th on the stack. }
+  SrcSevenArgs = '''
+    program P;
+    function Sum7(A, B, C, D, E, F, G: Integer): Integer;
+    begin
+      Result := A + B + C + D + E + F + G
+    end;
+    begin
+      WriteLn(Sum7(1, 2, 3, 4, 5, 6, 7))
+    end.
+    ''';
+
+  { 8 integer args: first 6 in registers, 7th and 8th on the stack. }
+  SrcEightArgs = '''
+    program P;
+    function Sum8(A, B, C, D, E, F, G, H: Integer): Integer;
+    begin
+      Result := A + B + C + D + E + F + G + H
+    end;
+    function Diff8(A, B, C, D, E, F, G, H: Integer): Integer;
+    begin
+      Result := A - B - C - D - E - F - G - H
+    end;
+    begin
+      WriteLn(Sum8(1, 2, 3, 4, 5, 6, 7, 8));
+      WriteLn(Diff8(100, 1, 2, 3, 4, 5, 6, 7))
+    end.
+    ''';
+
 { Every test below runs its source through BOTH backends (beQBE, beNative)
   and asserts identical stdout/exit on each — the native backend's whole
   correctness model is parity with QBE on the same source, so this exercises
@@ -702,6 +733,20 @@ begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   { Clamp(5,1,10)=5; Clamp(-3,1,10)=1; Clamp(99,1,10)=10 }
   AssertRunsOnBoth(SrcExitValue, '5' + LE + '1' + LE + '10' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_SevenArgs;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  { 1+2+3+4+5+6+7 = 28 }
+  AssertRunsOnBoth(SrcSevenArgs, '28' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_EightArgs;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  { 1+2+3+4+5+6+7+8 = 36; 100-1-2-3-4-5-6-7 = 72 }
+  AssertRunsOnBoth(SrcEightArgs, '36' + LE + '72' + LE, 0);
 end;
 
 initialization

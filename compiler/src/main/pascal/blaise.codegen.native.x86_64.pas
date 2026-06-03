@@ -284,7 +284,14 @@ var
   Off: Integer;
 begin
   if (FFrame <> nil) and FFrame.TryGetValue(AName, Off) then
-    Result := Format('-%d(%%rbp)', [Off])
+  begin
+    { Negative offset: local/param slot below %rbp (-8, -16, ...).
+      Positive offset: stack-passed param above %rbp (+16, +24, ...). }
+    if Off > 0 then
+      Result := Format('%d(%%rbp)', [Off])
+    else
+      Result := Format('-%d(%%rbp)', [-Off])
+  end
   else
     Result := AName + '(%rip)';
 end;
@@ -336,32 +343,40 @@ begin
 end;
 
 { Reserve an 8-byte-aligned slot for AName of type AType, advancing AOffset.
-  Every slot is rounded to 8 so an Int64 (or any wider local added later) is
-  naturally aligned and a narrow slot never straddles an 8-byte boundary.
-  Naive but correct; a packed layout is a later optimisation. }
+  Stores the offset as a negative integer so VarOperand emits -N(%rbp). }
 procedure TX86_64Backend.AddSlot(const AName: string; AType: TTypeDesc;
                                  var AOffset: Integer);
 begin
   Inc(AOffset, 8);
-  FFrame.Add(AName, AOffset);
+  FFrame.Add(AName, -AOffset);
   FFrameTypes.Add(AName, AType);
 end;
 
 procedure TX86_64Backend.BuildFrame(ADecl: TMethodDecl);
 var
-  I, J, Offset: Integer;
+  I, J, Offset, StackOff: Integer;
   P:    TMethodParam;
   VD:   TVarDecl;
 begin
   Self.ClearFrame;
   FFrame      := TDictionary<>.Create;
   FFrameTypes := TDictionary<>.Create;
-  Offset := 0;
-  { Params first (spilled from arg registers in the prologue). }
+  Offset   := 0;
+  StackOff := 16;  { first stack arg: +16(%rbp) — above saved %rbp and ret addr }
+  { Params: first 6 are register-passed (spilled to negative slots in prologue);
+    args 7+ are already on the stack at positive %rbp offsets. }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
-    Self.AddSlot(P.ParamName, P.ResolvedType, Offset);
+    if I < 6 then
+      Self.AddSlot(P.ParamName, P.ResolvedType, Offset)
+    else
+    begin
+      { Stack-passed param: lives at +StackOff(%rbp), pushed by caller. }
+      FFrame.Add(P.ParamName, StackOff);
+      FFrameTypes.Add(P.ParamName, P.ResolvedType);
+      Inc(StackOff, 8);
+    end;
   end;
   { Result slot for a function (not a procedure). }
   if ADecl.ResolvedReturnType <> nil then
@@ -862,12 +877,11 @@ end;
 { Calls and function definitions                                       }
 { ------------------------------------------------------------------ }
 
-{ Emit a direct call.  Integer value arguments are passed in the SysV integer
-  registers (edi, esi, edx, ecx, r8d, r9d).  Each argument is fully evaluated
-  to %eax and pushed; once all are on the stack they are popped into the arg
-  registers, so a complex argument expression cannot clobber an already-set
-  arg register.  The pushes balance the pops, keeping %rsp 16-aligned at the
-  call.  Result (if any) is left in %eax. }
+{ Emit a direct call.  SysV AMD64: args 0-5 in rdi/rsi/rdx/rcx/r8/r9; args 6-7
+  on the stack (right-to-left, so +16(%rbp)=arg6, +24(%rbp)=arg7 in callee).
+  All args are evaluated left-to-right and pushed; a two-pass pop/re-push then
+  routes them to the right place.  %r10/%r11 are caller-saved scratch for the
+  stack-arg reversal.  Up to 8 total args supported; more raises a clear error. }
 procedure TX86_64Backend.EmitCall(const AFuncSym: string; ADecl: TMethodDecl;
                                   AArgs: TObjectList);
 var
@@ -875,11 +889,6 @@ var
   Arg:   TASTExpr;
   IsVar: Boolean;
 begin
-  if AArgs.Count > 6 then
-    raise ENativeCodeGenError.Create(
-      'native backend: more than 6 arguments not yet supported');
-  { Evaluate left-to-right, pushing each result.  For var/out params push the
-    address of the actual argument instead of its value. }
   for I := 0 to AArgs.Count - 1 do
   begin
     Arg := TASTExpr(AArgs.Items[I]);
@@ -904,10 +913,44 @@ begin
       Self.Emit(#9'pushq %rax');
     end;
   end;
-  { Pop into argument registers in reverse so register i gets argument i. }
-  for I := AArgs.Count - 1 downto 0 do
-    Self.Emit(#9'popq ' + SysVArgRegs64[I]);
+
+  if AArgs.Count <= 6 then
+  begin
+    { All args go in registers: pop in reverse so reg[i] ← arg[i]. }
+    for I := AArgs.Count - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I]);
+  end
+  else
+  begin
+    { Stack (top→bottom): argN-1 ... arg6 arg5 ... arg0.
+      Pop stack args (argN-1 first) into %r10/%r11 (caller-saved scratch),
+      then pop reg args into their registers, then re-push stack args so
+      arg6 lands on top at callq (+16(%rbp) in callee). }
+    if AArgs.Count > 8 then
+      raise ENativeCodeGenError.Create(
+        'native backend: more than 8 arguments not yet supported');
+    { Pop stack args (highest index first) into scratch: %r10=argN-1, %r11=argN-2. }
+    for I := AArgs.Count - 1 downto 6 do
+    begin
+      if (I - 6) = 0 then Self.Emit(#9'popq %r10')
+      else               Self.Emit(#9'popq %r11');
+    end;
+    { Pop register args (deepest = arg0) in reverse → reg[i] ← arg[i]. }
+    for I := 5 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I]);
+    { Re-push stack args: argN-1 first (deepest), arg6 last (top at callq).
+      SysV: +16(%rbp)=arg6 (top of stack at call), +24(%rbp)=arg7 if present. }
+    for I := AArgs.Count - 1 downto 6 do
+    begin
+      if (I - 6) = 0 then Self.Emit(#9'pushq %r10')
+      else               Self.Emit(#9'pushq %r11');
+    end;
+  end;
+
   Self.Emit(#9'callq ' + AFuncSym);
+  { Caller cleans up stack args (SysV caller-cleans-up convention). }
+  if AArgs.Count > 6 then
+    Self.Emit(Format(#9'addq $%d, %%rsp', [(AArgs.Count - 6) * 8]));
 end;
 
 { Spill the incoming argument register at index AIdx into the param slot
@@ -947,10 +990,6 @@ var
   P:   TMethodParam;
   Sym: string;
 begin
-  { Reject what the backend does not handle yet, loudly. }
-  if ADecl.Params.Count > 6 then
-    raise ENativeCodeGenError.Create(
-      'native backend: more than 6 parameters not yet supported');
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
@@ -975,10 +1014,11 @@ begin
   Self.Emit(#9'movq %rsp, %rbp');
   if FFrameSize > 0 then
     Self.Emit(Format(#9'subq $%d, %%rsp', [FFrameSize]));
-  { Spill incoming argument registers into the param slots.  Var/out params
-    arrive as pointers (always 64-bit); value params spill at their width. }
+  { Spill the first 6 incoming argument registers into their param slots.
+    Params 7+ are already on the stack at positive %rbp offsets — no spill. }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
+    if I >= 6 then Break;
     P := TMethodParam(ADecl.Params.Items[I]);
     if P.IsVarParam then
       Self.Emit(Format(#9'movq %s, %s',
