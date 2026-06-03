@@ -3038,3 +3038,59 @@ Pascal programmer reaches for `High`/`Low` first, and finding a
 helpful targeted error message ("use `Math.Infinity`...") only on
 floats is a much better DX than a generic "must be an array" error on
 every primitive.
+
+== Diamond Operator — Generic Type-Argument Inference
+
+=== Decision
+
+Blaise supports the diamond operator `<>` in constructor assignment expressions.
+When a variable is declared with a fully-specified generic type, the constructor
+call on the right-hand side may omit the type arguments:
+
+[source,pascal]
+----
+var S: TStack<string>;
+S := TStack<>.Create;          // equivalent to TStack<string>.Create
+
+var D: TDictionary<string, Integer>;
+D := TDictionary<>.Create;     // infers both K and V from the LHS
+----
+
+The operator works for any number of type parameters — single-argument generics
+(`TStack<T>`, `TList<T>`) and multi-argument generics (`TDictionary<K,V>`,
+`TPair<K,V>`) alike.
+
+=== Rationale
+
+Repeating the full type argument list at every constructor call site is redundant
+when the declared variable type already carries the complete instantiation.
+Java introduced the diamond operator in Java 7 for the same reason; the pattern
+is well understood.
+
+The restriction to assignment context keeps the implementation minimal and
+unambiguous: the semantic pass has the declared LHS type available at the point
+it encounters the RHS constructor call, so inference requires no lookahead or
+backtracking.  Inference in other contexts (parameter passing, return values)
+would require a more general type-propagation pass and is left to a future
+decision.
+
+=== Alternatives considered
+
+*Require explicit type arguments everywhere* — rejected.  Writing
+`TStack<string>.Create` in both the `var` declaration and the constructor call
+is mechanical duplication that adds noise without information.
+
+*Infer at all call sites, not just assignments* — deferred.  Inference from
+parameter and return-type context requires propagating the expected type through
+the expression tree before the call is analysed.  The assignment case covers the
+common pattern at zero additional complexity.
+
+=== Implementation
+
+The lexer folds `<>` into the single token `tkNotEquals`.  The expression parser
+detects `IDENT tkNotEquals DOT` as the diamond pattern and stores the sentinel
+string `TFoo<>` in `TFieldAccessExpr.RecordName`.  The semantic pass — in
+`AnalyseAssignment`, after resolving the LHS type — calls `ResolveDiamond`,
+which replaces the sentinel with the full concrete type name taken from
+`ResolvedLhsType.Name`.  Subsequent semantic analysis proceeds identically to
+an explicit constructor call.

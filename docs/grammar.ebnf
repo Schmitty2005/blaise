@@ -872,6 +872,17 @@ ArrayLiteral
  *   IDENT, and (b) the token after that is GREATER or COMMA.  Otherwise LESS
  *   is a comparison operator (e.g. "if A < B then").
  *
+ * Diamond operator (type-argument inference):
+ *   IDENT NOTEQUALS DOT ... is parsed as IDENT '<>' DOT — the lexer folds '<>'
+ *   into a single tkNotEquals token.  When '<>' appears as generic type args in
+ *   an assignment RHS constructor call (TFoo<>.Create), the semantic pass infers
+ *   all type arguments from the declared type of the LHS variable.
+ *   Only valid in assignment context; the LHS must be a concrete generic
+ *   instantiation whose base name matches the constructor type name.
+ *   Examples:
+ *     var S: TStack<string>;   S := TStack<>.Create;
+ *     var D: TDictionary<string,Integer>;  D := TDictionary<>.Create;
+ *
  * Virtual dispatch vs. static call:
  *   Determined at semantic time from the VTableSlot field on the resolved
  *   method declaration.  Grammar is identical for both cases.

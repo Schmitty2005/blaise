@@ -1210,6 +1210,12 @@ begin
       [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
   Result := FCurrent.Value;
   Advance;
+  if Check(tkNotEquals) then
+  begin
+    { Diamond in type-name context: TFoo<> — lexer folds '<>' into tkNotEquals }
+    Advance;
+    Exit(Result + '<>');
+  end;
   if Check(tkLessThan) then
   begin
     Advance;  { consume '<' }
@@ -3244,11 +3250,24 @@ begin
         Line := FCurrent.Line;
         Col  := FCurrent.Col;
         Advance;
-        { Generic constructor: TypeName<Args>.Method
+        { Generic constructor: TypeName<Args>.Method  or diamond TypeName<>.Method
           Heuristic: '<' followed by IDENT followed by '>' or ',' is treated as
-          generic type args.  If the token two ahead is neither '>' nor ',', the
-          '<' is a comparison operator (e.g. "if A < B then"). }
-        if Check(tkLessThan) and (PeekKind = tkIdent) and
+          generic type args.  '<>' (empty) is the diamond operator — type args
+          inferred by the semantic pass from the LHS type.
+          If the token two ahead is neither '>' nor ',', the '<' is a comparison
+          operator (e.g. "if A < B then"). }
+        if Check(tkNotEquals) and (PeekKind = tkDot) then
+        begin
+          { Diamond: TFoo<> — the lexer folds '<>' into a single tkNotEquals token }
+          Advance;  { consume '<>' }
+          Name := Name + '<>';
+          { Must be followed by '.' (type access) }
+          if not Check(tkDot) then
+            raise EParseError.Create(Format(
+              'Expected ''.'' after ''<>'' at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        end
+        else if Check(tkLessThan) and (PeekKind = tkIdent) and
            (PeekKind2 in [tkGreaterThan, tkComma]) then
         begin
           Advance;  { consume '<' }

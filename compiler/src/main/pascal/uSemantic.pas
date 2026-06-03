@@ -4708,6 +4708,29 @@ begin
   ACall.IsVarParam        := (ObjSym.Kind = skVarParameter);
 end;
 
+{ If AExpr is a diamond constructor call (RecordName ends with '<>'), replace
+  the sentinel with the full concrete type name from ALhsType.  This implements
+  the diamond operator: TFoo<> infers all type arguments from the LHS. }
+procedure ResolveDiamond(AExpr: TASTExpr; ALhsType: TTypeDesc);
+var
+  FA: TFieldAccessExpr;
+  BaseName: string;
+  BrPos: Integer;
+begin
+  if not (AExpr is TFieldAccessExpr) then Exit;
+  FA := TFieldAccessExpr(AExpr);
+  if (Length(FA.RecordName) < 3) or
+     (StrCopyTail(FA.RecordName, Length(FA.RecordName) - 2) <> '<>') then Exit;
+  if ALhsType = nil then Exit;
+  { LHS must be a concrete generic instantiation whose name contains '<' }
+  BaseName := StrHead(FA.RecordName, Length(FA.RecordName) - 2);
+  BrPos := StrPos('<', ALhsType.Name);
+  if (ALhsType.Kind = tyClass) and
+     (BrPos >= 0) and
+     SameText(StrHead(ALhsType.Name, BrPos), BaseName) then
+    FA.RecordName := ALhsType.Name;
+end;
+
 procedure TSemanticAnalyser.AnalyseAssignment(AAssign: TAssignment);
 var
   VarSym:  TSymbol;
@@ -4725,6 +4748,7 @@ begin
       begin
         AAssign.ImplicitSelfField := FldInfo;
         AAssign.ResolvedLhsType   := FldInfo.TypeDesc;
+        ResolveDiamond(AAssign.Expr, FldInfo.TypeDesc);
         ExprType := AnalyseExpr(AAssign.Expr);
         CheckTypesMatch(FldInfo.TypeDesc, ExprType, 'assignment', AAssign.Line, AAssign.Col);
         Exit;
@@ -4744,6 +4768,8 @@ begin
   AAssign.ResolvedLhsType := VarSym.TypeDesc;
   AAssign.IsWeakLhs       := VarSym.IsWeak;
   AAssign.IsGlobal        := VarSym.IsGlobal;
+
+  ResolveDiamond(AAssign.Expr, VarSym.TypeDesc);
 
   { Set-literal assignment: [elem, ...] on RHS when LHS is a set type }
   if (VarSym.TypeDesc.Kind = tySet) and (AAssign.Expr is TArrayLiteralExpr) then

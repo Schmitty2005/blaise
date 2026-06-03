@@ -89,6 +89,16 @@ type
     procedure TestSemantic_Generic_TwoInstancesOfSameClass_Resolve;
     procedure TestSemantic_Generic_TwoInstances_PointerFieldDistinctTypes;
     procedure TestCodegen_Generic_TwoInstances_MethodCallsResolveToOwnInstance;
+
+    { ------------------------------------------------------------------ }
+    { Diamond operator: TFoo<> infers type args from LHS                  }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_Diamond_SingleArg_Producessentinel;
+    procedure TestParse_Diamond_TwoArgs_ProducesSentinel;
+    procedure TestSemantic_Diamond_SingleArg_InfersType;
+    procedure TestSemantic_Diamond_TwoArgs_InfersType;
+    procedure TestCodegen_Diamond_SingleArg_EmitsSameIR;
+    procedure TestCodegen_Diamond_TwoArgs_EmitsSameIR;
   end;
 
 implementation
@@ -969,6 +979,154 @@ begin
     Pos('call $TBox_Integer_SetValue', IntBody) > 0);
   AssertTrue('TBox_String_Init body calls $TBox_String_SetValue',
     Pos('call $TBox_String_SetValue', StrBody) > 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Diamond operator tests                                             }
+{ ------------------------------------------------------------------ }
+
+const
+  SrcDiamondSingleArg =
+    '''
+        program P;
+        type
+          TBox<T> = class
+            FValue: T;
+            function GetValue: T;
+            begin
+              Result := Self.FValue
+            end;
+            procedure SetValue(AVal: T);
+            begin
+              Self.FValue := AVal
+            end;
+          end;
+        var B: TBox<Integer>;
+        begin
+          B := TBox<>.Create;
+          B.SetValue(42);
+          WriteLn(B.GetValue())
+        end.
+        ''';
+
+  SrcDiamondTwoArgs =
+    '''
+        program P;
+        type
+          TPair<K, V> = class
+            FKey: K;
+            FVal: V;
+          end;
+        var P: TPair<string, Integer>;
+        begin
+          P := TPair<>.Create
+        end.
+        ''';
+
+procedure TGenericsTests.TestParse_Diamond_SingleArg_Producessentinel;
+var
+  Prog:   TProgram;
+  Assign: TAssignment;
+  Expr:   TFieldAccessExpr;
+begin
+  Prog := ParseSrc(SrcDiamondSingleArg);
+  try
+    AssertTrue('stmt 0 is assignment', Prog.Block.Stmts[0] is TAssignment);
+    Assign := TAssignment(Prog.Block.Stmts[0]);
+    AssertTrue('rhs is TFieldAccessExpr', Assign.Expr is TFieldAccessExpr);
+    Expr := TFieldAccessExpr(Assign.Expr);
+    AssertEquals('diamond produces TBox<> sentinel', 'TBox<>', Expr.RecordName);
+    AssertEquals('field is Create', 'Create', Expr.FieldName);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TGenericsTests.TestParse_Diamond_TwoArgs_ProducesSentinel;
+var
+  Prog:   TProgram;
+  Assign: TAssignment;
+  Expr:   TFieldAccessExpr;
+begin
+  Prog := ParseSrc(SrcDiamondTwoArgs);
+  try
+    AssertTrue('stmt 0 is assignment', Prog.Block.Stmts[0] is TAssignment);
+    Assign := TAssignment(Prog.Block.Stmts[0]);
+    AssertTrue('rhs is TFieldAccessExpr', Assign.Expr is TFieldAccessExpr);
+    Expr := TFieldAccessExpr(Assign.Expr);
+    AssertEquals('diamond produces TPair<> sentinel', 'TPair<>', Expr.RecordName);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TGenericsTests.TestSemantic_Diamond_SingleArg_InfersType;
+var
+  Prog:   TProgram;
+  Assign: TAssignment;
+  Expr:   TFieldAccessExpr;
+begin
+  Prog := AnalyseSrc(SrcDiamondSingleArg);
+  try
+    AssertTrue('stmt 0 is assignment', Prog.Block.Stmts[0] is TAssignment);
+    Assign := TAssignment(Prog.Block.Stmts[0]);
+    Expr := TFieldAccessExpr(Assign.Expr);
+    AssertEquals('diamond resolved to TBox<Integer>', 'TBox<Integer>', Expr.RecordName);
+    AssertTrue('marked constructor', Expr.IsConstructorCall);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TGenericsTests.TestSemantic_Diamond_TwoArgs_InfersType;
+var
+  Prog:   TProgram;
+  Assign: TAssignment;
+  Expr:   TFieldAccessExpr;
+begin
+  Prog := AnalyseSrc(SrcDiamondTwoArgs);
+  try
+    AssertTrue('stmt 0 is assignment', Prog.Block.Stmts[0] is TAssignment);
+    Assign := TAssignment(Prog.Block.Stmts[0]);
+    Expr := TFieldAccessExpr(Assign.Expr);
+    AssertEquals('diamond resolved to TPair<string,Integer> (no space after comma)',
+      'TPair<string,Integer>', Expr.RecordName);
+    AssertTrue('marked constructor', Expr.IsConstructorCall);
+  finally
+    Prog.Free;
+  end;
+end;
+
+procedure TGenericsTests.TestCodegen_Diamond_SingleArg_EmitsSameIR;
+var
+  IRExplicit, IRDiamond: string;
+begin
+  IRExplicit := GenIR(SrcGenericUsage);
+  IRDiamond  := GenIR(SrcDiamondSingleArg);
+  AssertEquals('diamond IR identical to explicit', IRExplicit, IRDiamond);
+end;
+
+procedure TGenericsTests.TestCodegen_Diamond_TwoArgs_EmitsSameIR;
+var
+  SrcExplicit: string;
+  IRExplicit, IRDiamond: string;
+begin
+  SrcExplicit :=
+    '''
+        program P;
+        type
+          TPair<K, V> = class
+            FKey: K;
+            FVal: V;
+          end;
+        var P: TPair<string, Integer>;
+        begin
+          P := TPair<string, Integer>.Create
+        end.
+        ''';
+  IRExplicit := GenIR(SrcExplicit);
+  IRDiamond  := GenIR(SrcDiamondTwoArgs);
+  AssertEquals('diamond IR identical to explicit', IRExplicit, IRDiamond);
 end;
 
 initialization

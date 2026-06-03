@@ -70,6 +70,10 @@ type
 
     { Nested procedures }
     procedure TestRun_NestedProc_MutatesCapturedVar;
+
+    { Diamond operator: TFoo<> infers type args from LHS }
+    procedure TestRun_Diamond_SingleArg_WorksAtRuntime;
+    procedure TestRun_Diamond_TwoArgs_WorksAtRuntime;
   end;
 
 implementation
@@ -780,6 +784,67 @@ begin
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('x=5, inner mutates to 15, outer sees 15',
     '5' + LE + '15' + LE + '15' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_Diamond_SingleArg_WorksAtRuntime;
+const
+  Src = '''
+    program P;
+    type
+      TBox<T> = class
+        FValue: T;
+        function  GetValue: T;
+        begin Result := Self.FValue end;
+        procedure SetValue(V: T);
+        begin Self.FValue := V end;
+      end;
+    var B: TBox<Integer>;
+    begin
+      B := TBox<>.Create;
+      B.SetValue(99);
+      WriteLn(B.GetValue())
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output', '99' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_Diamond_TwoArgs_WorksAtRuntime;
+const
+  Src = '''
+    program P;
+    type
+      TPair<K, V> = class
+        FKey: K;
+        FVal: V;
+        function  GetKey: K;
+        begin Result := Self.FKey end;
+        function  GetVal: V;
+        begin Result := Self.FVal end;
+        procedure SetKey(K2: K);
+        begin Self.FKey := K2 end;
+        procedure SetVal(V2: V);
+        begin Self.FVal := V2 end;
+      end;
+    var P: TPair<Integer, Integer>;
+    begin
+      P := TPair<>.Create;
+      P.SetKey(3);
+      P.SetVal(7);
+      WriteLn(P.GetKey());
+      WriteLn(P.GetVal())
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output', '3' + LE + '7' + LE, Output);
 end;
 
 initialization
