@@ -3663,7 +3663,15 @@ begin
       Self.EmitLoadVar(Self.VarOperand('Result'), ADecl.ResolvedReturnType);
   end;
   { Release ARC-managed local string vars (not params, not Result).
-    Result is returned to the caller who owns it; params are caller-owned. }
+    Result is returned to the caller who owns it; params are caller-owned.
+
+    TODO(arc): the native backend does not yet retain string/class *value*
+    params on entry and release them on exit (the QBE backend does — see the
+    entry/exit ARC loops in uCodeGenQBE.pas).  When that retain/release is
+    added here, it MUST skip params where P.IsConstParam is True (as well as
+    IsVarParam / IsOpenArray): a const param's object is kept alive by the
+    caller for the whole call, so no callee-side retain/release is needed.
+    See the matching `or Par.IsConstParam` guards in uCodeGenQBE.pas. }
   if ADecl.Body <> nil then
   begin
     for I := 0 to ADecl.Body.Decls.Count - 1 do

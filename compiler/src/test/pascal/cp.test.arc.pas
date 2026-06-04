@@ -48,6 +48,10 @@ type
     procedure TestARC_StringVarParam_NoAddRef;
     procedure TestARC_StringVarParam_NoRelease;
 
+    { String const parameter: no addref, no release (caller holds it alive) }
+    procedure TestARC_StringConstParam_NoAddRef;
+    procedure TestARC_StringConstParam_NoRelease;
+
     { String concatenation: calls RTL concat function }
     procedure TestARC_StringConcat_SemanticOK;
     procedure TestARC_StringConcat_CallsRTL;
@@ -290,6 +294,14 @@ const
         begin end.
         ''';
 
+  SrcConstParam =
+    '''
+        program P;
+        procedure Greet(const S: string);
+        begin end;
+        begin end.
+        ''';
+
   SrcConcat =
     '''
         program P;
@@ -329,6 +341,22 @@ var
 begin
   IR := GenIR(SrcVarParam);
   AssertFalse('no release for string var param', IRContains(IR, 'call $_StringRelease'));
+end;
+
+procedure TARCTests.TestARC_StringConstParam_NoAddRef;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcConstParam);
+  AssertFalse('no addref for string const param', IRContains(IR, 'call $_StringAddRef'));
+end;
+
+procedure TARCTests.TestARC_StringConstParam_NoRelease;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcConstParam);
+  AssertFalse('no release for string const param', IRContains(IR, 'call $_StringRelease'));
 end;
 
 procedure TARCTests.TestARC_StringConcat_SemanticOK;

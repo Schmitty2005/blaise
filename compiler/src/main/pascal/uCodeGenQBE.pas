@@ -5258,11 +5258,13 @@ begin
   EmitParamAllocs(AMethod, nil);
 
   { ARC: addref string and class value params on entry — balances the
-    release pass at method exit. }
+    release pass at method exit. const params are skipped: the caller
+    guarantees the object stays alive for the whole call, so the callee
+    needs no retain/release. }
   for I := 0 to AMethod.Params.Count - 1 do
   begin
     Par := TMethodParam(AMethod.Params.Items[I]);
-    if Par.IsVarParam or Par.IsOpenArray then Continue;
+    if Par.IsVarParam or Par.IsOpenArray or Par.IsConstParam then Continue;
     if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;
@@ -5313,11 +5315,12 @@ begin
     FExitLabel := SavedExitLbl;
   end;
 
-  { ARC: release string and class value params on exit. }
+  { ARC: release string and class value params on exit. const params are
+    skipped to match the entry pass (no retain was taken). }
   for I := 0 to AMethod.Params.Count - 1 do
   begin
     Par := TMethodParam(AMethod.Params.Items[I]);
-    if Par.IsVarParam or Par.IsOpenArray then Continue;
+    if Par.IsVarParam or Par.IsOpenArray or Par.IsConstParam then Continue;
     if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;
@@ -6088,11 +6091,13 @@ begin
   end;
 
   { ARC: addref string and class value params on entry (callee owns a
-    retained copy that is balanced by the release pass at function exit). }
+    retained copy that is balanced by the release pass at function exit).
+    const params are skipped: the caller keeps the object alive for the
+    whole call, so no retain/release is needed. }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     Par := TMethodParam(ADecl.Params.Items[I]);
-    if Par.IsVarParam or Par.IsOpenArray then Continue;
+    if Par.IsVarParam or Par.IsOpenArray or Par.IsConstParam then Continue;
     if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;
@@ -6149,11 +6154,12 @@ begin
   end;
 
   { ARC: release string and class value params on exit (balances the
-    addref inserted at function entry). }
+    addref inserted at function entry). const params are skipped to match
+    the entry pass (no retain was taken). }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     Par := TMethodParam(ADecl.Params.Items[I]);
-    if Par.IsVarParam or Par.IsOpenArray then Continue;
+    if Par.IsVarParam or Par.IsOpenArray or Par.IsConstParam then Continue;
     if Par.ResolvedType.Kind = tyString then
     begin
       ValTemp := AllocTemp;

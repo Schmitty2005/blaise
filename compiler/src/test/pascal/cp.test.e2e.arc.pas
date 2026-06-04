@@ -27,6 +27,7 @@ type
     procedure TestRun_WeakRef_BreaksCycle_Valgrind;
     procedure TestRun_ClassDestroy_FreesBuffer_Valgrind;
     procedure TestRun_TListARC_Valgrind;
+    procedure TestRun_ConstParam_NoRetainRelease_Valgrind;
     { Three instantiations of the same generic class: verifies the Pointer→class
       ARC coercion bug is fixed (the 3rd instantiation no longer uses freed memory). }
     procedure TestRun_ThreeGenericInstances_AllWork;
@@ -313,6 +314,49 @@ const
       WriteLn(C.Value)
     end.
     ''';
+
+const
+  { const class/string params: the codegen elides the callee-side
+    _ClassAddRef/_ClassRelease and _StringAddRef/_StringRelease pair because
+    the caller keeps the argument alive for the whole call.  This program
+    passes both a class instance and a string as const and uses them inside
+    the callee; valgrind must report no leak and no use-after-free, proving
+    the elision is balanced (no over-release, no missing retain). }
+  SrcConstParamNoRetain = '''
+    program P;
+    type
+      TThing = class
+        FValue: Integer;
+      end;
+    procedure Show(const T: TThing; const S: string);
+    begin
+      WriteLn(S);
+      WriteLn(T.FValue)
+    end;
+    var
+      A: TThing;
+    begin
+      A := TThing.Create;
+      A.FValue := 99;
+      Show(A, 'hello')
+    end.
+    ''';
+
+procedure TE2EArcTests.TestRun_ConstParam_NoRetainRelease_Valgrind;
+var Output: string; RCode: Integer; Log: string; OK: Boolean;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcConstParamNoRetain, Output, RCode));
+  AssertEquals('exit 0', 0, RCode);
+  AssertEquals('stdout', 'hello' + LE + '99' + LE, Output);
+  if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
+  OK := RunUnderValgrind(SrcConstParamNoRetain, Log);
+  if not OK then
+  begin
+    if Log = '' then Log := '(valgrind produced no output)';
+    Fail('const-param ARC elision unbalanced — valgrind reports:' + LE + Log);
+  end;
+end;
 
 procedure TE2EArcTests.TestRun_ThreeGenericInstances_AllWork;
 var Output: string; RCode: Integer;
