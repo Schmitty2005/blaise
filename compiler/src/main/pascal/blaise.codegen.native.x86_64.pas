@@ -4832,6 +4832,30 @@ begin
             [Self.IntfItabOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J], False)]));
         end;
     end;
+  { ARC: retain string/class/interface value params on entry — balances the
+    release pass at the epilogue.  Skip var, out, open-array and const params. }
+  for I := 0 to ADecl.Params.Count - 1 do
+  begin
+    P := TMethodParam(ADecl.Params.Items[I]);
+    if P.IsVarParam or P.IsOpenArray or P.IsConstParam then Continue;
+    if P.ResolvedType = nil then Continue;
+    if P.ResolvedType.Kind = tyString then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(P.ParamName)]));
+      Self.Emit(#9'callq _StringAddRef');
+    end
+    else if P.ResolvedType.Kind = tyClass then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(P.ParamName)]));
+      Self.Emit(#9'callq _ClassAddRef');
+    end
+    else if P.ResolvedType.Kind = tyInterface then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rdi',
+        [Self.IntfObjOperand(P.ParamName, False)]));
+      Self.Emit(#9'callq _ClassAddRef');
+    end;
+  end;
   { Body.  FExitLabel directs Exit statements to the epilogue. }
   FExitLabel := Self.NewLabel('exit');
   if ADecl.Body <> nil then
@@ -4847,17 +4871,8 @@ begin
     else
       Self.EmitLoadVar(Self.VarOperand('Result'), ADecl.ResolvedReturnType);
   end;
-  { Release ARC-managed local string vars (not params, not Result).
-    Result is returned to the caller who owns it; params are caller-owned.
-
-    TODO(arc): the native backend does not yet retain string/class/interface
-    *value* params on entry and release them on exit (the QBE backend does —
-    see the entry/exit ARC loops in uCodeGenQBE.pas; interfaces ARC through the
-    object slot of their fat pointer).  When that retain/release is added here,
-    it MUST skip params where P.IsConstParam is True (as well as IsVarParam /
-    IsOpenArray): a const param's object is kept alive by the caller for the
-    whole call, so no callee-side retain/release is needed.  See the matching
-    `or Par.IsConstParam` guards in uCodeGenQBE.pas. }
+  { Release ARC-managed locals (not params, not Result).
+    Result is returned to the caller who owns it. }
   if ADecl.Body <> nil then
   begin
     for I := 0 to ADecl.Body.Decls.Count - 1 do
@@ -4880,6 +4895,30 @@ begin
             [Self.IntfObjOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J], False)]));
           Self.Emit(#9'callq _ClassRelease');
         end;
+    end;
+  end;
+  { ARC: release string/class/interface value params on exit — matches the
+    entry retain pass.  Skip var, out, open-array and const params. }
+  for I := 0 to ADecl.Params.Count - 1 do
+  begin
+    P := TMethodParam(ADecl.Params.Items[I]);
+    if P.IsVarParam or P.IsOpenArray or P.IsConstParam then Continue;
+    if P.ResolvedType = nil then Continue;
+    if P.ResolvedType.Kind = tyString then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(P.ParamName)]));
+      Self.Emit(#9'callq _StringRelease');
+    end
+    else if P.ResolvedType.Kind = tyClass then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(P.ParamName)]));
+      Self.Emit(#9'callq _ClassRelease');
+    end
+    else if P.ResolvedType.Kind = tyInterface then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rdi',
+        [Self.IntfObjOperand(P.ParamName, False)]));
+      Self.Emit(#9'callq _ClassRelease');
     end;
   end;
   Self.Emit(#9'movq %rbp, %rsp');

@@ -174,6 +174,10 @@ type
     procedure TestRun_Native_ArcClassField_StoreAndRead;
     procedure TestRun_Native_ArcStringField_StoreAndRead;
 
+    { ARC value param retain/release }
+    procedure TestRun_Native_ArcValueParam_String;
+    procedure TestRun_Native_ArcValueParam_Class;
+
     { Generics }
     procedure TestRun_Native_GenericRecord_Method;
     procedure TestRun_Native_GenericClass_Method;
@@ -2420,6 +2424,39 @@ const
     end.
     ''';
 
+  SrcArcValueParamString = '''
+    program P;
+    procedure PrintIt(S: string);
+    begin
+      WriteLn(S)
+    end;
+    var Msg: string;
+    begin
+      Msg := 'arc-ok';
+      PrintIt(Msg);
+      WriteLn(Msg)
+    end.
+    ''';
+
+  SrcArcValueParamClass = '''
+    program P;
+    type
+      TObj = class
+        X: Integer;
+      end;
+    procedure PrintX(O: TObj);
+    begin
+      WriteLn(O.X)
+    end;
+    var Obj: TObj;
+    begin
+      Obj := TObj.Create;
+      Obj.X := 7;
+      PrintX(Obj);
+      WriteLn(Obj.X)
+    end.
+    ''';
+
   SrcGenericRecordMethod = '''
     program P;
     type
@@ -2661,6 +2698,18 @@ procedure TE2ENativeTests.TestRun_Native_ArcStringField_StoreAndRead;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcArcStringField, 'hello' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ArcValueParam_String;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcArcValueParamString, 'arc-ok' + LE + 'arc-ok' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ArcValueParam_Class;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcArcValueParamClass, '7' + LE + '7' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_GenericRecord_Method;
