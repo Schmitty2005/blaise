@@ -166,6 +166,12 @@ type
     { M8 — var/out params to a method call }
     procedure TestRun_Native_MethodVarParam_Mutates;
     procedure TestRun_Native_MethodVarParam_Swap;
+
+    { Generics }
+    procedure TestRun_Native_GenericRecord_Method;
+    procedure TestRun_Native_GenericClass_Method;
+    procedure TestRun_Native_GenericFunc_Standalone;
+    procedure TestRun_Native_GenericClass_Interface;
   end;
 
 implementation
@@ -2347,6 +2353,86 @@ const
     end.
     ''';
 
+  SrcGenericRecordMethod = '''
+    program P;
+    type
+      THolder<T> = record
+        Value: T;
+        function GetValue: T;
+        begin
+          Result := Self.Value
+        end;
+      end;
+    var
+      H: THolder<Integer>;
+    begin
+      H.Value := 42;
+      WriteLn(H.GetValue)
+    end.
+    ''';
+
+  SrcGenericClassMethod = '''
+    program P;
+    type
+      TBox<T> = class
+        FVal: T;
+        procedure SetVal(AVal: T);
+        begin
+          Self.FVal := AVal
+        end;
+        function GetVal: T;
+        begin
+          Result := Self.FVal
+        end;
+      end;
+    var
+      B: TBox<Integer>;
+    begin
+      B := TBox<Integer>.Create;
+      B.SetVal(99);
+      WriteLn(B.GetVal)
+    end.
+    ''';
+
+  SrcGenericFuncStandalone = '''
+    program P;
+    function Identity<T>(X: T): T;
+    begin
+      Result := X
+    end;
+    begin
+      WriteLn(Identity<Integer>(7))
+    end.
+    ''';
+
+  SrcGenericClassInterface = '''
+    program P;
+    type
+      IValue = interface
+        function GetValue: Integer;
+      end;
+      TBox<T> = class(TObject, IValue)
+        FVal: T;
+        procedure SetVal(AVal: T);
+        begin
+          Self.FVal := AVal
+        end;
+        function GetValue: Integer;
+        begin
+          Result := Self.FVal
+        end;
+      end;
+    var
+      V: IValue;
+      B: TBox<Integer>;
+    begin
+      B := TBox<Integer>.Create;
+      B.SetVal(55);
+      V := B;
+      WriteLn(V.GetValue)
+    end.
+    ''';
+
 procedure TE2ENativeTests.TestRun_Native_OpenArray_Sum;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
@@ -2490,6 +2576,30 @@ procedure TE2ENativeTests.TestRun_Native_IntfParam_ClassExpr;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcNativeIntfParamClassExpr, 'class-expr' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_GenericRecord_Method;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcGenericRecordMethod, '42' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_GenericClass_Method;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcGenericClassMethod, '99' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_GenericFunc_Standalone;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcGenericFuncStandalone, '7' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_GenericClass_Interface;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcGenericClassInterface, '55' + LE, 0);
 end;
 
 initialization

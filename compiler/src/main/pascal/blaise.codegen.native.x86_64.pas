@@ -343,9 +343,9 @@ end;
 function FuncSymbolFromDecl(ADecl: TMethodDecl): string;
 begin
   if (ADecl <> nil) and (ADecl.ResolvedQbeName <> '') then
-    Result := ADecl.ResolvedQbeName
+    Result := NativeMangle(ADecl.ResolvedQbeName)
   else if ADecl <> nil then
-    Result := ADecl.Name
+    Result := NativeMangle(ADecl.Name)
   else
     Result := '';
 end;
@@ -354,7 +354,7 @@ function FuncSymbolOf(ACall: TFuncCallExpr): string;
 begin
   Result := FuncSymbolFromDecl(TMethodDecl(ACall.ResolvedDecl));
   if Result = '' then
-    Result := ACall.Name;
+    Result := NativeMangle(ACall.Name);
 end;
 
 constructor TX86_64Backend.Create(const ATarget: TTargetDesc);
@@ -618,6 +618,21 @@ begin
   end;
 end;
 
+function FindMethodInClassDef(AClassDef: TClassTypeDef;
+  const AName: string): TMethodDecl;
+var
+  I: Integer;
+  M: TMethodDecl;
+begin
+  Result := nil;
+  for I := 0 to AClassDef.Methods.Count - 1 do
+  begin
+    M := TMethodDecl(AClassDef.Methods.Items[I]);
+    if SameText(M.Name, AName) then
+      Exit(M);
+  end;
+end;
+
 { Compute the mangled emit name for a class method: ResolvedQbeName if set,
   else TypeName_MethodName, both passed through NativeMangle. }
 function MethodEmitNameNative(ADecl: TMethodDecl; const ATypeName, AMethodName: string): string;
@@ -734,6 +749,13 @@ begin
       MethStr := '0';
   end;
 
+  { Generic class instances — emit class-name string blobs. }
+  for I := 0 to AProg.GenericInstances.Count - 1 do
+  begin
+    GI := TGenericInstance(AProg.GenericInstances.Items[I]);
+    Self.EmitClassNameString(GI.TypeName);
+  end;
+
   { Typeinfo blocks — must come after all class-name strings are emitted. }
   Self.Emit('.balign 8');
   Self.Emit('typeinfo_TObject:');
@@ -798,6 +820,33 @@ begin
     Self.Emit(#9'.quad 0');   { attrs }
   end;
 
+  { Typeinfo blocks for generic class instances. }
+  for I := 0 to AProg.GenericInstances.Count - 1 do
+  begin
+    GI := TGenericInstance(AProg.GenericInstances.Items[I]);
+    RT := TRecordTypeDesc(GI.TypeDesc);
+    MName := NativeMangle(GI.TypeName);
+    if RT.Parent <> nil then
+      ParentStr := 'typeinfo_' + NativeMangle(RT.Parent.Name)
+    else
+      ParentStr := '0';
+    if RT.ImplementsCount > 0 then
+      ImplStr := 'impllist_' + MName
+    else
+      ImplStr := '0';
+    Self.Emit('.balign 8');
+    Self.Emit('.globl typeinfo_' + MName);
+    Self.Emit('typeinfo_' + MName + ':');
+    Self.Emit(#9'.quad ' + ParentStr);
+    Self.Emit(#9'.quad ' + ImplStr);
+    Self.Emit(Format(#9'.quad __cn_%s + 12', [MName]));
+    Self.Emit(#9'.quad 0');
+    Self.Emit(Format(#9'.quad %d', [RT.TotalSize]));
+    Self.Emit(#9'.quad _FieldCleanup_' + MName);
+    Self.Emit(#9'.quad vtable_' + MName);
+    Self.Emit(#9'.quad 0');
+  end;
+
   { Field cleanup functions for the fixed RTL classes. }
   Self.EmitFieldCleanupFn('TObject', nil);
   Self.EmitFieldCleanupFn('TCustomAttribute', nil);
@@ -810,6 +859,13 @@ begin
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     RT := TRecordTypeDesc(TDesc);
     Self.EmitFieldCleanupFn(TD.Name, RT);
+  end;
+  { Field cleanup for generic class instances. }
+  for I := 0 to AProg.GenericInstances.Count - 1 do
+  begin
+    GI := TGenericInstance(AProg.GenericInstances.Items[I]);
+    RT := TRecordTypeDesc(GI.TypeDesc);
+    Self.EmitFieldCleanupFn(NativeMangle(GI.TypeName), RT);
   end;
 
   { Vtables — must be in .data (pointers to other data symbols). }
@@ -848,6 +904,33 @@ begin
       begin
         { E.ImplName may have a '$' prefix (QBE convention) — strip it for native.
           Use StrAt for 0-based string indexing. }
+        if (Length(E.ImplName) > 0) and (StrAt(E.ImplName, 0) = 36) then
+          Line := #9'.quad ' + NativeMangle(StrCopyTail(E.ImplName, 1))
+        else
+          Line := #9'.quad ' + NativeMangle(E.ImplName);
+      end;
+      Self.Emit(Line);
+    end;
+  end;
+
+  { Vtables for generic class instances. }
+  for I := 0 to AProg.GenericInstances.Count - 1 do
+  begin
+    GI := TGenericInstance(AProg.GenericInstances.Items[I]);
+    RT := TRecordTypeDesc(GI.TypeDesc);
+    if not RT.HasVTable then Continue;
+    MName := NativeMangle(GI.TypeName);
+    Self.Emit('.balign 8');
+    Self.Emit('.globl vtable_' + MName);
+    Self.Emit('vtable_' + MName + ':');
+    Self.Emit(#9'.quad typeinfo_' + MName);
+    for S := 0 to RT.VTableCount - 1 do
+    begin
+      E := RT.VTableEntryAt(S);
+      if E.IsAbstract then
+        Line := #9'.quad _AbstractMethodError'
+      else
+      begin
         if (Length(E.ImplName) > 0) and (StrAt(E.ImplName, 0) = 36) then
           Line := #9'.quad ' + NativeMangle(StrCopyTail(E.ImplName, 1))
         else
@@ -1020,8 +1103,7 @@ end;
     impllist_TFoo:        .quad typeinfo_IFoo, .quad itab_TFoo_IFoo, .quad 0
 
   impllist is a NULL-terminated array of (typeinfo, itab) pairs, walked by the
-  _GetItab runtime helper for `as`-casts.  Generic interface/class instances
-  are deferred until the native backend compiles generic-using programs. }
+  _GetItab runtime helper for `as`-casts. }
 procedure TX86_64Backend.EmitInterfaceDefs(AProg: TProgram);
 var
   I, J, K:    Integer;
@@ -1029,8 +1111,12 @@ var
   TDesc:      TTypeDesc;
   IntfDesc:   TInterfaceTypeDesc;
   ClassRT:    TRecordTypeDesc;
+  GI:         TGenericInstance;
+  GII:        TGenericInterfaceInstance;
+  MName:      string;
   MethName:   string;
   MethRef:    string;
+  MDecl:      TMethodDecl;
 begin
   { Typeinfo blocks for every plain interface. }
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
@@ -1040,6 +1126,16 @@ begin
     Self.Emit('.balign 8');
     Self.Emit('.globl typeinfo_' + NativeMangle(TD.Name));
     Self.Emit('typeinfo_' + NativeMangle(TD.Name) + ':');
+    Self.Emit(#9'.quad 0');
+  end;
+
+  { Typeinfo blocks for generic interface instances. }
+  for I := 0 to AProg.GenericIntfInstances.Count - 1 do
+  begin
+    GII := TGenericInterfaceInstance(AProg.GenericIntfInstances.Items[I]);
+    Self.Emit('.balign 8');
+    Self.Emit('.globl typeinfo_' + GII.InstName);
+    Self.Emit('typeinfo_' + GII.InstName + ':');
     Self.Emit(#9'.quad 0');
   end;
 
@@ -1081,6 +1177,49 @@ begin
       IntfDesc := ClassRT.ImplementsIntfAt(J);
       Self.Emit(#9'.quad typeinfo_' + NativeMangle(IntfDesc.Name));
       Self.Emit(#9'.quad itab_' + NativeMangle(TD.Name) + '_' + NativeMangle(IntfDesc.Name));
+    end;
+    Self.Emit(#9'.quad 0');
+  end;
+
+  { Itab and impllist for generic class instances that implement interfaces. }
+  for I := 0 to AProg.GenericInstances.Count - 1 do
+  begin
+    GI := TGenericInstance(AProg.GenericInstances.Items[I]);
+    ClassRT := TRecordTypeDesc(GI.TypeDesc);
+    if ClassRT.ImplementsCount = 0 then Continue;
+    MName := NativeMangle(GI.TypeName);
+
+    for J := 0 to ClassRT.ImplementsCount - 1 do
+    begin
+      IntfDesc := ClassRT.ImplementsIntfAt(J);
+      Self.Emit('.balign 8');
+      Self.Emit('.globl itab_' + MName + '_' + NativeMangle(IntfDesc.Name));
+      Self.Emit('itab_' + MName + '_' + NativeMangle(IntfDesc.Name) + ':');
+      for K := 0 to IntfDesc.MethodCount - 1 do
+      begin
+        MethName := IntfDesc.MethodName(K);
+        if Self.IsAbstractClassMethod(ClassRT, MethName) then
+          MethRef := '_AbstractMethodError'
+        else
+        begin
+          MDecl := FindMethodInClassDef(GI.ClassDef, MethName);
+          if (MDecl <> nil) and (MDecl.ResolvedQbeName <> '') then
+            MethRef := NativeMangle(MDecl.ResolvedQbeName)
+          else
+            MethRef := MName + '_' + MethName;
+        end;
+        Self.Emit(#9'.quad ' + MethRef);
+      end;
+    end;
+
+    Self.Emit('.balign 8');
+    Self.Emit('.globl impllist_' + MName);
+    Self.Emit('impllist_' + MName + ':');
+    for J := 0 to ClassRT.ImplementsCount - 1 do
+    begin
+      IntfDesc := ClassRT.ImplementsIntfAt(J);
+      Self.Emit(#9'.quad typeinfo_' + NativeMangle(IntfDesc.Name));
+      Self.Emit(#9'.quad itab_' + MName + '_' + NativeMangle(IntfDesc.Name));
     end;
     Self.Emit(#9'.quad 0');
   end;
@@ -1258,6 +1397,7 @@ var
   TD:   TTypeDecl;
   CD:   TClassTypeDef;
   RD:   TRecordTypeDef;
+  GI:   TGenericInstance;
   GRI:  TGenericRecordInstance;
   Decl: TMethodDecl;
 begin
@@ -1283,6 +1423,17 @@ begin
         if Decl.Body = nil then Continue;
         Self.EmitFunctionDef(Decl);
       end;
+    end;
+  end;
+
+  for I := 0 to AProg.GenericInstances.Count - 1 do
+  begin
+    GI := TGenericInstance(AProg.GenericInstances.Items[I]);
+    for J := 0 to GI.ClassDef.Methods.Count - 1 do
+    begin
+      Decl := TMethodDecl(GI.ClassDef.Methods.Items[J]);
+      if Decl.Body = nil then Continue;
+      Self.EmitFunctionDef(Decl);
     end;
   end;
 
@@ -1809,6 +1960,7 @@ var
   FC:  TFuncCallExpr;
   FAE: TFieldAccessExpr;
   SAE: TStringSubscriptExpr;
+  MD:  TMethodDecl;
   Unsigned: Boolean;
 begin
   if AExpr is TIntLiteral then
@@ -2309,6 +2461,17 @@ begin
       Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
         FAE.FieldInfo.TypeDesc);
     end
+    else if FAE.IsVarParam then
+    begin
+      { Var-param or record-Self: the slot holds a pointer to the record storage.
+        Load the pointer, then dereference at FieldInfo.Offset. }
+      if Self.IsLocal(FAE.RecordName) then
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FAE.RecordName]));
+      Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
+        FAE.FieldInfo.TypeDesc);
+    end
     else if Self.IsLocal(FAE.RecordName) then
     begin
       if FAE.FieldInfo.Offset = 0 then
@@ -2331,6 +2494,48 @@ begin
           FAE.FieldInfo.TypeDesc);
       end;
     end;
+    Exit;
+  end;
+
+  { Zero-arg method call on a variable: B.GetVal or H.GetValue.
+    For class variables Self is the loaded pointer; for record variables Self
+    is the address of the record storage. }
+  if (AExpr is TFieldAccessExpr) and
+     TFieldAccessExpr(AExpr).IsMethodCall then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    if FAE.ResolvedMethod = nil then
+      raise ENativeCodeGenError.Create(
+        'native backend: zero-arg method call has no ResolvedMethod');
+    MD := TMethodDecl(FAE.ResolvedMethod);
+    if MD.IsRecordMethod then
+    begin
+      if Self.IsLocal(FAE.RecordName) then
+        Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand(FAE.RecordName)]))
+      else
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rdi', [FAE.RecordName]));
+    end
+    else
+    begin
+      if Self.IsLocal(FAE.RecordName) then
+        Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(FAE.RecordName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [FAE.RecordName]));
+    end;
+    if MD.VTableSlot >= 0 then
+    begin
+      Self.Emit(#9'movq (%rdi), %rax');
+      Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
+      Self.Emit(#9'callq *%rax');
+    end
+    else
+      Self.Emit(#9'callq ' + MethodEmitNameNative(
+        MD, MD.OwnerTypeName, FAE.FieldName));
+    if (MD.ResolvedReturnType <> nil) and
+       not IsIntFamily(MD.ResolvedReturnType) and
+       not IsFloatFamily(MD.ResolvedReturnType) and
+       (MD.ResolvedReturnType.Kind <> tyString) then
+      Self.EmitNarrowToType(MD.ResolvedReturnType);
     Exit;
   end;
 
@@ -3679,6 +3884,17 @@ begin
       Self.Emit(#9'popq %rax');
       Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]), FA.FieldInfo.TypeDesc);
     end
+    else if FA.IsVarParam then
+    begin
+      { Var-param or record-Self: the slot holds a pointer to the record storage. }
+      Self.Emit(#9'pushq %rax');
+      if Self.IsLocal(FA.RecordName) then
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FA.RecordName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FA.RecordName]));
+      Self.Emit(#9'popq %rax');
+      Self.EmitStoreVar(Format('%d(%%rcx)', [FA.FieldInfo.Offset]), FA.FieldInfo.TypeDesc);
+    end
     else if Self.IsLocal(FA.RecordName) then
     begin
       { Local record: VarOperand gives the base address of the record block. }
@@ -4574,11 +4790,16 @@ begin
   begin
     Decl := TMethodDecl(AProg.Block.ProcDecls.Items[I]);
     if Decl.OwnerTypeName <> '' then Continue;     { class methods: above }
-    if Decl.TypeParams <> nil then Continue;       { generic templates: later }
+    if Decl.TypeParams <> nil then Continue;       { generic templates: skip }
     if Decl.Body = nil then Continue;              { forward decls }
     if Decl.IsExternal then Continue;              { external: later }
     Self.EmitFunctionDef(Decl);
   end;
+
+  { Concrete generic function instances. }
+  for I := 0 to AProg.GenericFuncInstances.Count - 1 do
+    Self.EmitFunctionDef(
+      TGenericFuncInstance(AProg.GenericFuncInstances.Items[I]).MethodDecl);
 
   { Pre-count try stmts in the program body so VarOperand resolves
     _exc_frame_N as globals (FFrame is nil in main, so the global path is
