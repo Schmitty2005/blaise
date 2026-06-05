@@ -24,11 +24,38 @@ The build script compiles the Blaise source to QBE IR, assembles it, and links t
 
 == Usage
 
+=== Interactive (TUI) mode
+
 [source,bash]
 ----
 ./kanban                 # uses ./board.kanban
 ./kanban myproject.kanban
 ----
+
+=== CLI mode
+
+Add tasks without launching the TUI:
+
+[source,bash]
+----
+./kanban board.kanban --add "Fix the parser bug"
+./kanban board.kanban --add "Urgent fix" --priority high
+./kanban board.kanban --add "WIP item" --status progress
+./kanban board.kanban --add "Task" --detail "Multi-line detail text here"
+./kanban board.kanban --add "Task" --detail-file notes.txt
+----
+
+[cols="1,3"]
+|===
+| Option | Description
+
+| `--add "title"` | Add a new task (required for CLI mode)
+| `--detail "text"` | Set inline detail text for the new task
+| `--detail-file path` | Read detail text from a file
+| `--priority high\|low` | Set task priority
+| `--status todo\|progress\|done` | Set initial status (default: todo)
+| `--help`, `-h` | Show usage information
+|===
 
 == Keybindings
 
@@ -65,14 +92,14 @@ The `.kanban` file is a simple, human-readable text format:
 #next-id: 8
 
 ## Todo
-- 5 | Add UTF-8 lexer support | priority:high
-- 6 | Benchmark hash map
+- 5 | Add UTF-8 lexer support | priority:high | created:2026-06-01
+- 6 | Benchmark hash map | created:2026-06-03
 
 ## In Progress
-- 3 | TUI Kanban app | priority:high
+- 3 | TUI Kanban app | priority:high | created:2026-06-05
 
 ## Done
-- 1 | Bootstrap compiler
+- 1 | Bootstrap compiler | created:2026-05-20
 ----
 
 Per-task detail files are stored in a `.kanban.d/` subdirectory alongside the `.kanban` file, named by task ID (e.g., `board.kanban.d/3.txt`).
