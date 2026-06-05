@@ -106,7 +106,7 @@ type
     procedure SetBg(Color: Integer);
     procedure SetBold;
     procedure ResetAttr;
-    procedure DrawBox(Row, Col, Width, Height: Integer; const Title: string);
+    procedure DrawBox(Row, Col, Width, Height, Color: Integer; const Title: string);
     procedure DrawHLine(Row, Col, Width: Integer);
     property Rows: Integer read FRows;
     property Cols: Integer read FCols;
@@ -256,11 +256,12 @@ begin
   Self.BufWrite(Chr(27) + '[0m')
 end;
 
-procedure TTerminal.DrawBox(Row, Col, Width, Height: Integer; const Title: string);
+procedure TTerminal.DrawBox(Row, Col, Width, Height, Color: Integer; const Title: string);
 var
   I: Integer;
   TitleStr: string;
 begin
+  Self.SetFg(Color);
   Self.MoveTo(Row, Col);
   Self.BufWrite(Chr(226) + Chr(148) + Chr(140));
   I := 0;
@@ -277,7 +278,8 @@ begin
     Self.MoveTo(Row, Col + 2);
     Self.SetBold;
     Self.BufWrite(TitleStr);
-    Self.ResetAttr
+    Self.ResetAttr;
+    Self.SetFg(Color)
   end;
 
   I := 1;
@@ -298,7 +300,8 @@ begin
     Self.BufWrite(Chr(226) + Chr(148) + Chr(128));
     I := I + 1
   end;
-  Self.BufWrite(Chr(226) + Chr(148) + Chr(152))
+  Self.BufWrite(Chr(226) + Chr(148) + Chr(152));
+  Self.ResetAttr
 end;
 
 procedure TTerminal.DrawHLine(Row, Col, Width: Integer);

@@ -144,9 +144,7 @@ var
   IsActive: Boolean;
   Status: TTaskStatus;
 begin
-  FTerm.SetFg(Self.ColumnColor(ColIndex));
-  FTerm.DrawBox(Row, Col, Width, Height, Self.ColumnTitle(ColIndex));
-  FTerm.ResetAttr;
+  FTerm.DrawBox(Row, Col, Width, Height, Self.ColumnColor(ColIndex), Self.ColumnTitle(ColIndex));
 
   Status := Self.ColumnStatus(ColIndex);
   TaskCount := FBoard.CountByStatus(Status);
