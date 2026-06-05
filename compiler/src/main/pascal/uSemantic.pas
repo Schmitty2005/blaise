@@ -5039,38 +5039,56 @@ begin
   end;
 
   ObjSym := FTable.Lookup(ACall.ObjectName);
-  if ObjSym = nil then
+  { Inside a method, class fields shadow same-named globals.  Try the
+    implicit Self.Field path when there is no match (ObjSym=nil) OR when
+    the only match is a global variable that a class field should shadow. }
+  if (FCurrentClass <> nil) and
+     ((ObjSym = nil) or ObjSym.IsGlobal) then
   begin
-    { Implicit Self.Field.Method — ObjectName is a field of current class }
-    if FCurrentClass <> nil then
+    ACall.ImplicitBaseInfo :=
+      FCurrentClass.FindField(ACall.ObjectName);
+    if (ACall.ImplicitBaseInfo <> nil) and
+       (ACall.ImplicitBaseInfo.TypeDesc.Kind in [tyClass, tyInterface]) then
     begin
-      ACall.ImplicitBaseInfo :=
-        FCurrentClass.FindField(ACall.ObjectName);
-      if (ACall.ImplicitBaseInfo <> nil) and
-         (ACall.ImplicitBaseInfo.TypeDesc.Kind in [tyClass, tyInterface]) then
+      ACall.IsImplicitSelf := True;
+      { Interface field: dispatch via vtable, same semantics as the
+        non-implicit path at the "ObjSym.TypeDesc.Kind = tyInterface" block. }
+      if ACall.ImplicitBaseInfo.TypeDesc.Kind = tyInterface then
       begin
-        ACall.IsImplicitSelf := True;
-        RT := TRecordTypeDesc(ACall.ImplicitBaseInfo.TypeDesc);
-        if SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) and
-           (FindMethodDecl(RT.Name, 'Free') = nil) then
-        begin
-          ACall.ResolvedClassType := RT;
-          ACall.ResolvedMethod    := nil;
-          Exit;
-        end;
+        if not TInterfaceTypeDesc(ACall.ImplicitBaseInfo.TypeDesc).HasMethod(ACall.Name) then
+          SemanticError(
+            Format('Interface ''%s'' has no method ''%s''',
+              [ACall.ImplicitBaseInfo.TypeDesc.Name, ACall.Name]),
+            ACall.Line, ACall.Col);
         for I := 0 to ACall.Args.Count - 1 do
           AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
-        MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
-          ACall.Line, ACall.Col);
-        if MDecl = nil then
-          SemanticError(
-            Format('Class ''%s'' has no method ''%s''', [RT.Name, ACall.Name]),
-            ACall.Line, ACall.Col);
-        ACall.ResolvedClassType := RT;
-        ACall.ResolvedMethod    := MDecl;
+        ACall.ResolvedClassType := ACall.ImplicitBaseInfo.TypeDesc;
+        ACall.ResolvedMethod    := nil;
         Exit;
       end;
+      RT := TRecordTypeDesc(ACall.ImplicitBaseInfo.TypeDesc);
+      if SameText(ACall.Name, 'Free') and (ACall.Args.Count = 0) and
+         (FindMethodDecl(RT.Name, 'Free') = nil) then
+      begin
+        ACall.ResolvedClassType := RT;
+        ACall.ResolvedMethod    := nil;
+        Exit;
+      end;
+      for I := 0 to ACall.Args.Count - 1 do
+        AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+      MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
+        ACall.Line, ACall.Col);
+      if MDecl = nil then
+        SemanticError(
+          Format('Class ''%s'' has no method ''%s''', [RT.Name, ACall.Name]),
+          ACall.Line, ACall.Col);
+      ACall.ResolvedClassType := RT;
+      ACall.ResolvedMethod    := MDecl;
+      Exit;
     end;
+  end;
+  if ObjSym = nil then
+  begin
     SemanticError(
       Format('Undeclared variable ''%s''', [ACall.ObjectName]),
       ACall.Line, ACall.Col);
@@ -5187,22 +5205,26 @@ var
   ExprType: TTypeDesc;
 begin
   VarSym := FTable.Lookup(AAssign.Name);
+  { Inside a method, class fields shadow same-named globals.  Mirror the
+    priority of the expression read path (see TIdentExpr handling): try the
+    class field when there is no local/param match (VarSym=nil) OR when the
+    only match found is a global variable that the field should shadow. }
+  if (FCurrentClass <> nil) and
+     ((VarSym = nil) or VarSym.IsGlobal) then
+  begin
+    FldInfo := FCurrentClass.FindField(AAssign.Name);
+    if FldInfo <> nil then
+    begin
+      AAssign.ImplicitSelfField := FldInfo;
+      AAssign.ResolvedLhsType   := FldInfo.TypeDesc;
+      ResolveDiamond(AAssign.Expr, FldInfo.TypeDesc);
+      ExprType := AnalyseExpr(AAssign.Expr);
+      CheckTypesMatch(FldInfo.TypeDesc, ExprType, 'assignment', AAssign.Line, AAssign.Col);
+      Exit;
+    end;
+  end;
   if VarSym = nil then
   begin
-    { Try implicit Self.Field }
-    if FCurrentClass <> nil then
-    begin
-      FldInfo := FCurrentClass.FindField(AAssign.Name);
-      if FldInfo <> nil then
-      begin
-        AAssign.ImplicitSelfField := FldInfo;
-        AAssign.ResolvedLhsType   := FldInfo.TypeDesc;
-        ResolveDiamond(AAssign.Expr, FldInfo.TypeDesc);
-        ExprType := AnalyseExpr(AAssign.Expr);
-        CheckTypesMatch(FldInfo.TypeDesc, ExprType, 'assignment', AAssign.Line, AAssign.Col);
-        Exit;
-      end;
-    end;
     SemanticError(
       Format('Undeclared variable ''%s''', [AAssign.Name]),
       AAssign.Line, AAssign.Col);
@@ -7492,10 +7514,13 @@ begin
       local vars/params > implicit Self.member > unit-level.  Without
       this priority, a bare identifier inside a method binds to the
       same-named unit-level symbol even when the enclosing class has
-      a field / zero-arg method / property of that name. }
+      a field / zero-arg method / property of that name.
+      Also try class fields when Sym is a global variable — a class field
+      with the same name must shadow a program-level global. }
     Sym := FTable.Lookup(TIdentExpr(AExpr).Name);
     if (FCurrentClass <> nil) and
        ((Sym = nil) or
+        (Sym.IsGlobal) or
         not (Sym.Kind in [skVariable, skParameter, skVarParameter])) then
     begin
       FldInfo := FCurrentClass.FindField(TIdentExpr(AExpr).Name);

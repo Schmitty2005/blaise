@@ -73,6 +73,9 @@ type
       must hit a parent method.  Neither falls through to unit-level. }
     procedure TestRun_ExplicitSelf_AlwaysClassMember;
     procedure TestRun_InheritedCall_AlwaysParent;
+    { Regression (issue #64): interface-typed field with same name as a
+      program-level global of a different type. }
+    procedure TestRun_InterfaceField_ShadowsGlobal_Dispatches;
   end;
 
 implementation
@@ -520,6 +523,45 @@ const
       I := H;
       U := TUser.Create;
       WriteLn(U.Use(I))
+    end.
+    ''';
+
+  { Regression (issue #64): class has an interface-typed field 'im' AND the
+    program declares a same-named global variable 'im' of the class type.
+    Inside the constructor and a method, bare 'im' must resolve to the field
+    (Iprinter), not the global (Tmi).  Previously the semantic analyser found
+    the global first and reported a type-mismatch. }
+  SrcIntfFieldShadowsGlobal = '''
+    program P;
+    type
+      Iprinter = interface
+        procedure print;
+      end;
+      Toutput = class(TObject, Iprinter)
+        procedure print;
+      end;
+      Tmi = class
+        im: Iprinter;
+        constructor create(am: Iprinter);
+        procedure use;
+      end;
+    procedure Toutput.print;
+    begin
+      WriteLn('printed');
+    end;
+    constructor Tmi.Create(am: Iprinter);
+    begin
+      im := am;
+    end;
+    procedure Tmi.use;
+    begin
+      im.print;
+    end;
+    var
+      im: Tmi;
+    begin
+      im := Tmi.Create(Toutput.Create);
+      im.use;
     end.
     ''';
 
@@ -1189,6 +1231,15 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcResolve_InheritedAlwaysParent, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('inherited Tag reaches parent despite subclass override', '1' + LE, Output);
+end;
+
+procedure TE2EClasses2Tests.TestRun_InterfaceField_ShadowsGlobal_Dispatches;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcIntfFieldShadowsGlobal, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('interface dispatch through field shadowing global', 'printed' + LE, Output);
 end;
 
 initialization

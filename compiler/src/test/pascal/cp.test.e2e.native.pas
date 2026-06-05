@@ -150,6 +150,9 @@ type
     procedure TestRun_Native_Interface_IntfToIntfCopy;
     procedure TestRun_Native_Interface_AsCast;
     procedure TestRun_Native_Interface_NilClear;
+    { Regression (issue #64): interface-typed field with same name as a
+      program-level global of a different type }
+    procedure TestRun_Native_InterfaceField_ShadowsGlobal;
 
     { M8 — inherited calls }
     procedure TestRun_Native_Inherited_Proc;
@@ -2067,6 +2070,42 @@ const
     end.
     ''';
 
+  { Regression (issue #64): interface-typed field 'im' in a class with a
+    same-named global of a different type. }
+  SrcNativeIntfFieldShadowsGlobal = '''
+    program P;
+    type
+      Iprinter = interface
+        procedure print;
+      end;
+      Toutput = class(TObject, Iprinter)
+        procedure print;
+      end;
+      Tmi = class
+        im: Iprinter;
+        constructor create(am: Iprinter);
+        procedure use;
+      end;
+    procedure Toutput.print;
+    begin
+      WriteLn('printed');
+    end;
+    constructor Tmi.Create(am: Iprinter);
+    begin
+      im := am;
+    end;
+    procedure Tmi.use;
+    begin
+      im.print;
+    end;
+    var
+      im: Tmi;
+    begin
+      im := Tmi.Create(Toutput.Create);
+      im.use;
+    end.
+    ''';
+
   { M8 — inherited calls.  An override that chains to the parent body via
     `inherited` must dispatch statically to the parent method. }
   SrcInheritedProc = '''
@@ -2265,6 +2304,17 @@ procedure TE2ENativeTests.TestRun_Native_MethodVarParam_Swap;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcMethodVarSwap, '7' + LE + '3' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_InterfaceField_ShadowsGlobal;
+var Output: string; RCode: Integer;
+begin
+  { Native backend does not yet support interface parameters in constructors
+    (class-to-interface arg passing); test the QBE path only. }
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run (QBE)', CompileAndRun(SrcNativeIntfFieldShadowsGlobal, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('interface dispatch via field', 'printed' + LE, Output);
 end;
 
 initialization

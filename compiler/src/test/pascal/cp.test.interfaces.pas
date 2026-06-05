@@ -95,6 +95,11 @@ type
     procedure TestCodegen_InterfaceArg_Identifier_PassesBothSlots;
     procedure TestCodegen_MethodInterfaceParam_FatPointerSignature;
     procedure TestCodegen_MethodInterfaceArg_PassesBothSlots;
+
+    { ------------------------------------------------------------------ }
+    { Regression — interface field shadowing a same-named global          }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_InterfaceField_ShadowsGlobal_OK;
   end;
 
 implementation
@@ -364,6 +369,44 @@ const
           F := T as IFoo;
           U := TUser.Create;
           U.UseIntf(F)
+        end.
+        ''';
+
+  { Regression (issue #64): a class has an interface-typed field 'im' AND the
+    program has a same-named global variable 'im' of a different type (the
+    class itself).  Inside a method body the field must shadow the global —
+    `im := am` where am is Iprinter must resolve as a field assignment, not
+    as an assignment to the global 'im: Tmi'. }
+  SrcInterfaceFieldShadowsGlobal =
+    '''
+        program P;
+        type
+          Iprinter = interface
+            procedure print;
+          end;
+          Toutput = class(TObject, Iprinter)
+            fField: Integer;
+            procedure print;
+          end;
+          Tmi = class
+            im: Iprinter;
+            constructor create(am: Iprinter);
+            procedure use;
+          end;
+        procedure Toutput.print;
+        begin
+        end;
+        constructor Tmi.Create(am: Iprinter);
+        begin
+          im := am;
+        end;
+        procedure Tmi.use;
+        begin
+          im.print;
+        end;
+        var
+          im: Tmi;
+        begin
         end.
         ''';
 
@@ -1075,6 +1118,16 @@ begin
     Pos('loadl $F_obj', IR) > 0);
   AssertTrue('passes _itab slot at the method call site',
     Pos('loadl $F_itab', IR) > 0);
+end;
+
+{ Regression (issue #64): inside a method body, an interface-typed field
+  must shadow a same-named global variable.  The semantic analyser previously
+  found the global 'im: Tmi' and reported a type-mismatch instead of
+  recognising 'im' as the field 'im: Iprinter' of the enclosing class. }
+procedure TInterfaceTests.TestSemantic_InterfaceField_ShadowsGlobal_OK;
+begin
+  { Must not raise ESemanticError }
+  AnalyseSrc(SrcInterfaceFieldShadowsGlobal).Free;
 end;
 
 initialization

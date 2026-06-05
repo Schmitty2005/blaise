@@ -143,6 +143,8 @@ type
     procedure EmitInterfaceCall(const AObjName: string; AIsGlobal: Boolean;
                                 AIntf: TInterfaceTypeDesc;
                                 const AMethName: string; AArgs: TObjectList);
+    procedure EmitInterfaceFieldCall(AFld: TFieldInfo; AIntf: TInterfaceTypeDesc;
+                                const AMethName: string; AArgs: TObjectList);
     { Emit typeinfo / itab / impllist blocks for interfaces and the classes
       that implement them.  Mirrors the QBE backend's EmitInterfaceDefs. }
     procedure EmitInterfaceDefs(AProg: TProgram);
@@ -898,6 +900,41 @@ begin
   Self.Emit(#9'callq *%r11');
 end;
 
+procedure TX86_64Backend.EmitInterfaceFieldCall(AFld: TFieldInfo;
+  AIntf: TInterfaceTypeDesc; const AMethName: string; AArgs: TObjectList);
+{ Dispatch an interface method call through a class field.  The fat pointer
+  lives at Self + AFld.Offset (obj) and Self + AFld.Offset + 8 (itab). }
+var
+  I, SlotOff, ArgN: Integer;
+  Arg: TASTExpr;
+begin
+  ArgN := 0;
+  if AArgs <> nil then ArgN := AArgs.Count;
+  for I := 0 to ArgN - 1 do
+  begin
+    Arg := TASTExpr(AArgs.Items[I]);
+    Self.EmitExprToEax(Arg);
+    Self.Emit(#9'pushq %rax');
+  end;
+  { Load Self and compute field base; use %r11 (caller-saved scratch) for
+    the obj pointer and %rax for the itab address. }
+  Self.Emit(Format(#9'movq %s, %%r11', [Self.VarOperand('Self')]));
+  if AFld.Offset > 0 then
+    Self.Emit(Format(#9'addq $%d, %%r11', [AFld.Offset]));
+  { Load obj into %r10, itab into %rax. }
+  Self.Emit(#9'movq (%r11), %r10');
+  Self.Emit(#9'movq 8(%r11), %rax');
+  SlotOff := AIntf.MethodIndex(AMethName) * 8;
+  if SlotOff = 0 then
+    Self.Emit(#9'movq (%rax), %r11')
+  else
+    Self.Emit(Format(#9'movq %d(%%rax), %%r11', [SlotOff]));
+  for I := ArgN - 1 downto 0 do
+    Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+  Self.Emit(#9'movq %r10, %rdi');
+  Self.Emit(#9'callq *%r11');
+end;
+
 { An interface method maps to one of ARec's vtable slots.  When that slot is
   abstract, the itab entry must point at _AbstractMethodError (the concrete
   symbol does not exist on an abstract base). }
@@ -1001,8 +1038,62 @@ var
   ItabOp:  string;
   LFail:   string;
   LEnd:    string;
+  ISFld:   TFieldInfo;
 begin
   Intf := TInterfaceTypeDesc(AAsgn.ResolvedLhsType);
+  { Implicit Self.Field assignment: the fat pointer lives inside the object at
+    Self + FieldOffset (obj) and Self + FieldOffset + 8 (itab).
+    Handle entirely here rather than falling through to the ObjOp/ItabOp paths
+    below (which use fixed operand strings that could be clobbered by calls). }
+  if AAsgn.ImplicitSelfField <> nil then
+  begin
+    ISFld := TFieldInfo(AAsgn.ImplicitSelfField);
+    { Compute Self + FieldOffset into %r15 (callee-saved: survives callq). }
+    Self.Emit(#9'pushq %r15');
+    Self.Emit(Format(#9'movq %s, %%r15', [Self.VarOperand('Self')]));
+    if ISFld.Offset > 0 then
+      Self.Emit(Format(#9'addq $%d, %%r15', [ISFld.Offset]));
+    { Now (%r15) = obj slot, 8(%r15) = itab slot. }
+    if AAsgn.Expr.ResolvedType.Kind = tyClass then
+    begin
+      ClassRT := TRecordTypeDesc(AAsgn.Expr.ResolvedType);
+      ItabSym := 'itab_' + NativeMangle(ClassRT.Name) + '_' + NativeMangle(Intf.Name);
+      Self.EmitExprToEax(AAsgn.Expr);
+      Self.Emit(#9'pushq %rax');
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ClassAddRef');
+      Self.Emit(#9'movq (%r15), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rax');
+      Self.Emit(#9'movq %rax, (%r15)');
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [ItabSym]));
+      Self.Emit(#9'movq %rax, 8(%r15)');
+    end
+    else if (AAsgn.Expr.ResolvedType.Kind = tyInterface) and (AAsgn.Expr is TIdentExpr) then
+    begin
+      { Interface-to-interface: copy from source fat pointer slots. }
+      Self.Emit(Format(#9'movq %s, %%rax',
+        [Self.IntfItabOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
+      Self.Emit(#9'pushq %rax');
+      Self.Emit(Format(#9'movq %s, %%rax',
+        [Self.IntfObjOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
+      Self.Emit(#9'pushq %rax');
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ClassAddRef');
+      Self.Emit(#9'movq (%r15), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rax');
+      Self.Emit(#9'movq %rax, (%r15)');
+      Self.Emit(#9'popq %rax');
+      Self.Emit(#9'movq %rax, 8(%r15)');
+    end
+    else
+      raise ENativeCodeGenError.Create(
+        'native backend: unsupported interface-field assignment RHS');
+    Self.Emit(#9'popq %r15');
+    Exit;
+  end;
+
   { Register a global LHS so EmitDataSection emits its _obj/_itab labels. }
   if not Self.IsLocal(AAsgn.Name) then
     Self.AddGlobal(AAsgn.Name, AAsgn.ResolvedLhsType);
@@ -2296,8 +2387,12 @@ begin
   if (ACall.ResolvedClassType <> nil) and
      (ACall.ResolvedClassType.Kind = tyInterface) then
   begin
-    Self.EmitInterfaceCall(ACall.ObjectName, ACall.IsGlobal,
-      TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args);
+    if ACall.IsImplicitSelf and (ACall.ImplicitBaseInfo <> nil) then
+      Self.EmitInterfaceFieldCall(ACall.ImplicitBaseInfo,
+        TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args)
+    else
+      Self.EmitInterfaceCall(ACall.ObjectName, ACall.IsGlobal,
+        TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args);
     Exit;
   end;
 

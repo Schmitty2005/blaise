@@ -270,6 +270,11 @@ type
       arg loops can pass an interface param as the two-slot fat pointer the
       callee now expects, without each site declaring extra temps. }
     function  InterfaceArgFragment(AExpr: TASTExpr): string;
+    { Assign the interface value produced by AExpr into the two memory slots
+      pointed to by AObjSlotPtr (obj) and AItabSlotPtr (itab).  Handles ARC
+      for strong interface fields (addref new obj, release old obj). }
+    procedure EmitInterfaceToFieldSlots(AExpr: TASTExpr;
+      const AObjSlotPtr, AItabSlotPtr: string);
     function  EmitIsExpr(AExpr: TIsExpr): string;
     function  EmitAsExpr(AExpr: TAsExpr): string;
     function  EmitSupportsExpr(AExpr: TSupportsExpr): string;
@@ -3552,6 +3557,16 @@ begin
       end;
       Exit;
     end;
+    { Interface field: fat-pointer stored as two consecutive 8-byte slots
+      (obj at offset, itab at offset+8).  ObjTemp already points at the
+      obj slot; the itab slot is 8 bytes further. }
+    if ISFld.TypeDesc.Kind = tyInterface then
+    begin
+      ISAddrT := AllocTemp;
+      EmitLine(Format('  %s =l add %s, 8', [ISAddrT, ObjTemp]));
+      EmitInterfaceToFieldSlots(AAssign.Expr, ObjTemp, ISAddrT);
+      Exit;
+    end;
     ValTemp := EmitExpr(AAssign.Expr);
     QType := QbeTypeOf(ISFld.TypeDesc);
     if QType = 'w' then
@@ -4781,9 +4796,29 @@ begin
   begin
     IntfDesc := TInterfaceTypeDesc(ACall.ResolvedClassType);
     SelfTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %s_obj', [SelfTemp, VarRef(ACall.ObjectName, ACall.IsGlobal)]));
     VTblTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %s_itab', [VTblTemp, VarRef(ACall.ObjectName, ACall.IsGlobal)]));
+    if ACall.IsImplicitSelf then
+    begin
+      { Interface field of Self: obj/itab live in the object layout at
+        Self + FieldOffset (obj) and Self + FieldOffset + 8 (itab). }
+      FPtrTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_Self', [FPtrTemp]));
+      if ACall.ImplicitBaseInfo.Offset > 0 then
+      begin
+        ArgTemp := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d', [ArgTemp, FPtrTemp, ACall.ImplicitBaseInfo.Offset]));
+        FPtrTemp := ArgTemp;
+      end;
+      EmitLine(Format('  %s =l loadl %s', [SelfTemp, FPtrTemp]));
+      ArgTemp := AllocTemp;
+      EmitLine(Format('  %s =l add %s, 8', [ArgTemp, FPtrTemp]));
+      EmitLine(Format('  %s =l loadl %s', [VTblTemp, ArgTemp]));
+    end
+    else
+    begin
+      EmitLine(Format('  %s =l loadl %s_obj', [SelfTemp, VarRef(ACall.ObjectName, ACall.IsGlobal)]));
+      EmitLine(Format('  %s =l loadl %s_itab', [VTblTemp, VarRef(ACall.ObjectName, ACall.IsGlobal)]));
+    end;
     SlotOff  := IntfDesc.MethodIndex(ACall.Name) * 8;
     FPtrTemp := AllocTemp;
     if SlotOff = 0 then
@@ -7017,6 +7052,7 @@ var
   FmtValTemp:   string;
   IsIntArg:     Boolean;
   FT:           string;
+  ItabName:     string;
 begin
   if AExpr is TFuncCallExpr then
   begin
@@ -8364,14 +8400,39 @@ begin
         try
           for I := 0 to MCallExpr.Args.Count - 1 do
           begin
-            Par     := TMethodParam(MDecl.Params.Items[I]);
-            ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
-            if Par.IsVarParam then ArgTemps.Add('') else ArgTemps.Add(ArgTemp);
-            EnsureConstStringRef(ArgTemp, Par);
-            ArgTemp := CoerceArg(ArgTemp, TASTExpr(MCallExpr.Args.Items[I]),
-              QbeTypeOf(Par.ResolvedType));
-            ArgLine := ArgLine + Format(', %s %s',
-              [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
+            Par := TMethodParam(MDecl.Params.Items[I]);
+            if Par.IsVarParam then
+            begin
+              ArgTemps.Add('');
+              ArgLine := ArgLine + Format(', l %s',
+                [EmitLValueAddr(TASTExpr(MCallExpr.Args.Items[I]))]);
+            end
+            else if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface) then
+            begin
+              ArgTemps.Add('');
+              { Class expression passed to an interface param: emit obj and
+                look up the static itab using the known target interface name. }
+              if TASTExpr(MCallExpr.Args.Items[I]).ResolvedType.Kind = tyClass then
+              begin
+                ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
+                ItabName := '$itab_' +
+                  ClassSymName(QBEMangle(TASTExpr(MCallExpr.Args.Items[I]).ResolvedType.Name))
+                  + '_' + QBEMangle(Par.ResolvedType.Name);
+                ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ItabName]);
+              end
+              else
+                ArgLine := ArgLine + InterfaceArgFragment(TASTExpr(MCallExpr.Args.Items[I]));
+            end
+            else
+            begin
+              ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
+              if Par.IsVarParam then ArgTemps.Add('') else ArgTemps.Add(ArgTemp);
+              EnsureConstStringRef(ArgTemp, Par);
+              ArgTemp := CoerceArg(ArgTemp, TASTExpr(MCallExpr.Args.Items[I]),
+                QbeTypeOf(Par.ResolvedType));
+              ArgLine := ArgLine + Format(', %s %s',
+                [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
+            end;
           end;
           if MDecl.OwnerTypeName <> '' then
             FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, MCallExpr.Name)
@@ -9898,6 +9959,48 @@ begin
     raise ECodeGenError.Create('Unknown expression node type');
 end;
 
+procedure TCodeGenQBE.EmitInterfaceToFieldSlots(AExpr: TASTExpr;
+  const AObjSlotPtr, AItabSlotPtr: string);
+{ Assign an interface expression into two memory slots (obj pointer and itab
+  pointer) that live at known addresses in the object layout (e.g. a class
+  field).  Handles all source expression shapes:
+    - TIdentExpr (interface var/param) → load from %_var_Name_obj/_itab
+    - TAsExpr    (T as IFoo cast)      → runtime itab lookup via _GetItab
+    - class expr (TIdentExpr/call with ResolvedType=tyClass) → static itab
+  ARC: retains the incoming obj and releases whatever was in the field. }
+var
+  IntfDesc: TInterfaceTypeDesc;
+  ClassRT:  TRecordTypeDesc;
+  NewObj, NewItab, OldObj, ItabName: string;
+begin
+  if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyInterface) then
+  begin
+    { Interface source: load obj/itab from the source's fat-pointer slots }
+    EmitInterfaceExprPair(AExpr, NewObj, NewItab);
+  end
+  else if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyClass) then
+  begin
+    { Class source: emit obj, look up static itab }
+    IntfDesc := nil;
+    ClassRT  := TRecordTypeDesc(AExpr.ResolvedType);
+    NewObj   := EmitExpr(AExpr);
+    { There is only one interface candidate if the field has a single interface
+      type; use it as the itab key.  The itab name mirrors the global-assign path. }
+    NewItab  := AllocTemp;
+    EmitLine(Format('  %s =l call $_GetItab(l %s, l $typeinfo_%s)',
+      [NewItab, NewObj, ClassSymName(ClassRT.Name)]));
+  end
+  else
+    raise ECodeGenError.Create('EmitInterfaceToFieldSlots: unsupported source type');
+  OldObj := AllocTemp;
+  EmitLine(Format('  %s =l loadl %s', [OldObj, AObjSlotPtr]));
+  if not ExprOwnsRef(AExpr) then
+    EmitLine(Format('  call $_ClassAddRef(l %s)', [NewObj]));
+  EmitLine(Format('  call $_ClassRelease(l %s)', [OldObj]));
+  EmitLine(Format('  storel %s, %s', [NewObj, AObjSlotPtr]));
+  EmitLine(Format('  storel %s, %s', [NewItab, AItabSlotPtr]));
+end;
+
 procedure TCodeGenQBE.EmitInterfaceExprPair(AExpr: TASTExpr;
   out AObjTemp, AItabTemp: string);
 var
@@ -9905,16 +10008,40 @@ var
   OkT, LblOk, LblFail, LblEnd: string;
   AE: TAsExpr;
   IE: TIdentExpr;
+  IEFld: TFieldInfo;
+  ClassRT: TRecordTypeDesc;
 begin
   if AExpr is TIdentExpr then
   begin
     IE := TIdentExpr(AExpr);
-    AObjTemp  := AllocTemp;
-    AItabTemp := AllocTemp;
-    EmitLine(Format('  %s =l loadl %s_obj', [AObjTemp,
-      VarRef(IE.Name, IE.IsGlobal)]));
-    EmitLine(Format('  %s =l loadl %s_itab', [AItabTemp,
-      VarRef(IE.Name, IE.IsGlobal)]));
+    if IE.IsImplicitSelf and (IE.ImplicitFieldInfo <> nil) then
+    begin
+      { Interface field of Self: load from object layout at Self + FieldOffset }
+      IEFld := TFieldInfo(IE.ImplicitFieldInfo);
+      ObjT := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_Self', [ObjT]));
+      if IEFld.Offset > 0 then
+      begin
+        ItabT := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d', [ItabT, ObjT, IEFld.Offset]));
+        ObjT := ItabT;
+      end;
+      AObjTemp  := AllocTemp;
+      AItabTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [AObjTemp, ObjT]));
+      ItabT := AllocTemp;
+      EmitLine(Format('  %s =l add %s, 8', [ItabT, ObjT]));
+      EmitLine(Format('  %s =l loadl %s', [AItabTemp, ItabT]));
+    end
+    else
+    begin
+      AObjTemp  := AllocTemp;
+      AItabTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s_obj', [AObjTemp,
+        VarRef(IE.Name, IE.IsGlobal)]));
+      EmitLine(Format('  %s =l loadl %s_itab', [AItabTemp,
+        VarRef(IE.Name, IE.IsGlobal)]));
+    end;
   end
   else if AExpr is TAsExpr then
   begin
