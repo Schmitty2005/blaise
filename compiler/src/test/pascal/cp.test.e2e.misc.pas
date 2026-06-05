@@ -74,6 +74,9 @@ type
     { Diamond operator: TFoo<> infers type args from LHS }
     procedure TestRun_Diamond_SingleArg_WorksAtRuntime;
     procedure TestRun_Diamond_TwoArgs_WorksAtRuntime;
+
+    { Address-of array field element }
+    procedure TestRun_AddrOf_DynArrayFieldElement;
   end;
 
 implementation
@@ -845,6 +848,33 @@ begin
   AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('output', '3' + LE + '7' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_AddrOf_DynArrayFieldElement;
+const Src = '''
+    program P;
+    type
+      THolder = record Items: array of Integer; end;
+    var
+      A: array of Integer;
+      H: THolder;
+      P: ^Integer;
+    begin
+      SetLength(A, 3);
+      A[0] := 10;
+      A[1] := 20;
+      A[2] := 30;
+      H.Items := A;
+      P := @H.Items[1];
+      WriteLn(P^)
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output', '20' + LE, Output);
 end;
 
 initialization

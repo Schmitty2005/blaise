@@ -58,6 +58,7 @@ type
     procedure TestCodegen_DynArray_High_CallsRTL;
     procedure TestCodegen_DynArray_Low_ReturnsZero;
     procedure TestCodegen_DynArray_AddrOfElement_ComputesOffset;
+    procedure TestCodegen_DynArray_AddrOfRecordFieldElement;
     procedure TestSemantic_DynArray_High_Accepted;
     procedure TestSemantic_DynArray_Low_Accepted;
   end;
@@ -448,6 +449,29 @@ begin
       end.
       ''');
   AssertTrue('mul for element offset in @A[i]',
+    Self.CountOccurrences(IR, 'mul') > 0);
+  AssertTrue('add to combine base + offset',
+    Self.CountOccurrences(IR, 'add') > 0);
+end;
+
+procedure TDynArrayTests.TestCodegen_DynArray_AddrOfRecordFieldElement;
+var IR: string;
+begin
+  IR := GenIR('''
+      program P;
+      type TRec = record X: Integer; end;
+           PRec = ^TRec;
+           THolder = record Items: array of TRec; end;
+      var A: array of TRec;
+          H: THolder;
+          P: PRec;
+      begin
+        SetLength(A, 3);
+        H.Items := A;
+        P := @H.Items[1]
+      end.
+      ''');
+  AssertTrue('mul for element offset in @Rec.DynArr[i]',
     Self.CountOccurrences(IR, 'mul') > 0);
   AssertTrue('add to combine base + offset',
     Self.CountOccurrences(IR, 'add') > 0);

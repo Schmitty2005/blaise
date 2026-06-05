@@ -7789,6 +7789,27 @@ begin
           Result := PropInfo.TypeDesc;
           AAccess.ResolvedType := Result;
         end;
+      end
+      else if FldInfo.TypeDesc.Kind = tyDynArray then
+      begin
+        AnalyseExpr(AAccess.PropIndexExpr);
+        AAccess.IsArrayAccess := True;
+        Result := TDynArrayTypeDesc(FldInfo.TypeDesc).ElementType;
+        AAccess.ResolvedType := Result;
+      end
+      else if FldInfo.TypeDesc.Kind = tyStaticArray then
+      begin
+        AnalyseExpr(AAccess.PropIndexExpr);
+        AAccess.IsArrayAccess := True;
+        Result := TStaticArrayTypeDesc(FldInfo.TypeDesc).ElementType;
+        AAccess.ResolvedType := Result;
+      end
+      else if FldInfo.TypeDesc.Kind = tyOpenArray then
+      begin
+        AnalyseExpr(AAccess.PropIndexExpr);
+        AAccess.IsArrayAccess := True;
+        Result := TOpenArrayTypeDesc(FldInfo.TypeDesc).ElementType;
+        AAccess.ResolvedType := Result;
       end;
     end;
     Exit;
@@ -7886,6 +7907,27 @@ begin
               Result := PropInfo.TypeDesc;
               AAccess.ResolvedType := Result;
             end;
+          end
+          else if AAccess.FieldInfo.TypeDesc.Kind = tyDynArray then
+          begin
+            AnalyseExpr(AAccess.PropIndexExpr);
+            AAccess.IsArrayAccess := True;
+            Result := TDynArrayTypeDesc(AAccess.FieldInfo.TypeDesc).ElementType;
+            AAccess.ResolvedType := Result;
+          end
+          else if AAccess.FieldInfo.TypeDesc.Kind = tyStaticArray then
+          begin
+            AnalyseExpr(AAccess.PropIndexExpr);
+            AAccess.IsArrayAccess := True;
+            Result := TStaticArrayTypeDesc(AAccess.FieldInfo.TypeDesc).ElementType;
+            AAccess.ResolvedType := Result;
+          end
+          else if AAccess.FieldInfo.TypeDesc.Kind = tyOpenArray then
+          begin
+            AnalyseExpr(AAccess.PropIndexExpr);
+            AAccess.IsArrayAccess := True;
+            Result := TOpenArrayTypeDesc(AAccess.FieldInfo.TypeDesc).ElementType;
+            AAccess.ResolvedType := Result;
           end;
         end;
         Exit;
@@ -8103,6 +8145,27 @@ begin
         Result := PropInfo.TypeDesc;
         AAccess.ResolvedType := Result;
       end;
+    end
+    else if FldInfo.TypeDesc.Kind = tyDynArray then
+    begin
+      AnalyseExpr(AAccess.PropIndexExpr);
+      AAccess.IsArrayAccess := True;
+      Result := TDynArrayTypeDesc(FldInfo.TypeDesc).ElementType;
+      AAccess.ResolvedType := Result;
+    end
+    else if FldInfo.TypeDesc.Kind = tyStaticArray then
+    begin
+      AnalyseExpr(AAccess.PropIndexExpr);
+      AAccess.IsArrayAccess := True;
+      Result := TStaticArrayTypeDesc(FldInfo.TypeDesc).ElementType;
+      AAccess.ResolvedType := Result;
+    end
+    else if FldInfo.TypeDesc.Kind = tyOpenArray then
+    begin
+      AnalyseExpr(AAccess.PropIndexExpr);
+      AAccess.IsArrayAccess := True;
+      Result := TOpenArrayTypeDesc(FldInfo.TypeDesc).ElementType;
+      AAccess.ResolvedType := Result;
     end;
   end;
 end;

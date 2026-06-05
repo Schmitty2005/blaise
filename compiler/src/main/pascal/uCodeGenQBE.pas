@@ -8897,6 +8897,60 @@ begin
       if FldAccess.FieldInfo = nil then
         raise ECodeGenError.Create(Format(
           'Chained field ''%s'' has no resolved field info', [FldAccess.FieldName]));
+      if FldAccess.IsArrayAccess then
+      begin
+        if FldAccess.FieldInfo.Offset > 0 then
+        begin
+          Ptr := AllocTemp;
+          EmitLine(Format('  %s =l add %s, %d', [Ptr, L, FldAccess.FieldInfo.Offset]));
+          L := Ptr;
+        end;
+        if FldAccess.FieldInfo.TypeDesc.Kind = tyDynArray then
+        begin
+          ElemSize := TDynArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType.RawSize;
+          Ptr := AllocTemp;
+          EmitLine(Format('  %s =l loadl %s', [Ptr, L]));
+          IdxTemp := EmitExpr(FldAccess.PropIndexExpr);
+          T := AllocTemp;
+          EmitLine(Format('  %s =l extsw %s', [T, IdxTemp]));
+          L := AllocTemp;
+          EmitLine(Format('  %s =l mul %s, %d', [L, T, ElemSize]));
+          T := AllocTemp;
+          EmitLine(Format('  %s =l add %s, %s', [T, Ptr, L]));
+          if TDynArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType.Kind = tyRecord then
+            Exit(T);
+          QType := QbeTypeOf(TDynArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType);
+          LoadInstr := LoadInstrFor(TDynArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType);
+          L := AllocTemp;
+          EmitLine(Format('  %s =%s %s %s', [L, QType, LoadInstr, T]));
+          Exit(L);
+        end
+        else if FldAccess.FieldInfo.TypeDesc.Kind = tyStaticArray then
+        begin
+          SAT := TStaticArrayTypeDesc(FldAccess.FieldInfo.TypeDesc);
+          ElemSize := SAT.ElementType.RawSize;
+          IdxTemp := EmitExpr(FldAccess.PropIndexExpr);
+          T := AllocTemp;
+          EmitLine(Format('  %s =l extsw %s', [T, IdxTemp]));
+          if SAT.LowBound <> 0 then
+          begin
+            Ptr := AllocTemp;
+            EmitLine(Format('  %s =l sub %s, %d', [Ptr, T, SAT.LowBound]));
+            T := Ptr;
+          end;
+          Ptr := AllocTemp;
+          EmitLine(Format('  %s =l mul %s, %d', [Ptr, T, ElemSize]));
+          T := AllocTemp;
+          EmitLine(Format('  %s =l add %s, %s', [T, L, Ptr]));
+          if SAT.ElementType.Kind = tyRecord then
+            Exit(T);
+          QType := QbeTypeOf(SAT.ElementType);
+          LoadInstr := LoadInstrFor(SAT.ElementType);
+          L := AllocTemp;
+          EmitLine(Format('  %s =%s %s %s', [L, QType, LoadInstr, T]));
+          Exit(L);
+        end;
+      end;
       if FldAccess.FieldInfo.Offset > 0 then
       begin
         Ptr := AllocTemp;
@@ -9194,6 +9248,90 @@ begin
       T := AllocTemp;
       EmitLine(Format('  %s =w loadub %s', [T, IdxTemp]));
       Result := T;
+    end
+    else if FldAccess.IsArrayAccess then
+    begin
+      { Array field subscript: Rec.Arr[I] — load array base, compute element addr. }
+      L := AllocTemp;
+      if FldAccess.IsVarParam then
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [T, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+        L := T;
+      end
+      else
+        EmitLine(Format('  %s =l copy %s', [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+      if FldAccess.FieldInfo.Offset > 0 then
+      begin
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d', [Ptr, L, FldAccess.FieldInfo.Offset]));
+        L := Ptr;
+      end;
+      if FldAccess.FieldInfo.TypeDesc.Kind = tyDynArray then
+      begin
+        ElemSize := TDynArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType.RawSize;
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [Ptr, L]));
+        IdxTemp := EmitExpr(FldAccess.PropIndexExpr);
+        T := AllocTemp;
+        EmitLine(Format('  %s =l extsw %s', [T, IdxTemp]));
+        L := AllocTemp;
+        EmitLine(Format('  %s =l mul %s, %d', [L, T, ElemSize]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %s', [T, Ptr, L]));
+        if TDynArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType.Kind = tyRecord then
+          Exit(T);
+        QType := QbeTypeOf(TDynArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType);
+        LoadInstr := LoadInstrFor(TDynArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType);
+        L := AllocTemp;
+        EmitLine(Format('  %s =%s %s %s', [L, QType, LoadInstr, T]));
+        Exit(L);
+      end
+      else if FldAccess.FieldInfo.TypeDesc.Kind = tyStaticArray then
+      begin
+        SAT := TStaticArrayTypeDesc(FldAccess.FieldInfo.TypeDesc);
+        ElemSize := SAT.ElementType.RawSize;
+        IdxTemp := EmitExpr(FldAccess.PropIndexExpr);
+        T := AllocTemp;
+        EmitLine(Format('  %s =l extsw %s', [T, IdxTemp]));
+        if SAT.LowBound <> 0 then
+        begin
+          Ptr := AllocTemp;
+          EmitLine(Format('  %s =l sub %s, %d', [Ptr, T, SAT.LowBound]));
+          T := Ptr;
+        end;
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l mul %s, %d', [Ptr, T, ElemSize]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %s', [T, L, Ptr]));
+        if SAT.ElementType.Kind = tyRecord then
+          Exit(T);
+        QType := QbeTypeOf(SAT.ElementType);
+        LoadInstr := LoadInstrFor(SAT.ElementType);
+        L := AllocTemp;
+        EmitLine(Format('  %s =%s %s %s', [L, QType, LoadInstr, T]));
+        Exit(L);
+      end
+      else if FldAccess.FieldInfo.TypeDesc.Kind = tyOpenArray then
+      begin
+        ElemSize := TOpenArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType.RawSize;
+        Ptr := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [Ptr, L]));
+        IdxTemp := EmitExpr(FldAccess.PropIndexExpr);
+        T := AllocTemp;
+        EmitLine(Format('  %s =l extsw %s', [T, IdxTemp]));
+        L := AllocTemp;
+        EmitLine(Format('  %s =l mul %s, %d', [L, T, ElemSize]));
+        T := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %s', [T, Ptr, L]));
+        if TOpenArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType.Kind = tyRecord then
+          Exit(T);
+        QType := QbeTypeOf(TOpenArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType);
+        LoadInstr := LoadInstrFor(TOpenArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType);
+        L := AllocTemp;
+        EmitLine(Format('  %s =%s %s %s', [L, QType, LoadInstr, T]));
+        Exit(L);
+      end;
     end
     else if FldAccess.PropRead <> nil then
     begin
@@ -11255,6 +11393,57 @@ begin
     Result := VarRef(TIdentExpr(AExpr.Expr).Name,
                      TIdentExpr(AExpr.Expr).IsGlobal);
     Exit;
+  end;
+  { @Rec.Arr[I] — address of array-field element.  The parser absorbs [I]
+    into TFieldAccessExpr.PropIndexExpr; semantic sets IsArrayAccess.  Compute
+    the element address the same way EmitAddrOfExpr handles TStringSubscriptExpr. }
+  if (AExpr.Expr is TFieldAccessExpr) and
+     TFieldAccessExpr(AExpr.Expr).IsArrayAccess then
+  begin
+    FldExpr := TFieldAccessExpr(AExpr.Expr);
+    if FldExpr.Base <> nil then
+      StrPtr := EmitInstancePtr(FldExpr.Base)
+    else if FldExpr.IsVarParam then
+    begin
+      StrPtr := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [StrPtr, VarRef(FldExpr.RecordName, FldExpr.IsGlobal)]));
+    end
+    else
+      StrPtr := VarRef(FldExpr.RecordName, FldExpr.IsGlobal);
+    if FldExpr.FieldInfo.Offset > 0 then
+    begin
+      ObjPtr := AllocTemp;
+      EmitLine(Format('  %s =l add %s, %d', [ObjPtr, StrPtr, FldExpr.FieldInfo.Offset]));
+      StrPtr := ObjPtr;
+    end;
+    if FldExpr.FieldInfo.TypeDesc.Kind = tyDynArray then
+    begin
+      ElemSize := TDynArrayTypeDesc(FldExpr.FieldInfo.TypeDesc).ElementType.RawSize;
+      ObjPtr := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [ObjPtr, StrPtr]));
+      StrPtr := ObjPtr;
+    end
+    else if FldExpr.FieldInfo.TypeDesc.Kind = tyStaticArray then
+      ElemSize := TStaticArrayTypeDesc(FldExpr.FieldInfo.TypeDesc).ElementType.RawSize
+    else
+      ElemSize := TOpenArrayTypeDesc(FldExpr.FieldInfo.TypeDesc).ElementType.RawSize;
+    IdxW    := EmitExpr(FldExpr.PropIndexExpr);
+    IdxL    := AllocTemp;
+    Offset  := AllocTemp;
+    ElemPtr := AllocTemp;
+    EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
+    if (FldExpr.FieldInfo.TypeDesc.Kind = tyStaticArray) and
+       (TStaticArrayTypeDesc(FldExpr.FieldInfo.TypeDesc).LowBound <> 0) then
+    begin
+      Adj := AllocTemp;
+      EmitLine(Format('  %s =l sub %s, %d',
+        [Adj, IdxL, TStaticArrayTypeDesc(FldExpr.FieldInfo.TypeDesc).LowBound]));
+      EmitLine(Format('  %s =l mul %s, %d', [Offset, Adj, ElemSize]));
+    end
+    else
+      EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
+    EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
+    Exit(ElemPtr);
   end;
   { @Obj.MethodName — method-pointer construction.  The semantic pass set
     IsMethodPtr on the TFieldAccessExpr's ResolvedType when it detected this

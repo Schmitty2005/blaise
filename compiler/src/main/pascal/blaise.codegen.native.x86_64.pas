@@ -2260,6 +2260,7 @@ begin
 
   { Record/class field read: Rec.Field or Class.Field.
     Handles local/global record bases and class (pointer-deref) bases. }
+  { TODO: IsArrayAccess on TFieldAccessExpr (R.Arr[I]) — not yet lowered in native backend }
   if (AExpr is TFieldAccessExpr) and
      (TFieldAccessExpr(AExpr).FieldInfo <> nil) and
      not TFieldAccessExpr(AExpr).IsMethodCall and
@@ -2310,6 +2311,8 @@ begin
     end;
     Exit;
   end;
+
+  { TODO: @Rec.Arr[I] (TAddrOfExpr with TFieldAccessExpr.IsArrayAccess) — not yet lowered in native backend }
 
   { @FuncName — load the function's code address into %rax.
     The semantic pass sets ResolvedType.Kind = tyProcedural on the inner
