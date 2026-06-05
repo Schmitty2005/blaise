@@ -263,14 +263,14 @@ var
 begin
   Self.SetFg(Color);
   Self.MoveTo(Row, Col);
-  Self.BufWrite(Chr(226) + Chr(148) + Chr(140));
+  Self.BufWrite(Chr(226) + Chr(149) + Chr(173));
   I := 0;
   while I < Width - 2 do
   begin
     Self.BufWrite(Chr(226) + Chr(148) + Chr(128));
     I := I + 1
   end;
-  Self.BufWrite(Chr(226) + Chr(148) + Chr(144));
+  Self.BufWrite(Chr(226) + Chr(149) + Chr(174));
 
   if Length(Title) > 0 then
   begin
@@ -293,14 +293,14 @@ begin
   end;
 
   Self.MoveTo(Row + Height - 1, Col);
-  Self.BufWrite(Chr(226) + Chr(148) + Chr(148));
+  Self.BufWrite(Chr(226) + Chr(149) + Chr(176));
   I := 0;
   while I < Width - 2 do
   begin
     Self.BufWrite(Chr(226) + Chr(148) + Chr(128));
     I := I + 1
   end;
-  Self.BufWrite(Chr(226) + Chr(148) + Chr(152));
+  Self.BufWrite(Chr(226) + Chr(149) + Chr(175));
   Self.ResetAttr
 end;
 
