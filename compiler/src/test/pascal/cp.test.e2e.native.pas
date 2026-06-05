@@ -154,6 +154,9 @@ type
     { M8 — inherited calls }
     procedure TestRun_Native_Inherited_Proc;
     procedure TestRun_Native_Inherited_FuncSetsResult;
+    { M8 — var/out params to a method call }
+    procedure TestRun_Native_MethodVarParam_Mutates;
+    procedure TestRun_Native_MethodVarParam_Swap;
   end;
 
 implementation
@@ -2114,6 +2117,48 @@ const
     end.
     ''';
 
+  { M8 — a var/out parameter to a method call must pass the caller's address so
+    the mutation is visible after the call. }
+  SrcMethodVarParam = '''
+    program P;
+    type
+      TFoo = class
+        procedure Bump(var X: Integer);
+      end;
+    procedure TFoo.Bump(var X: Integer);
+    begin X := X + 1 end;
+    var
+      F: TFoo;
+      N: Integer;
+    begin
+      F := TFoo.Create;
+      N := 5;
+      F.Bump(N);
+      WriteLn(N)
+    end.
+    ''';
+
+  SrcMethodVarSwap = '''
+    program P;
+    type
+      TSwapper = class
+        procedure Swap(var A, B: Integer);
+      end;
+    procedure TSwapper.Swap(var A, B: Integer);
+    var T: Integer;
+    begin T := A; A := B; B := T end;
+    var
+      S: TSwapper;
+      X, Y: Integer;
+    begin
+      S := TSwapper.Create;
+      X := 3; Y := 7;
+      S.Swap(X, Y);
+      WriteLn(X);
+      WriteLn(Y)
+    end.
+    ''';
+
 procedure TE2ENativeTests.TestRun_Native_OpenArray_Sum;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
@@ -2208,6 +2253,18 @@ procedure TE2ENativeTests.TestRun_Native_Inherited_FuncSetsResult;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcInheritedFunc, '21' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_MethodVarParam_Mutates;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcMethodVarParam, '6' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_MethodVarParam_Swap;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcMethodVarSwap, '7' + LE + '3' + LE, 0);
 end;
 
 initialization

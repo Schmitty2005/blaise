@@ -246,6 +246,12 @@ type
       dispatch to the parent method (no vtable); Self is the current method's
       Self; a value-returning parent stores its result into the Result slot. }
     procedure EmitInheritedCall(ACall: TInheritedCallStmt);
+    { Evaluate one method-call argument and push it onto the stack.  For a var/out
+      param (APar.IsVarParam) the argument's ADDRESS is pushed (leaq for a local
+      or global; the stored pointer when the arg is itself a var param); otherwise
+      the value is pushed.  Used by the method-call statement/expression paths so
+      they handle var params identically to the standalone EmitCall path. }
+    procedure EmitMethodArgPush(APar: TMethodParam; AArg: TASTExpr);
     { Emit a method-pointer (of-object) call: load Code from offset 0 and Data
       from offset 8 of the TMethod block at APtrOperand; call Code with Data as
       Self (%rdi) and the remaining args shifted. }
@@ -2215,12 +2221,11 @@ begin
       'native backend: TMethodCallExpr has no ResolvedMethod (' + ACall.Name + ')');
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
 
-  { Evaluate args left-to-right and push them. }
+  { Evaluate args left-to-right and push them (var/out args by address). }
   for I := 0 to ACall.Args.Count - 1 do
   begin
     Arg := TASTExpr(ACall.Args.Items[I]);
-    Self.EmitExprToEax(Arg);
-    Self.Emit(#9'pushq %rax');
+    Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]), Arg);
   end;
 
   { Load Self (the receiver) into %r10 to survive the pop loop. }
@@ -2252,6 +2257,32 @@ begin
   { Result in %rax (int) or %xmm0 (float). }
 end;
 
+procedure TX86_64Backend.EmitMethodArgPush(APar: TMethodParam; AArg: TASTExpr);
+begin
+  if (APar <> nil) and APar.IsVarParam then
+  begin
+    { Pass the argument's address.  If the arg is itself a var param the slot
+      already holds a pointer; otherwise take the address of the local/global. }
+    if (AArg is TIdentExpr) and TIdentExpr(AArg).IsVarParam then
+      Self.Emit(Format(#9'movq %s, %%rax',
+        [Self.VarOperand(TIdentExpr(AArg).Name)]))
+    else if (AArg is TIdentExpr) and Self.IsLocal(TIdentExpr(AArg).Name) then
+      Self.Emit(Format(#9'leaq %s, %%rax',
+        [Self.VarOperand(TIdentExpr(AArg).Name)]))
+    else if AArg is TIdentExpr then
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [TIdentExpr(AArg).Name]))
+    else
+      raise ENativeCodeGenError.Create(
+        'native backend: var/out method argument must be a variable');
+    Self.Emit(#9'pushq %rax');
+  end
+  else
+  begin
+    Self.EmitExprToEax(AArg);
+    Self.Emit(#9'pushq %rax');
+  end;
+end;
+
 { Emit a TMethodCallStmt (class method call in statement position).
   Same as EmitMethodCallExpr but for statement nodes. }
 procedure TX86_64Backend.EmitMethodCallStmt(ACall: TMethodCallStmt);
@@ -2276,12 +2307,11 @@ begin
       'native backend: TMethodCallStmt has no ResolvedMethod (' + ACall.Name + ')');
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
 
-  { Evaluate args left-to-right and push them. }
+  { Evaluate args left-to-right and push them (var/out args by address). }
   for I := 0 to ACall.Args.Count - 1 do
   begin
     Arg := TASTExpr(ACall.Args.Items[I]);
-    Self.EmitExprToEax(Arg);
-    Self.Emit(#9'pushq %rax');
+    Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]), Arg);
   end;
 
   { Load Self (the receiver) into %r10 (movq for class pointer). }
@@ -2313,26 +2343,21 @@ var
   MD:  TMethodDecl;
   Sym: string;
   Par: TMethodParam;
-  Arg: TASTExpr;
 begin
   { `inherited` on TObject (no parent body) is a no-op. }
   MD := TMethodDecl(ACall.ResolvedMethod);
   if MD = nil then Exit;
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
 
-  { Evaluate value args left-to-right and push them.  var/out and interface
-    args are not yet supported in the native backend's call ABI — fail loudly
-    rather than pass the wrong thing. }
+  { Evaluate args left-to-right and push them (var/out args by address).
+    Interface args are not yet supported in the native call ABI — fail loudly. }
   for I := 0 to ACall.Args.Count - 1 do
   begin
     Par := TMethodParam(MD.Params.Items[I]);
-    if Par.IsVarParam or
-       ((Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface)) then
+    if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface) then
       raise ENativeCodeGenError.Create(
-        'native backend: inherited call with var/interface arg not yet supported');
-    Arg := TASTExpr(ACall.Args.Items[I]);
-    Self.EmitExprToEax(Arg);
-    Self.Emit(#9'pushq %rax');
+        'native backend: inherited call with interface arg not yet supported');
+    Self.EmitMethodArgPush(Par, TASTExpr(ACall.Args.Items[I]));
   end;
 
   { Self is the current method's Self slot. }
