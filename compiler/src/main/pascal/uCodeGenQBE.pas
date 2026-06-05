@@ -6058,6 +6058,7 @@ var
   CD:      TClassTypeDef;
   RD:      TRecordTypeDef;
   GI:      TGenericInstance;
+  GRI:     TGenericRecordInstance;
   MDecl:   TMethodDecl;
   Methods: TObjectList;
 begin
@@ -6081,7 +6082,7 @@ begin
         EmitMethodDef(TD.Name, TMethodDecl(Methods.Items[J]));
   end;
 
-  { Generic instances — emit with mangled type name }
+  { Generic class instances — emit with mangled type name }
   for I := 0 to AProg.GenericInstances.Count - 1 do
   begin
     GI := TGenericInstance(AProg.GenericInstances.Items[I]);
@@ -6090,6 +6091,18 @@ begin
       MDecl := TMethodDecl(GI.ClassDef.Methods.Items[J]);
       if MDecl.Body <> nil then
         EmitMethodDef(QBEMangle(GI.TypeName), MDecl);
+    end;
+  end;
+
+  { Generic record instances — emit method bodies }
+  for I := 0 to AProg.GenericRecordInstances.Count - 1 do
+  begin
+    GRI := TGenericRecordInstance(AProg.GenericRecordInstances.Items[I]);
+    for J := 0 to GRI.RecordDef.Methods.Count - 1 do
+    begin
+      MDecl := TMethodDecl(GRI.RecordDef.Methods.Items[J]);
+      if MDecl.Body <> nil then
+        EmitMethodDef(QBEMangle(GRI.TypeName), MDecl);
     end;
   end;
 end;
@@ -10557,6 +10570,7 @@ var
   Body:      TIRBuffer;
   SavedOut:  TIRBuffer;
   GI:        TGenericInstance;
+  GRI:       TGenericRecordInstance;
   GFI:       TGenericFuncInstance;
   MDecl:     TMethodDecl;
   RT:        TRecordTypeDesc;
@@ -10593,6 +10607,16 @@ begin
             MDecl := TMethodDecl(GI.ClassDef.Methods.Items[J]);
             if MDecl.Body <> nil then
               EmitMethodDef(GI.TypeName, MDecl);
+          end;
+        end;
+        for I := 0 to AUnit.GenericRecordInstances.Count - 1 do
+        begin
+          GRI := TGenericRecordInstance(AUnit.GenericRecordInstances.Items[I]);
+          for J := 0 to GRI.RecordDef.Methods.Count - 1 do
+          begin
+            MDecl := TMethodDecl(GRI.RecordDef.Methods.Items[J]);
+            if MDecl.Body <> nil then
+              EmitMethodDef(GRI.TypeName, MDecl);
           end;
         end;
         for I := 0 to AUnit.GenericFuncInstances.Count - 1 do
@@ -10671,6 +10695,7 @@ var
   ClassRT:      TRecordTypeDesc;
   IntfDesc:     TInterfaceTypeDesc;
   GI:           TGenericInstance;
+  GRI:          TGenericRecordInstance;
   MName:        string;
   MethRef:      string;
   ParentStr:    string;
@@ -10794,6 +10819,16 @@ begin
           end;
           EmitFieldCleanupFn(ClassSymName(QBEMangle(GI.TypeName)),
                              TRecordTypeDesc(GI.TypeDesc));
+        end;
+        for I := 0 to AUnit.GenericRecordInstances.Count - 1 do
+        begin
+          GRI := TGenericRecordInstance(AUnit.GenericRecordInstances.Items[I]);
+          for J := 0 to GRI.RecordDef.Methods.Count - 1 do
+          begin
+            MDecl := TMethodDecl(GRI.RecordDef.Methods.Items[J]);
+            if MDecl.Body <> nil then
+              EmitMethodDef(QBEMangle(GRI.TypeName), MDecl);
+          end;
         end;
       finally
         FOutput := SavedOut;

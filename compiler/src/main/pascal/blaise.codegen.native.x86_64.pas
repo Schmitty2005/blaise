@@ -1257,19 +1257,41 @@ var
   I, J: Integer;
   TD:   TTypeDecl;
   CD:   TClassTypeDef;
+  RD:   TRecordTypeDef;
+  GRI:  TGenericRecordInstance;
   Decl: TMethodDecl;
 begin
-  { Class method bodies live in CD.Methods (the class type definition), NOT in
-    AProg.Block.ProcDecls — after LinkClassMethodImpls the method stubs in
-    ProcDecls have nil bodies and unresolved params. }
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
     TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);
-    if not (TD.Def is TClassTypeDef) then Continue;
-    CD := TClassTypeDef(TD.Def);
-    for J := 0 to CD.Methods.Count - 1 do
+    if TD.Def is TClassTypeDef then
     begin
-      Decl := TMethodDecl(CD.Methods.Items[J]);
+      CD := TClassTypeDef(TD.Def);
+      for J := 0 to CD.Methods.Count - 1 do
+      begin
+        Decl := TMethodDecl(CD.Methods.Items[J]);
+        if Decl.Body = nil then Continue;
+        Self.EmitFunctionDef(Decl);
+      end;
+    end
+    else if TD.Def is TRecordTypeDef then
+    begin
+      RD := TRecordTypeDef(TD.Def);
+      for J := 0 to RD.Methods.Count - 1 do
+      begin
+        Decl := TMethodDecl(RD.Methods.Items[J]);
+        if Decl.Body = nil then Continue;
+        Self.EmitFunctionDef(Decl);
+      end;
+    end;
+  end;
+
+  for I := 0 to AProg.GenericRecordInstances.Count - 1 do
+  begin
+    GRI := TGenericRecordInstance(AProg.GenericRecordInstances.Items[I]);
+    for J := 0 to GRI.RecordDef.Methods.Count - 1 do
+    begin
+      Decl := TMethodDecl(GRI.RecordDef.Methods.Items[J]);
       if Decl.Body = nil then Continue;
       Self.EmitFunctionDef(Decl);
     end;

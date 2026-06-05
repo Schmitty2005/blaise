@@ -87,6 +87,7 @@ type
     function  ResolveParamType(APar: TMethodParam;
                 ALoc: Integer; ACol: Integer): TTypeDesc;
     function  InstantiateGeneric(const ATypeName: string): TRecordTypeDesc;
+    function  InstantiateGenericRecord(const ATypeName: string): TRecordTypeDesc;
     function  InstantiateGenericInterface(const ATypeName: string): TInterfaceTypeDesc;
     function  SubstTypeParam(const ATypeName: string;
                 AParamNames, AArgs: TStringList): string;
@@ -1783,6 +1784,8 @@ begin
   begin
     Result := InstantiateGeneric(AName);
     if Result = nil then
+      Result := InstantiateGenericRecord(AName);
+    if Result = nil then
       Result := InstantiateGenericInterface(AName);
   end;
 end;
@@ -2221,6 +2224,201 @@ begin
       FCurrentUnit.GenericInstances.Add(GI)
     else
       FProg.GenericInstances.Add(GI);
+
+    Result := RT;
+  finally
+    Args.Free;
+  end;
+end;
+
+function TSemanticAnalyser.InstantiateGenericRecord(const ATypeName: string): TRecordTypeDesc;
+var
+  BracPos:  Integer;
+  BaseName: string;
+  ArgsStr:  string;
+  Args:     TStringList;
+  Templ:    TGenericRecordDef;
+  ClonedRD: TRecordTypeDef;
+  I, J, K:  Integer;
+  FDecl:    TFieldDecl;
+  NewFDecl: TFieldDecl;
+  MDecl:    TMethodDecl;
+  NewMDecl: TMethodDecl;
+  Par:      TMethodParam;
+  NewPar:   TMethodParam;
+  Sym:      TSymbol;
+  Key:      string;
+  FldType:  TTypeDesc;
+  FldName:  string;
+  ParType:  TTypeDesc;
+  RT:       TRecordTypeDesc;
+  GRI:      TGenericRecordInstance;
+  ConcrType: TTypeDesc;
+begin
+  Result := nil;
+
+  BracPos := StrPos('<', ATypeName);
+  if BracPos < 0 then Exit;
+  BaseName := StrHead(ATypeName, BracPos);
+  ArgsStr  := StrCopyFrom(ATypeName, BracPos + 1, Length(ATypeName) - BracPos - 2);
+
+  Args := TStringList.Create;
+  try
+    while ArgsStr <> '' do
+    begin
+      BracPos := StrPos(',', ArgsStr);
+      if BracPos >= 0 then
+      begin
+        Args.Add(Trim(StrHead(ArgsStr, BracPos)));
+        ArgsStr := Trim(StrCopyTail(ArgsStr, BracPos + 1));
+      end
+      else
+      begin
+        Args.Add(Trim(ArgsStr));
+        ArgsStr := '';
+      end;
+    end;
+
+    if not (FTable.FindGeneric(BaseName) is TGenericRecordDef) then Exit;
+    Templ := TGenericRecordDef(FTable.FindGeneric(BaseName));
+    if Templ = nil then Exit;
+    if Args.Count <> Templ.ParamNames.Count then Exit;
+
+    for I := 0 to Args.Count - 1 do
+      if (Templ.ParamConstraints <> nil) and (I < Templ.ParamConstraints.Count) then
+        CheckTypeParamConstraint(Templ.ParamNames.Strings[I], Args.Strings[I],
+          Templ.ParamConstraints.Strings[I],
+          Format('instantiation ''%s''', [ATypeName]));
+
+    RT  := FTable.NewRecordType(ATypeName);
+    Sym := TSymbol.Create(ATypeName, skType, RT);
+    FTable.DefineGlobal(Sym);
+
+    ClonedRD := TRecordTypeDef.Create;
+    ClonedRD.IsPacked := Templ.RecordDef.IsPacked;
+
+    for I := 0 to Templ.RecordDef.Fields.Count - 1 do
+    begin
+      FDecl    := TFieldDecl(Templ.RecordDef.Fields.Items[I]);
+      NewFDecl := TFieldDecl.Create;
+      for J := 0 to FDecl.Names.Count - 1 do
+        NewFDecl.Names.Add(FDecl.Names.Strings[J]);
+      NewFDecl.TypeName := SubstTypeParam(FDecl.TypeName, Templ.ParamNames, Args);
+      ClonedRD.Fields.Add(NewFDecl);
+    end;
+
+    for I := 0 to Templ.RecordDef.Methods.Count - 1 do
+    begin
+      MDecl            := TMethodDecl(Templ.RecordDef.Methods.Items[I]);
+      NewMDecl         := TMethodDecl.Create;
+      NewMDecl.Name          := MDecl.Name;
+      NewMDecl.OwnerTypeName := ATypeName;
+      NewMDecl.IsRecordMethod := True;
+      if MDecl.Body <> nil then
+      begin
+        NewMDecl.Body    := CloneBlock(MDecl.Body);
+        NewMDecl.OwnBody := True;
+      end
+      else
+      begin
+        NewMDecl.Body    := nil;
+        NewMDecl.OwnBody := False;
+      end;
+
+      for J := 0 to MDecl.Params.Count - 1 do
+      begin
+        Par    := TMethodParam(MDecl.Params.Items[J]);
+        NewPar := TMethodParam.Create;
+        NewPar.ParamName  := Par.ParamName;
+        NewPar.IsVarParam := Par.IsVarParam;
+        NewPar.TypeName   := SubstTypeParam(Par.TypeName, Templ.ParamNames, Args);
+        NewMDecl.Params.Add(NewPar);
+      end;
+
+      NewMDecl.ReturnTypeName :=
+        SubstTypeParam(MDecl.ReturnTypeName, Templ.ParamNames, Args);
+
+      ClonedRD.Methods.Add(NewMDecl);
+    end;
+
+    for J := 0 to ClonedRD.Fields.Count - 1 do
+    begin
+      NewFDecl := TFieldDecl(ClonedRD.Fields.Items[J]);
+      FldType  := FindTypeOrInstantiate(NewFDecl.TypeName);
+      if FldType = nil then
+        SemanticError(
+          Format('Unknown type ''%s'' for field in ''%s''', [NewFDecl.TypeName, ATypeName]),
+          0, 0);
+      NewFDecl.ResolvedType := FldType;
+      for K := 0 to NewFDecl.Names.Count - 1 do
+      begin
+        FldName := NewFDecl.Names.Strings[K];
+        RT.AddField(FldName, FldType);
+      end;
+    end;
+
+    for J := 0 to ClonedRD.Methods.Count - 1 do
+    begin
+      NewMDecl := TMethodDecl(ClonedRD.Methods.Items[J]);
+      Key      := ATypeName + '.' + NewMDecl.Name;
+      FMethodIndex.AddObject(Key, NewMDecl);
+      NewMDecl.OwningUnit      := Sym.OwningUnit;
+      NewMDecl.ResolvedQbeName := CurrentUnitPrefix +
+                                  ATypeName + '_' + NewMDecl.Name;
+
+      for K := 0 to NewMDecl.Params.Count - 1 do
+      begin
+        Par     := TMethodParam(NewMDecl.Params.Items[K]);
+        ParType := FindTypeOrInstantiate(Par.TypeName);
+        if ParType = nil then
+          SemanticError(
+            Format('Unknown type ''%s'' for param ''%s'' in ''%s''',
+              [Par.TypeName, Par.ParamName, ATypeName]),
+            0, 0);
+        Par.ResolvedType := ParType;
+      end;
+
+      if NewMDecl.ReturnTypeName <> '' then
+      begin
+        ParType := FindTypeOrInstantiate(NewMDecl.ReturnTypeName);
+        if ParType = nil then
+          SemanticError(
+            Format('Unknown return type ''%s'' for method ''%s'' in ''%s''',
+              [NewMDecl.ReturnTypeName, NewMDecl.Name, ATypeName]),
+            0, 0);
+        NewMDecl.ResolvedReturnType := ParType;
+      end;
+    end;
+
+    FTable.PushScope;
+    try
+      for K := 0 to Templ.ParamNames.Count - 1 do
+      begin
+        ConcrType := FindTypeOrInstantiate(Args.Strings[K]);
+        if ConcrType <> nil then
+        begin
+          Sym := TSymbol.Create(Templ.ParamNames.Strings[K], skType, ConcrType);
+          FTable.Define(Sym);
+        end;
+      end;
+      for J := 0 to ClonedRD.Methods.Count - 1 do
+      begin
+        NewMDecl := TMethodDecl(ClonedRD.Methods.Items[J]);
+        if NewMDecl.Body <> nil then
+          AnalyseMethodDecl(NewMDecl, RT);
+      end;
+    finally
+      FTable.PopScope;
+    end;
+
+    GRI           := TGenericRecordInstance.Create;
+    GRI.TypeName  := ATypeName;
+    GRI.RecordDef := ClonedRD;
+    GRI.TypeDesc  := RT;
+    if FCurrentUnit <> nil then
+      FCurrentUnit.GenericRecordInstances.Add(GRI)
+    else
+      FProg.GenericRecordInstances.Add(GRI);
 
     Result := RT;
   finally
@@ -2888,6 +3086,11 @@ begin
       FTable.RegisterGeneric(TD.Name, TD.Def);
       Continue;
     end
+    else if TD.Def is TGenericRecordDef then
+    begin
+      FTable.RegisterGeneric(TD.Name, TD.Def);
+      Continue;
+    end
     else if TD.Def is TGenericInterfaceDef then
     begin
       { Register as template — instantiated on demand when used as type name }
@@ -3041,6 +3244,7 @@ begin
 
     { Generic templates, enum, set, and type alias need no pass-2 processing }
     if TD.Def is TGenericTypeDef then Continue;
+    if TD.Def is TGenericRecordDef then Continue;
     if TD.Def is TGenericInterfaceDef then Continue;
     if TD.Def is TEnumTypeDef then Continue;
     if TD.Def is TSetTypeDef then Continue;

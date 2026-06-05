@@ -58,6 +58,7 @@ uses
   cp.test.flowjumps,
   cp.test.multiwrite,
   cp.test.chainedfields,
+  cp.test.genericrecords,
   cp.test.genericconstraints,
   cp.test.weakref,
   cp.test.stringops,

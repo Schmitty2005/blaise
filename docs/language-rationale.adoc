@@ -3137,6 +3137,66 @@ which replaces the sentinel with the full concrete type name taken from
 an explicit constructor call.
 
 
+== Generic Records
+
+=== Decision
+
+Blaise supports generic records using the same `<T>` syntax as generic classes
+and interfaces:
+
+[source,pascal]
+----
+type
+  TMyVal<T> = record
+    Value: T;
+    function GetValue: T;
+    begin
+      Result := Self.Value
+    end;
+  end;
+
+var
+  V: TMyVal<Integer>;
+begin
+  V.Value := 42;
+  WriteLn(V.GetValue());
+end.
+----
+
+Generic records are monomorphized exactly like generic classes: each distinct
+instantiation (`TMyVal<Integer>`, `TMyVal<string>`, etc.) creates a new
+concrete `TRecordTypeDesc` with its own field layout and method bodies.  Type
+parameter constraints apply identically.
+
+=== Alternatives considered
+
+* *Classes only* — The initial generics implementation supported only classes
+  and interfaces.  This meant lightweight value-type wrappers (tagged unions,
+  option types, result types) had to be classes with heap allocation and ARC
+  overhead.  Generic records give zero-overhead value-type generics.
+
+* *Reuse `TGenericTypeDef` / `TGenericInstance` for both classes and records* —
+  Rejected because `TGenericTypeDef.ClassDef` is specifically a
+  `TClassTypeDef` and the two AST node types have meaningfully different
+  fields (records lack `ParentName`, `ImplementsNames`, `Properties`,
+  `Attributes`).  Separate `TGenericRecordDef` and `TGenericRecordInstance`
+  types keep the AST honest and avoid nil-field ambiguity.
+
+=== Key differences from generic classes
+
+Records are value types, so generic record instances do *not* emit:
+
+* Typeinfo blocks (`$typeinfo_<T>`)
+* Vtable data (`$vtable_<T>`)
+* Field cleanup functions (`$_FieldCleanup_<T>`)
+* Inheritance chains or interface implementation tables
+
+They emit only field layout (offsets computed by the semantic analyser) and
+method bodies (one function per method per instantiation).  ARC-managed fields
+inside generic records are handled by the existing record-cleanup logic at
+variable scope exit, not by class-style field cleanup.
+
+
 == Platform constants — one name per concept
 
 Delphi and FPC carry multiple aliases for the same platform constant:

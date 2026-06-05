@@ -407,6 +407,7 @@ procedure TParser.ParseTypeDecl(ABlock: TBlock);
 var
   TD:               TTypeDecl;
   GD:               TGenericTypeDef;
+  GRD:              TGenericRecordDef;
   GID:              TGenericInterfaceDef;
   AD:               TTypeAliasDef;
   ParamNames:       TStringList;
@@ -490,12 +491,18 @@ begin
           GID.IntfDef := ParseInterfaceDef;
           TD.Def := GID;
         end
-        else
+        else if Check(tkRecord) then
         begin
-          if not Check(tkClass) then
-            raise EParseError.Create(Format(
-              'Generic type must be a class or interface at line %d col %d in %s',
-              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+          GRD            := TGenericRecordDef.Create;
+          GRD.Line       := TD.Line;
+          GRD.Col        := TD.Col;
+          GRD.ParamNames.AddStrings(ParamNames);
+          GRD.ParamConstraints.AddStrings(ParamConstraints);
+          GRD.RecordDef := ParseRecordDef;
+          TD.Def := GRD;
+        end
+        else if Check(tkClass) then
+        begin
           GD            := TGenericTypeDef.Create;
           GD.Line       := TD.Line;
           GD.Col        := TD.Col;
@@ -504,7 +511,11 @@ begin
           GD.ClassDef := ParseClassDef;
           GD.ClassDef.Attributes.AddStrings(ClassAttrs);
           TD.Def := GD;
-        end;
+        end
+        else
+          raise EParseError.Create(Format(
+            'Generic type must be a class, record, or interface at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
       finally
         ParamConstraints.Free;
         ParamNames.Free;

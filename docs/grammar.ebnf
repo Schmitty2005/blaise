@@ -222,12 +222,14 @@ TypeDecl
     ;
 
 (* The second form declares a generic type template.  TypeDef must be either
- * ClassDef (→ TGenericTypeDef) or InterfaceDef (→ TGenericInterfaceDef).
- * The parser rejects other TypeDef kinds at that position. *)
+ * RecordDef (→ TGenericRecordDef), ClassDef (→ TGenericTypeDef), or
+ * InterfaceDef (→ TGenericInterfaceDef).  The parser rejects other TypeDef
+ * kinds at that position. *)
 
 TypeDef
     = RecordDef
     | ClassDef
+    | GenericRecordDef
     | GenericClassDef
     | InterfaceDef
     | GenericInterfaceDef
@@ -272,6 +274,20 @@ GenericName
  * interface and silently moved to the ImplementsNames list.  Subsequent names
  * are always treated as implements entries.
  * Example: class(TObject, IFoo, IBar<Integer>) *)
+
+GenericRecordDef
+    = RECORD                               (* generic template, e.g. record with <T> *)
+      { FieldDecl | MethodDecl }
+      END
+    ;
+
+(* GenericRecordDef is syntactically identical to RecordDef; the distinction
+ * is that it appears after "IDENT < TypeParamList > =" in a TypeDecl.  The
+ * parser creates a TGenericRecordDef AST node wrapping the TRecordTypeDef
+ * body.  Type parameters are substituted at instantiation time (e.g.
+ * TMyVal<Integer>).  Records are value types — no inheritance, no vtable,
+ * no typeinfo — so monomorphized instances produce only field layout and
+ * method bodies, not class metadata. *)
 
 GenericClassDef
     = CLASS LESS TypeParamList GREATER     (* generic template, e.g. class<T> *)

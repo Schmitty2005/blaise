@@ -747,6 +747,27 @@ type
     destructor Destroy; override;
   end;
 
+  { Generic record template: type TMyVal<T> = record ... end }
+  TGenericRecordDef = class(TASTTypeDef)
+  public
+    ParamNames:       TStringList;      { owned — type parameter names, e.g. ['T'] }
+    ParamConstraints: TStringList;      { owned — parallel to ParamNames; '' = unconstrained }
+    RecordDef:        TRecordTypeDef;   { owned — template record body with unresolved param types }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+  { One concrete instantiation of a generic record — stored on TProgram.
+    Codegen iterates this list to emit method bodies and field cleanup. }
+  TGenericRecordInstance = class
+  public
+    TypeName:  string;          { raw e.g. 'TMyVal<Integer>' }
+    RecordDef: TRecordTypeDef;  { owned — cloned record body with substituted type names }
+    [Unretained] TypeDesc: TTypeDesc;  { non-owned — points to TRecordTypeDesc in SymbolTable }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
   { One concrete instantiation of a generic interface — stored on TProgram.
     Codegen iterates this list to emit typeinfo data. }
   TGenericInterfaceInstance = class
@@ -826,9 +847,10 @@ type
     UsedUnits:            TStringList;    { owned }
     Block:                TBlock;         { owned }
     SymbolTable:          TSymbolTable;   { owned after semantic analysis; nil before }
-    GenericInstances:     TObjectList;    { owned TGenericInstance — populated by uSemantic }
-    GenericFuncInstances: TObjectList;    { owned TGenericFuncInstance — populated by uSemantic }
-    GenericIntfInstances: TObjectList;    { owned TGenericInterfaceInstance — populated by uSemantic }
+    GenericInstances:       TObjectList;    { owned TGenericInstance — populated by uSemantic }
+    GenericFuncInstances:   TObjectList;    { owned TGenericFuncInstance — populated by uSemantic }
+    GenericIntfInstances:   TObjectList;    { owned TGenericInterfaceInstance — populated by uSemantic }
+    GenericRecordInstances: TObjectList;    { owned TGenericRecordInstance — populated by uSemantic }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -847,9 +869,10 @@ type
     SymbolTable: TSymbolTable; { owned after standalone semantic analysis;
                                  nil when the unit is analysed as part of a
                                  program (program owns the table). }
-    GenericInstances:     TObjectList;
-    GenericFuncInstances: TObjectList;
-    GenericIntfInstances: TObjectList;
+    GenericInstances:       TObjectList;
+    GenericFuncInstances:   TObjectList;
+    GenericIntfInstances:   TObjectList;
+    GenericRecordInstances: TObjectList;
     constructor Create;
     destructor Destroy; override;
   end;
@@ -1378,6 +1401,34 @@ begin
   inherited Destroy;
 end;
 
+{ TGenericRecordDef }
+
+constructor TGenericRecordDef.Create;
+begin
+  inherited Create;
+  ParamNames       := TStringList.Create;
+  ParamConstraints := TStringList.Create;
+  RecordDef        := TRecordTypeDef.Create;
+end;
+
+destructor TGenericRecordDef.Destroy;
+begin
+  inherited Destroy;
+end;
+
+{ TGenericRecordInstance }
+
+constructor TGenericRecordInstance.Create;
+begin
+  inherited Create;
+  RecordDef := TRecordTypeDef.Create;
+end;
+
+destructor TGenericRecordInstance.Destroy;
+begin
+  inherited Destroy;
+end;
+
 { TGenericInterfaceInstance }
 
 constructor TGenericInterfaceInstance.Create;
@@ -1489,10 +1540,11 @@ end;
 constructor TProgram.Create;
 begin
   inherited Create;
-  UsedUnits            := TStringList.Create;
-  GenericInstances     := TObjectList.Create(True);
-  GenericFuncInstances := TObjectList.Create(True);
-  GenericIntfInstances := TObjectList.Create(True);
+  UsedUnits              := TStringList.Create;
+  GenericInstances       := TObjectList.Create(True);
+  GenericFuncInstances   := TObjectList.Create(True);
+  GenericIntfInstances   := TObjectList.Create(True);
+  GenericRecordInstances := TObjectList.Create(True);
 end;
 
 destructor TConstDecl.Destroy;
@@ -1518,9 +1570,10 @@ begin
   ImplBlock  := TBlock.Create;
   InitStmts  := nil;
   FinalStmts := nil;
-  GenericInstances     := TObjectList.Create(True);
-  GenericFuncInstances := TObjectList.Create(True);
-  GenericIntfInstances := TObjectList.Create(True);
+  GenericInstances       := TObjectList.Create(True);
+  GenericFuncInstances   := TObjectList.Create(True);
+  GenericIntfInstances   := TObjectList.Create(True);
+  GenericRecordInstances := TObjectList.Create(True);
 end;
 
 destructor TUnit.Destroy;

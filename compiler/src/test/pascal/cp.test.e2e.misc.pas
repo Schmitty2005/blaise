@@ -79,6 +79,12 @@ type
 
     { Address-of array field element }
     procedure TestRun_AddrOf_DynArrayFieldElement;
+
+    { Generic records }
+    procedure TestRun_GenericRecord_FieldStore_Prints;
+    procedure TestRun_GenericRecord_WithMethod_Prints;
+    procedure TestRun_GenericRecord_TwoParams_Prints;
+    procedure TestRun_GenericRecord_StringField_Prints;
   end;
 
 implementation
@@ -910,7 +916,99 @@ begin
   AssertEquals('output', '20' + LE, Output);
 end;
 
+procedure TE2EMiscTests.TestRun_GenericRecord_FieldStore_Prints;
+const Src = '''
+    program P;
+    type
+      TMyVal<T> = record
+        Value: T;
+      end;
+    var V: TMyVal<Integer>;
+    begin
+      V.Value := 9;
+      WriteLn(V.Value)
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output', '9' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_GenericRecord_WithMethod_Prints;
+const Src = '''
+    program P;
+    type
+      TMyVal<T> = record
+        Value: T;
+        function GetValue: T;
+        begin
+          Result := Self.Value
+        end;
+      end;
+    var V: TMyVal<Integer>;
+    begin
+      V.Value := 42;
+      WriteLn(V.GetValue())
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output', '42' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_GenericRecord_TwoParams_Prints;
+const Src = '''
+    program P;
+    type
+      TPair<K, V> = record
+        Key: K;
+        Val: V;
+      end;
+    var P: TPair<Integer, Integer>;
+    begin
+      P.Key := 10;
+      P.Val := 20;
+      WriteLn(P.Key);
+      WriteLn(P.Val)
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output', '10' + LE + '20' + LE, Output);
+end;
+
+procedure TE2EMiscTests.TestRun_GenericRecord_StringField_Prints;
+const Src = '''
+    program P;
+    type
+      TMyVal<T> = record
+        Value: T;
+      end;
+    var V: TMyVal<string>;
+    begin
+      V.Value := 'hello';
+      WriteLn(V.Value)
+    end.
+    ''';
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(Src, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('output', 'hello' + LE, Output);
+end;
+
 initialization
   RegisterTest(TE2EMiscTests);
 
 end.
+
