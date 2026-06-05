@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <name>blaise-kanban</name>
+  <!-- version inherited from root aggregator -->
+
+  <build>
+    <packaging>application</packaging>
+    <mainSource>kanban_app.pas</mainSource>
+    <executableName>kanban</executableName>
+
+    <manualUnitPaths>true</manualUnitPaths>
+    <unitPaths>
+      <path>src/main/pascal</path>
+      <path>../../runtime/src/main/pascal</path>
+      <path>../../stdlib/src/main/pascal</path>
+    </unitPaths>
+  </build>
+</project>
