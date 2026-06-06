@@ -35,6 +35,7 @@ type
     procedure TestRun_Record_StmtMethodCall_ImplicitSelf;
     procedure TestRun_Record_StmtMethodCall_Result;
     procedure TestRun_Record_AddrOfImplicitSelf;
+    procedure TestRun_Record_PointerDerefFieldAccess;
   end;
 
 implementation
@@ -301,6 +302,22 @@ const
     end.
     ''';
 
+  SrcRecordPointerDerefFieldAccess = '''
+    program P;
+    type
+      TPoint = record X, Y: Integer; end;
+    var
+      Pt: TPoint;
+      PP: ^TPoint;
+    begin
+      Pt.X := 42;
+      Pt.Y := 99;
+      PP := @Pt;
+      WriteLn(PP^.X);
+      WriteLn(PP^.Y)
+    end.
+    ''';
+
   SrcRecordNestedFieldAssignMethodCall = '''
     program P;
     type
@@ -439,6 +456,12 @@ procedure TE2ERecordsTests.TestRun_Record_AddrOfImplicitSelf;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordAddrOfImplicitSelf, '10' + LE + '20' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_Record_PointerDerefFieldAccess;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcRecordPointerDerefFieldAccess, '42' + LE + '99' + LE, 0);
 end;
 
 initialization
