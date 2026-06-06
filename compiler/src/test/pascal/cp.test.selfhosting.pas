@@ -173,7 +173,7 @@ const
         program P;
         var N: Integer;
         begin
-          N := ParamCount
+          N := ParamCount()
         end.
         ''';
 

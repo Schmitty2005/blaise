@@ -228,7 +228,7 @@ var
   Slot: ^Pointer;
 begin
   if Self.FChildCnt = Self.FChildCap then
-    Self.GrowChildren;
+    Self.GrowChildren();
   Slot  := Self.FChildren + Self.FChildCnt * SizeOf(Pointer);
   Slot^ := Pointer(AComp);
   Self.FChildCnt := Self.FChildCnt + 1;

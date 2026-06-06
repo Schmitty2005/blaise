@@ -79,7 +79,7 @@ var
   Lines:   TStringList;
   BaseDir: string;
 begin
-  CfgFile := FindConfigFile;
+  CfgFile := FindConfigFile();
   if CfgFile = '' then
     Exit;
   Lines := TStringList.Create();

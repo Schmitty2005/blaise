@@ -112,7 +112,7 @@ var
 begin
   Result := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
   if Result <> '' then begin Result := IncludeTrailingPathDelimiter(Result); Exit end;
-  Dir := GetCurrentDir;
+  Dir := GetCurrentDir();
   for Steps := 0 to 5 do
   begin
     if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
@@ -125,7 +125,7 @@ begin
     if (Parent = '') or (Parent = Dir) then Break;
     Dir := Parent
   end;
-  Result := IncludeTrailingPathDelimiter(GetCurrentDir)
+  Result := IncludeTrailingPathDelimiter(GetCurrentDir())
 end;
 
 function TE2ETestCase.ToolchainAvailable: Boolean;
@@ -142,7 +142,7 @@ end;
 procedure TE2ETestCase.SetUp;
 begin
   { Subclasses must call SetUpScratch to set FScratch and FCounter }
-  inherited SetUp;
+  inherited SetUp();
   FCounter := 0;
   FQBE := GetEnvironmentVariable('BLAISE_QBE');
   if FQBE = '' then
@@ -247,7 +247,7 @@ begin
     if ABackend = beNative then
     begin
       NCG := TCodeGenNative.Create();
-      NCG.SetTarget(HostTarget);
+      NCG.SetTarget(HostTarget());
       CG  := NCG;            { ARC-managed; released at scope exit }
       CG.Generate(Prog);
       Emitted := CG.GetOutput()

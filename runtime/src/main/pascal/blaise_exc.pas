@@ -138,12 +138,12 @@ begin
   Exc := g_current_exception;
   if Exc = nil then
   begin
-    Exit(ExcStrEmpty);
+    Exit(ExcStrEmpty());
   end;
   MsgSlot := Exc + 8;
   Msg := MsgSlot^;
   if Msg = nil then
-    Result := ExcStrEmpty
+    Result := ExcStrEmpty()
   else
     Result := Msg;
 end;

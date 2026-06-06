@@ -25,7 +25,7 @@ type
   protected
     procedure SetUp; override;
   published
-    procedure TestRun_InstantNow;
+    procedure TestRun_InstantNow();
     procedure TestRun_MakeDate_ToString;
     procedure TestRun_MakeTime_ToString;
     procedure TestRun_MakeTimeNano_ToString;
@@ -72,9 +72,9 @@ const
     uses DateUtils;
     var I: TInstant;
     begin
-      I := InstantNow;
+      I := InstantNow();
       { Must be after 2020-01-01T00:00:00Z = Unix epoch 1577836800 }
-      WriteLn(I.ToUnixSeconds > 1577836800)
+      WriteLn(I.ToUnixSeconds() > 1577836800)
     end.
     ''';
 
@@ -147,8 +147,8 @@ const
     begin
       O := MakeOffset(0, 0);
       WriteLn(O.TotalSeconds);
-      WriteLn(O.Hours);
-      WriteLn(O.Minutes)
+      WriteLn(O.Hours());
+      WriteLn(O.Minutes())
     end.
     ''';
 
@@ -179,8 +179,8 @@ const
     begin
       { 1970-01-01T00:00:01Z = Unix second 1 }
       I := MakeInstantUnix(1);
-      WriteLn(I.ToUnixSeconds);
-      WriteLn(I.ToUnixMillis)
+      WriteLn(I.ToUnixSeconds());
+      WriteLn(I.ToUnixMillis())
     end.
     ''';
 
@@ -226,7 +226,7 @@ const
       A   := MakeInstantUnix(1000);
       B   := MakeInstantUnix(1003);
       Dur := B.Subtract(A);
-      WriteLn(Dur.TotalSeconds)
+      WriteLn(Dur.TotalSeconds())
     end.
     ''';
 
@@ -293,10 +293,10 @@ const
     begin
       { 2 hours + 30 min + 10 sec = 9010 s = 9010000 ms }
       D := MakeDurationSeconds(9010);
-      WriteLn(D.TotalSeconds);
-      WriteLn(D.TotalMilliseconds);
-      WriteLn(D.TotalMinutes);
-      WriteLn(D.TotalHours)
+      WriteLn(D.TotalSeconds());
+      WriteLn(D.TotalMilliseconds());
+      WriteLn(D.TotalMinutes());
+      WriteLn(D.TotalHours())
     end.
     ''';
 
@@ -319,10 +319,10 @@ const
     var D, A: TDuration;
     begin
       D := MakeDurationSeconds(-120);
-      WriteLn(D.IsNegative);
-      A := D.Abs;
-      WriteLn(A.IsNegative);
-      WriteLn(A.TotalSeconds)
+      WriteLn(D.IsNegative());
+      A := D.Abs();
+      WriteLn(A.IsNegative());
+      WriteLn(A.TotalSeconds())
     end.
     ''';
 
@@ -336,9 +336,9 @@ const
       B := MakeDurationSeconds(50);
       C := DurationAdd(A, B);
       S := DurationSubtract(A, B);
-      WriteLn(C.TotalSeconds);
-      WriteLn(S.TotalSeconds);
-      WriteLn(DurationNegate(A).TotalSeconds)
+      WriteLn(C.TotalSeconds());
+      WriteLn(S.TotalSeconds());
+      WriteLn(DurationNegate(A).TotalSeconds())
     end.
     ''';
 
@@ -425,10 +425,10 @@ const
     var D: TDuration;
     begin
       D := ParseDuration('PT3H25M10S');
-      WriteLn(D.TotalSeconds);
+      WriteLn(D.TotalSeconds());
       WriteLn(D.ToString());
       D := ParseDuration('PT0S');
-      WriteLn(D.TotalSeconds)
+      WriteLn(D.TotalSeconds())
     end.
     ''';
 
@@ -480,10 +480,10 @@ const
       { 2025-05-15 is a Thursday = 4 (ISO: Mon=1 .. Sun=7) }
       D := MakeDate(2025, 5, 15);
       WriteLn(DayOfWeek(D));
-      WriteLn(D.DayOfWeek);
+      WriteLn(D.DayOfWeek());
       { 2025-05-19 is a Monday = 1 }
       D := MakeDate(2025, 5, 19);
-      WriteLn(D.DayOfWeek)
+      WriteLn(D.DayOfWeek())
     end.
     ''';
 
@@ -552,7 +552,7 @@ const
     uses DateUtils;
     var O: TTimeZoneOffset;
     begin
-      O := SystemOffset;
+      O := SystemOffset();
       { UTC offset must be within +/-14 hours = +/-50400 seconds }
       WriteLn(O.TotalSeconds >= -50400);
       WriteLn(O.TotalSeconds <= 50400)
@@ -582,7 +582,7 @@ const
 
 procedure TE2EDateUtilsTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-dateutils')
 end;
 
@@ -590,7 +590,7 @@ end;
 { Tests                                                                }
 { ------------------------------------------------------------------ }
 
-procedure TE2EDateUtilsTests.TestRun_InstantNow;
+procedure TE2EDateUtilsTests.TestRun_InstantNow();
 var
   Output: string;
   RCode:  Integer;

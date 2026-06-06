@@ -400,7 +400,7 @@ begin
     Sym := Prog.SymbolTable.Lookup('TDog');
     AssertNotNull('TDog symbol', Sym);
     RT := TRecordTypeDesc(Sym.TypeDesc);
-    AssertEquals('TDog total size = 16', 16, RT.TotalSize);
+    AssertEquals('TDog total size = 16', 16, RT.TotalSize());
   finally Prog.Free(); end;
 end;
 
@@ -496,7 +496,7 @@ const
         end;
         procedure TChild.Init;
         begin
-          inherited Init;
+          inherited Init();
           Self.Y := 0
         end;
         var C: TChild;

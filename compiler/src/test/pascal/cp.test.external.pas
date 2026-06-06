@@ -384,8 +384,8 @@ begin
         function Foo: Byte; external;
         var b: Byte;
         begin
-          b := Foo;
-          if Foo <> 0 then
+          b := Foo();
+          if Foo() <> 0 then
             b := 1;
         end.
         '''
@@ -403,7 +403,7 @@ begin
         function Foo: Word; external;
         var w: Word;
         begin
-          w := Foo;
+          w := Foo();
         end.
         '''
   );
@@ -420,7 +420,7 @@ begin
         function Foo: SmallInt; external;
         var s: SmallInt;
         begin
-          s := Foo;
+          s := Foo();
         end.
         '''
   );

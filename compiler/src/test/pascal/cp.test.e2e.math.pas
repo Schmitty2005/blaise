@@ -158,7 +158,7 @@ implementation
 
 procedure TE2EMathTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-math');
 end;
 

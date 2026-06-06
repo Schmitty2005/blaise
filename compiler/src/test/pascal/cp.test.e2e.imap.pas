@@ -216,7 +216,7 @@ const
       M.Add(20, 200);
       WriteLn(M.ContainsKey(10));
       WriteLn(M.ContainsKey(99));
-      WriteLn(M.GetCount)
+      WriteLn(M.GetCount())
     end.
     ''';
 
@@ -253,7 +253,7 @@ const
       M := TDict.Create();
       M.Add(1, 10); M.Add(2, 20); M.Add(3, 30);
       M.Remove(2);
-      WriteLn(M.GetCount);
+      WriteLn(M.GetCount());
       WriteLn(M.ContainsKey(2));
       WriteLn(M.ContainsKey(1))
     end.
@@ -274,7 +274,7 @@ const
       M.Add(20, 200);
       WriteLn(M.ContainsKey(10));
       WriteLn(M.ContainsKey(99));
-      WriteLn(M.GetCount)
+      WriteLn(M.GetCount())
     end.
     ''';
 
@@ -326,7 +326,7 @@ const
 
 procedure TE2EIMapTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-imap')
 end;
 

@@ -35,7 +35,7 @@ implementation
 
 procedure TE2EControlFlowTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-controlflow');
 end;
 

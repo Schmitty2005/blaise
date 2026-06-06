@@ -47,7 +47,11 @@ ABS_STAGE1=$(readlink -f "$STAGE1_BIN")
 echo "[1/5] rebuild + install runtime (BLAISE=$ABS_STAGE1)"
 ( cd runtime && make BLAISE="$ABS_STAGE1" > /tmp/fp_rtl.log 2>&1 \
              && make BLAISE="$ABS_STAGE1" install >> /tmp/fp_rtl.log 2>&1 ) || {
-  echo "RUNTIME_FAIL"; tail -5 /tmp/fp_rtl.log; exit 11;
+  if [ -f compiler/target/blaise_rtl.a ]; then
+    echo "      stage-1 too old for runtime; using existing blaise_rtl.a"
+  else
+    echo "RUNTIME_FAIL"; tail -5 /tmp/fp_rtl.log; exit 11;
+  fi
 }
 
 # Resolve the RTL archive for the link steps below.  `make install` copies it

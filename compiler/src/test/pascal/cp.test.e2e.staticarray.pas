@@ -180,7 +180,7 @@ const
 
 procedure TE2EStaticArrayTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-staticarray')
 end;
 

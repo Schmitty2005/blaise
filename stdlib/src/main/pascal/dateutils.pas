@@ -119,9 +119,9 @@ type
 { C shim bindings (must be in interface section)                       }
 { ------------------------------------------------------------------ }
 
-function  _TimeNow: Int64;
+function  _TimeNow(): Int64;
   external name '_TimeNow';
-function  _TimeLocalOffsetSecs: Integer;
+function  _TimeLocalOffsetSecs(): Integer;
   external name '_TimeLocalOffsetSecs';
 procedure _TimeSplit(Nanos: Int64;
                      out Year, Month, Day,
@@ -373,8 +373,8 @@ begin
     Sign := '-'
   else
     Sign := '+';
-  H := Self.Hours;
-  M := Self.Minutes;
+  H := Self.Hours();
+  M := Self.Minutes();
   Result := Sign + Pad2(H) + ':' + Pad2(M)
 end;
 
@@ -672,20 +672,20 @@ end;
 
 function InstantNow: TInstant;
 begin
-  Result.Nanoseconds := _TimeNow
+  Result.Nanoseconds := _TimeNow()
 end;
 
 function LocalNow(Offset: TTimeZoneOffset): TDateTime;
 var
   Now: TInstant;
 begin
-  Now := InstantNow;
+  Now := InstantNow();
   Result := Now.ToLocalDateTime(Offset)
 end;
 
 function SystemOffset: TTimeZoneOffset;
 begin
-  Result.TotalSeconds := _TimeLocalOffsetSecs
+  Result.TotalSeconds := _TimeLocalOffsetSecs()
 end;
 
 { ================================================================== }

@@ -370,7 +370,7 @@ end;
 
 procedure TUInt64E2ETests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-uint64');
 end;
 

@@ -176,7 +176,7 @@ end;
 
 procedure TSizeOfE2ETests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-sizeof');
 end;
 

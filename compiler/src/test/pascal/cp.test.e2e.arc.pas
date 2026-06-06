@@ -53,7 +53,7 @@ implementation
 
 procedure TE2EArcTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-arc');
 end;
 
@@ -356,9 +356,9 @@ const
       F: IThing;
     procedure DoSomething(MyIntf: IThing);
     begin
-      WriteLn(MyIntf.Get);
+      WriteLn(MyIntf.Get());
       F := nil;            { drop the caller's only other reference }
-      WriteLn(MyIntf.Get)  { still valid: callee retained it on entry }
+      WriteLn(MyIntf.Get())  { still valid: callee retained it on entry }
     end;
     var
       T: TThing;

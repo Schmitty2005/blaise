@@ -124,5 +124,5 @@ uses
   cp.test.config;
 
 begin
-  Halt(RunAll);
+  Halt(RunAll());
 end.

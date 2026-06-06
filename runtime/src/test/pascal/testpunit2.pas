@@ -223,8 +223,8 @@ begin
   try
     AssertSame('Must fail: Instances differ', A, B);
   finally
-    A.Free;
-    B.Free;
+    A.Free();
+    B.Free();
   end;
 end;
 
@@ -236,7 +236,7 @@ begin
   try
     AssertSame('Must fail: Instances differ (actual nil)', A, nil);
   finally
-    A.Free;
+    A.Free();
   end;
 end;
 
@@ -248,7 +248,7 @@ begin
   try
     AssertSame('Must fail: Instances differ (expected nil)', nil, A);
   finally
-    A.Free;
+    A.Free();
   end;
 end;
 
@@ -261,7 +261,7 @@ begin
     B := A;
     AssertSame('Instances equal', B, A);
   finally
-    A.Free;
+    A.Free();
   end;
 end;
 

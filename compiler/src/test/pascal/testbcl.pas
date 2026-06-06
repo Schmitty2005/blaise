@@ -48,5 +48,5 @@ end;
 
 begin
   RegisterTest(TSampleTests);
-  Halt(RunAll);
+  Halt(RunAll());
 end.

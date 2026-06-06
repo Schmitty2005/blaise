@@ -44,7 +44,7 @@ function BoolToStr(B: Boolean; AUseBoolStrs: Boolean = False): string;
 { ExpandFileName — resolve a relative path to an absolute path.
   If APath is already absolute (starts with '/') it is returned unchanged
   after normalising redundant separators and '.' components.
-  Otherwise it is resolved relative to GetCurrentDir.
+  Otherwise it is resolved relative to GetCurrentDir().
   Note: '..' segments are removed by simple text processing; symlinks are
   not resolved (unlike POSIX realpath).  This matches Delphi/FPC behaviour
   on paths that do not traverse symlinks. }
@@ -78,14 +78,14 @@ var
 begin
   if APath = '' then
   begin
-    Exit(GetCurrentDir);
+    Exit(GetCurrentDir());
   end;
 
   { Determine base: absolute or relative }
   if APath[0] = 47 then  { '/' }
     Base := APath
   else
-    Base := GetCurrentDir + '/' + APath;
+    Base := GetCurrentDir() + '/' + APath;
 
   Len    := Length(Base);
   SP     := PChar(Base);

@@ -33,7 +33,7 @@ implementation
 
 procedure TE2ETextBlockTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-textblock');
 end;
 

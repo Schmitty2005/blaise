@@ -153,7 +153,7 @@ const
 
 procedure TE2EQueueTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-tqueue')
 end;
 

@@ -51,7 +51,7 @@ implementation
 
 procedure TSepCompileTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-sepcompile')
 end;
 
@@ -61,7 +61,7 @@ var
 begin
   Root := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
   if Root = '' then
-    Root := GetCurrentDir;
+    Root := GetCurrentDir();
   Result := IncludeTrailingPathDelimiter(Root) + 'compiler/target/blaise'
 end;
 

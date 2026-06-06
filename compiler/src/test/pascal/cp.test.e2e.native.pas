@@ -201,7 +201,7 @@ implementation
 
 procedure TE2ENativeTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-native');
 end;
 
@@ -892,8 +892,8 @@ const
       DT.Date.Day := 5;
       DT.Hour := 14;
       D := DT.Date;
-      WriteLn(D.Sum);
-      WriteLn(DT.Date.Sum)
+      WriteLn(D.Sum());
+      WriteLn(DT.Date.Sum())
     end.
     ''';
 
@@ -2054,7 +2054,7 @@ const
     begin
       B := TBox.Create();
       S := B;
-      S.Describe
+      S.Describe()
     end.
     ''';
 
@@ -2107,8 +2107,8 @@ const
       B := TBox.Create();
       S := B;
       C := B as IColor;
-      WriteLn(S.Area);
-      WriteLn(C.Code)
+      WriteLn(S.Area());
+      WriteLn(C.Code())
     end.
     ''';
 
@@ -2258,7 +2258,7 @@ const
       D := TDoc.Create();
       I := D;
       H := THolder.Create(I);
-      H.Use
+      H.Use()
     end.
     ''';
 
@@ -2330,13 +2330,13 @@ const
     begin WriteLn('base') end;
     procedure TDer.Hello;
     begin
-      inherited Hello;
+      inherited Hello();
       WriteLn('derived')
     end;
     var D: TDer;
     begin
       D := TDer.Create();
-      D.Hello
+      D.Hello()
     end.
     ''';
 
@@ -2660,7 +2660,7 @@ const
     begin
       B := TBox<Integer>.Create();
       B.SetVal(99);
-      WriteLn(B.GetVal)
+      WriteLn(B.GetVal())
     end.
     ''';
 

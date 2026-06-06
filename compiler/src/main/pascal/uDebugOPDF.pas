@@ -121,7 +121,7 @@ const
 
 constructor TOPDFEmitter.Create(AProgram: TProgram; const ASourceFile: string);
 begin
-  inherited Create;
+  inherited Create();
   FProgram    := AProgram;
   FSourceFile := ASourceFile;
   FOutput     := TStringList.Create();
@@ -142,7 +142,7 @@ begin
   FEmitted.Free();
   FTypeNames.Free();
   FOutput.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 procedure TOPDFEmitter.L(const AText: string);

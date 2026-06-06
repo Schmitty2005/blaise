@@ -117,7 +117,7 @@ begin
     Result := IncludeTrailingPathDelimiter(Result);
     Exit;
   end;
-  Dir := GetCurrentDir;
+  Dir := GetCurrentDir();
   for Steps := 0 to 5 do
   begin
     if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
@@ -130,7 +130,7 @@ begin
     if (Parent = '') or (Parent = Dir) then Break;
     Dir := Parent;
   end;
-  Result := IncludeTrailingPathDelimiter(GetCurrentDir);
+  Result := IncludeTrailingPathDelimiter(GetCurrentDir());
 end;
 
 function RunCmdOFO(const AExe: string; const AArgs: array of string): Integer;
@@ -164,7 +164,7 @@ var
   Chunk:                    string;
 begin
   Result := '';
-  Root   := ProjectRootOFO;
+  Root   := ProjectRootOFO();
   QBE    := Root + 'vendor/qbe/qbe';
   RTL    := Root + 'compiler/target/blaise_rtl.a';
   if not (FileExists(QBE) and FileExists(RTL)) then
@@ -613,7 +613,7 @@ begin
   try
     RT := TRecordTypeDesc(TVarDecl(Prog.Block.Decls.Items[0]).ResolvedType);
     AssertEquals('record holding a method-ptr field totals 16 bytes',
-      16, RT.TotalSize);
+      16, RT.TotalSize());
   finally
     Prog.Free();
   end;
@@ -649,7 +649,7 @@ const
           { Read the field into a local and invoke — exercises the field-read
             path (which must return the field address, not a single loadl). }
           G := H.Handler;
-          G;
+          G();
           H.Free();
           F.Free()
         end.
@@ -672,7 +672,7 @@ const
         var H: THolder;
         begin
           H := THolder.Create();
-          H.Handler;
+          H.Handler();
           H.Free()
         end.
         ''';
@@ -708,7 +708,7 @@ const
           M.Code := MethodAddress(F, 'SayHi');
           M.Data := F;
           F.Handler := TGreet(M);
-          F.Handler;
+          F.Handler();
           F.Handler();
           F.Free()
         end.

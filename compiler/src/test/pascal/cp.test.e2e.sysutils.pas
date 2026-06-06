@@ -54,7 +54,7 @@ implementation
 
 procedure TE2ESysUtilsTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-sysutils');
 end;
 
@@ -71,7 +71,7 @@ const
     '''
         program P;
         begin
-          WriteLn(ParamCount)
+          WriteLn(ParamCount())
         end.
         ''';
 
@@ -155,7 +155,7 @@ const
     '''
         program P;
         begin
-          WriteLn(GetProcessID)
+          WriteLn(GetProcessID())
         end.
         ''';
 
@@ -172,7 +172,7 @@ const
     '''
         program P;
         begin
-          WriteLn(GetTempDir)
+          WriteLn(GetTempDir())
         end.
         ''';
 
@@ -204,7 +204,7 @@ const
           Output: string;
           Chunk:  string;
         begin
-          H := ProcessCreate;
+          H := ProcessCreate();
           ProcessSetExe(H, 'echo');
           ProcessAddArg(H, 'hello from process');
           ProcessExecute(H);
@@ -229,7 +229,7 @@ const
           Code: Integer;
           Chunk: string;
         begin
-          H := ProcessCreate;
+          H := ProcessCreate();
           ProcessSetExe(H, 'true');
           ProcessExecute(H);
           Chunk := ProcessReadOutput(H);
@@ -428,8 +428,8 @@ var
   Dir: string;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  Dir := IncludeTrailingPathDelimiter(GetTempDir) +
-         'blaise_test_' + IntToStr(GetProcessID) + '/a/b/c';
+  Dir := IncludeTrailingPathDelimiter(GetTempDir()) +
+         'blaise_test_' + IntToStr(GetProcessID()) + '/a/b/c';
   try
     AssertTrue('compile+run',
       CompileAndRun(SrcForceDirectories, Output, RCode, [Dir]));
@@ -509,7 +509,7 @@ const
         var D: string;
         begin
           WriteLn(SetCurrentDir('/tmp'));
-          D := GetCurrentDir;
+          D := GetCurrentDir();
           WriteLn(Length(D) > 0)
         end.
         ''';
@@ -548,7 +548,7 @@ const
     '''
         program P;
         begin
-          WriteLn(Length(GetCurrentDir) > 0)
+          WriteLn(Length(GetCurrentDir()) > 0)
         end.
         ''';
 

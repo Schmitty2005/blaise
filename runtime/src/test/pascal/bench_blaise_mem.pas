@@ -40,14 +40,14 @@ var
 
 procedure BenchStart;
 begin
-  T0 := _TimeNow;
+  T0 := _TimeNow();
 end;
 
 function BenchElapsedMs: Integer;
 var
   Diff: Int64;
 begin
-  Diff := _TimeNow - T0;
+  Diff := _TimeNow() - T0;
   Result := Integer(Diff div 1_000_000);
 end;
 

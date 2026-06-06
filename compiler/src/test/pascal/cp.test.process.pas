@@ -71,7 +71,7 @@ const
         program P;
         var H: Pointer;
         begin
-          H := ProcessCreate
+          H := ProcessCreate()
         end.
         ''';
 
@@ -81,7 +81,7 @@ const
         var H: Pointer;
             B: Boolean;
         begin
-          H := ProcessCreate;
+          H := ProcessCreate();
           B := ProcessRunning(H)
         end.
         ''';
@@ -92,7 +92,7 @@ const
         var H: Pointer;
             S: string;
         begin
-          H := ProcessCreate;
+          H := ProcessCreate();
           S := ProcessReadOutput(H)
         end.
         ''';
@@ -103,7 +103,7 @@ const
         var H: Pointer;
             N: Integer;
         begin
-          H := ProcessCreate;
+          H := ProcessCreate();
           N := ProcessExitCode(H)
         end.
         ''';
@@ -113,7 +113,7 @@ const
         program P;
         var H: Pointer;
         begin
-          H := ProcessCreate;
+          H := ProcessCreate();
           ProcessSetExe(H, 'echo')
         end.
         ''';
@@ -123,7 +123,7 @@ const
         program P;
         var H: Pointer;
         begin
-          H := ProcessCreate;
+          H := ProcessCreate();
           ProcessAddArg(H, 'hello')
         end.
         ''';
@@ -133,7 +133,7 @@ const
         program P;
         var H: Pointer;
         begin
-          H := ProcessCreate;
+          H := ProcessCreate();
           ProcessSetExe(H, 'echo');
           ProcessExecute(H)
         end.
@@ -144,7 +144,7 @@ const
         program P;
         var H: Pointer;
         begin
-          H := ProcessCreate;
+          H := ProcessCreate();
           ProcessSetExe(H, 'echo');
           ProcessExecute(H);
           ProcessWaitOnExit(H)
@@ -156,7 +156,7 @@ const
         program P;
         var H: Pointer;
         begin
-          H := ProcessCreate;
+          H := ProcessCreate();
           ProcessFree(H)
         end.
         ''';

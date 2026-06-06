@@ -287,7 +287,7 @@ end;
 
 constructor TRoutineSig.Create;
 begin
-  inherited Create;
+  inherited Create();
   Params := TObjectList.Create(True);
   ReturnType := MakeQualRef('', '');
   VTableSlot := -1;
@@ -296,7 +296,7 @@ end;
 destructor TRoutineSig.Destroy;
 begin
   Params.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { ----- TConstEntry ----------------------------------------------- }
@@ -304,14 +304,14 @@ end;
 destructor TConstEntry.Destroy;
 begin
   Decl.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { ----- TTypeEntry ------------------------------------------------ }
 
 constructor TTypeEntry.Create;
 begin
-  inherited Create;
+  inherited Create();
   Implements   := TStringList.Create();
   Methods      := TObjectList.Create(True);
   VTableLayout := TObjectList.Create(False);  { non-owning }
@@ -325,7 +325,7 @@ begin
   Methods.Free();
   Implements.Free();
   Def.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { ----- TInlineBody ----------------------------------------------- }
@@ -333,14 +333,14 @@ end;
 destructor TInlineBody.Destroy;
 begin
   Block.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { ----- TGenericBody ---------------------------------------------- }
 
 constructor TGenericBody.Create;
 begin
-  inherited Create;
+  inherited Create();
   TypeParams  := TStringList.Create();
   Constraints := TStringList.Create();
 end;
@@ -353,7 +353,7 @@ begin
   TypeDef.Free();
   Constraints.Free();
   TypeParams.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { ----- TUnitInterface -------------------------------------------- }
@@ -369,7 +369,7 @@ end;
 constructor TUnitInterface.Create(const AName: string;
                                   ACaseSensitive: Boolean = False);
 begin
-  inherited Create;
+  inherited Create();
   Name      := AName;
   UsedUnits := TStringList.Create();
 
@@ -403,7 +403,7 @@ begin
   Types.Free();
 
   UsedUnits.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 procedure TUnitInterface.AddType(AEntry: TTypeEntry);

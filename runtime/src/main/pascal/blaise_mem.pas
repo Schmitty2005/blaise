@@ -211,7 +211,7 @@ begin
     Exit(Pointer(PtrUInt(Hdr) + HEADER_SIZE));
   end;
 
-  A := AllocArena;
+  A := AllocArena();
   if A = nil then
   begin
     Exit(nil);

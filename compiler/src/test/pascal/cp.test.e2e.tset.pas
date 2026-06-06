@@ -148,7 +148,7 @@ const
 
 procedure TE2ESetTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-tset')
 end;
 

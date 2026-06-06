@@ -289,12 +289,12 @@ var
 begin
   AVerbose := False;
   I := 1;
-  while I <= ParamCount do
+  while I <= ParamCount() do
   begin
     Arg := ParamStr(I);
     if Arg = '--verbose' then
       AVerbose := True
-    else if (Arg = '--suite') and (I < ParamCount) then
+    else if (Arg = '--suite') and (I < ParamCount()) then
     begin
       I := I + 1;
       AppendSuiteFilter(AFilters, ParamStr(I));
@@ -404,7 +404,7 @@ begin
   Result.Verbose := AVerbose;
   ProcCount := 0;
   HasFilter := (AFilters <> nil) and (AFilters.Count > 0);
-  for ClsIdx := 0 to GetRegisteredTestCount - 1 do
+  for ClsIdx := 0 to GetRegisteredTestCount() - 1 do
   begin
     Cls   := GetRegisteredTest(ClsIdx);
     CName := TestClassName(Cls);

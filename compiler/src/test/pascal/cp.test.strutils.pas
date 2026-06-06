@@ -120,7 +120,7 @@ procedure TStrUtilsTests.SetUp;
 var
   ExeDir: string;
 begin
-  inherited SetUp;
+  inherited SetUp();
   ExeDir := ExtractFilePath(ParamStr(0));
   FRTLUnitPath := ExpandFileName(ExeDir + '../../runtime/src/main/pascal');
   FStdlibUnitPath := ExpandFileName(ExeDir + '../../stdlib/src/main/pascal');

@@ -617,7 +617,7 @@ end;
 
 constructor TStringBuilder.Create;
 begin
-  inherited Create;
+  inherited Create();
   Self.FCap  := 256;
   Self.FLen  := 0;
   Self.FData := GetMem(Self.FCap);
@@ -626,7 +626,7 @@ end;
 destructor TStringBuilder.Destroy;
 begin
   FreeMem(Self.FData);
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 procedure TStringBuilder.Grow(ANeed: Integer);

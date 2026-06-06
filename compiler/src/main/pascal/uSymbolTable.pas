@@ -614,7 +614,7 @@ begin
     tyInteger, tyUInt32, tyEnum: Result := 4;
     tyInt64, tyUInt64, tyString, tyClass, tyPointer, tyNil, tyDouble: Result := 8;
     tySingle: Result := 4;
-    tyRecord: Result := TRecordTypeDesc(Self).TotalSize;
+    tyRecord: Result := TRecordTypeDesc(Self).TotalSize();
     tySet: if TSetTypeDesc(Self).BitCount <= 32 then Result := 4 else Result := 8;
     tyStaticArray:
       Result := (TStaticArrayTypeDesc(Self).HighBound -
@@ -636,7 +636,7 @@ begin
     tySmallInt, tyWord:  Result := 2;
     tyByte, tyBoolean:   Result := 1;  { true byte; stack slots are alloc4-padded by codegen }
     tyString:            Result := 8;  { pointer size on 64-bit }
-    tyRecord:            Result := TRecordTypeDesc(Self).TotalSize;
+    tyRecord:            Result := TRecordTypeDesc(Self).TotalSize();
     tyNil:               Result := 8;
     tyDouble:            Result := 8;
     tySingle:            Result := 4;
@@ -675,7 +675,7 @@ end;
 
 constructor TRecordTypeDesc.Create(const AName: string; AKind: TTypeKind);
 begin
-  inherited Create;
+  inherited Create();
   Kind        := AKind;
   Name        := AName;
   FFields     := TObjectList.Create(True);
@@ -697,7 +697,7 @@ begin
   FKeys.Free();
   FFields.Free();
   FVTable.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { Returns the alignment required for AType when laid out inside this record.
@@ -964,7 +964,7 @@ end;
 
 constructor TInterfaceTypeDesc.Create(const AName: string);
 begin
-  inherited Create;
+  inherited Create();
   Kind         := tyInterface;
   Name         := AName;
   FMethods     := TStringList.Create();
@@ -979,7 +979,7 @@ begin
   FParamIsVar.Free();
   FReturnTypes.Free();
   FMethods.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 procedure TInterfaceTypeDesc.AddMethod(const AName: string;
@@ -1055,7 +1055,7 @@ end;
 
 constructor TSymbol.Create(const AName: string; AKind: TSymbolKind; AType: TTypeDesc);
 begin
-  inherited Create;
+  inherited Create();
   Name     := AName;
   Kind     := AKind;
   TypeDesc := AType;
@@ -1067,7 +1067,7 @@ destructor TSymbol.Destroy;
 begin
   { Params and ConstArray are owned class fields — released by ARC field
     cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { ------------------------------------------------------------------ }
@@ -1076,7 +1076,7 @@ end;
 
 constructor TScope.Create(AParent: TScope);
 begin
-  inherited Create;
+  inherited Create();
   FParent  := AParent;
   FSymbols := TObjectList.Create(True);
   FKeys    := TStringList.Create();
@@ -1090,7 +1090,7 @@ begin
   { FKeys and FSymbols are owned class fields — ARC field cleanup releases
     them automatically.  Swift-style: destructors handle side-effects only,
     not the release of owned storage. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 function TScope.Define(ASymbol: TSymbol): Boolean;
@@ -1164,7 +1164,7 @@ end;
 
 constructor TEnumTypeDesc.Create(const AName: string);
 begin
-  inherited Create;
+  inherited Create();
   Kind    := tyEnum;
   Name    := AName;
   Members := TStringList.Create();
@@ -1173,7 +1173,7 @@ end;
 destructor TEnumTypeDesc.Destroy;
 begin
   Members.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 function TEnumTypeDesc.OrdinalOf(const AMember: string): Integer;
@@ -1190,7 +1190,7 @@ end;
 
 constructor TProceduralTypeDesc.Create(const AName: string);
 begin
-  inherited Create;
+  inherited Create();
   Kind       := tyProcedural;
   Name       := AName;
   Params     := TObjectList.Create(True);
@@ -1200,7 +1200,7 @@ end;
 destructor TProceduralTypeDesc.Destroy;
 begin
   Params.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 function TProceduralTypeDesc.IsCompatibleWith(AOther: TProceduralTypeDesc): Boolean;
@@ -1239,7 +1239,7 @@ end;
 
 constructor TSymbolTable.Create;
 begin
-  inherited Create;
+  inherited Create();
   FScopeStack := TObjectList.Create(True);
   FAllTypes   := TObjectList.Create(True);
   FGenerics   := TStringList.Create();
@@ -1261,7 +1261,7 @@ begin
   FGenericRoutines.Free();
   { FGenerics, FGenericTemplates, FScopeStack, FAllTypes are owned class fields — released by
     ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 function TSymbolTable.NewType(AKind: TTypeKind; const AName: string): TTypeDesc;

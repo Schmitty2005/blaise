@@ -54,7 +54,7 @@ implementation
 
 constructor TKanbanUI.Create(ATerm: TTerminal; ABoard: TBoard);
 begin
-  inherited Create;
+  inherited Create();
   FTerm := ATerm;
   FBoard := ABoard;
   FActiveCol := 0;
@@ -134,7 +134,7 @@ begin
     I := I + 1
   end;
 
-  Self.DrawStatusBar;
+  Self.DrawStatusBar();
   FTerm.BufFlush()
 end;
 
@@ -563,7 +563,7 @@ begin
 
   if Key = KEY_ESCAPE then
   begin
-    Self.CancelInput;
+    Self.CancelInput();
     Exit
   end;
 
@@ -575,7 +575,7 @@ begin
       FBoard.Save();
       FStatusMsg := 'Added: ' + FInputBuf
     end;
-    Self.FinishInput;
+    Self.FinishInput();
     Exit
   end;
 
@@ -608,11 +608,11 @@ begin
         if FViewMode = vmBoard then
           Self.DrawBoard()
         else if FViewMode = vmDetail then
-          Self.DrawDetailView;
+          Self.DrawDetailView();
         FNeedsRedraw := False
       end;
 
-      Key := FTerm.ReadKey;
+      Key := FTerm.ReadKey();
 
       if Key = KEY_NONE then
       begin
@@ -620,7 +620,7 @@ begin
         if FPollCounter >= 20 then
         begin
           FPollCounter := 0;
-          if FBoard.HasExternalChanges then
+          if FBoard.HasExternalChanges() then
           begin
             Merged := FBoard.MergeFromDisk();
             if Merged > 0 then

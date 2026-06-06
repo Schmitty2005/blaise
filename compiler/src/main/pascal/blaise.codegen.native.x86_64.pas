@@ -403,7 +403,7 @@ begin
   FStrLits.Free();
   FThreadVarGlobals.Free();
   FDataGlobals.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 function TX86_64Backend.NewLabel(const APrefix: string): string;
@@ -717,7 +717,7 @@ begin
   if AExpr is TIdentExpr then
   begin
     IE := TIdentExpr(AExpr);
-    if IE.IsNoArgFuncCall or IE.IsImplicitSelfMethod then
+    if IE.IsImplicitSelfMethod then
       Exit(True);
   end;
   if AExpr is TFieldAccessExpr then

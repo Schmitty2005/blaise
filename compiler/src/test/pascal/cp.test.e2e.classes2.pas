@@ -82,7 +82,7 @@ implementation
 
 procedure TE2EClasses2Tests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-classes2');
 end;
 
@@ -332,14 +332,14 @@ const
     function TChild.Val: Integer;
     var B: Integer;
     begin
-      inherited Val;
+      inherited Val();
       B := Result;
       Result := B + 5
     end;
     var C: TChild;
     begin
       C := TChild.Create();
-      WriteLn(C.Val);
+      WriteLn(C.Val());
       C.Free()
     end.
     ''';
@@ -776,7 +776,7 @@ const
         var Compute: Integer;
         begin
           Compute := 7;
-          Result  := Self.Compute
+          Result  := Self.Compute()
         end;
         var F: TFoo;
         begin
@@ -830,7 +830,7 @@ var
   Expected: string;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  Path := GetCurrentDir;
+  Path := GetCurrentDir();
   // Walk up to project root looking for tests/phase2_milestone.pas
   while (Path <> '') and
         (not FileExists(Path + '/tests/phase2_milestone.pas')) and
@@ -871,7 +871,7 @@ var
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
-  Path := GetCurrentDir;
+  Path := GetCurrentDir();
   while (Path <> '') and
         (not FileExists(Path + '/tests/phase2_milestone.pas')) and
         (ExtractFileDir(Path) <> Path) do
@@ -896,7 +896,7 @@ var
   Expected: string;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
-  Path := GetCurrentDir;
+  Path := GetCurrentDir();
   while (Path <> '') and
         (not FileExists(Path + '/tests/phase3_milestone.pas')) and
         (ExtractFileDir(Path) <> Path) do
@@ -930,7 +930,7 @@ var
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   if not ValgrindAvailable then begin Ignore('valgrind not installed'); Exit; end;
-  Path := GetCurrentDir;
+  Path := GetCurrentDir();
   while (Path <> '') and
         (not FileExists(Path + '/tests/phase3_milestone.pas')) and
         (ExtractFileDir(Path) <> Path) do

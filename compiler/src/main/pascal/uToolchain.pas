@@ -103,7 +103,7 @@ begin
     Exit(Candidate);
   end;
   { Blaise Pos: -1 = not found.  `< 0` is the "not present" test. }
-  if IsWindowsHost and (Pos('.exe', LowerCase(ABaseName)) < 0) then
+  if IsWindowsHost() and (Pos('.exe', LowerCase(ABaseName)) < 0) then
   begin
     Candidate := IncludeTrailingPathDelimiter(ADir) + ABaseName + '.exe';
     if FileExists(Candidate) then
@@ -127,7 +127,7 @@ begin
   begin
     { Blaise Pos/Copy are 0-based; -1 = not found.  Consume one PATH entry
       per iteration. }
-    SepPos := Pos(PathSep, Path);
+    SepPos := Pos(PathSep(), Path);
     if SepPos >= 0 then
     begin
       Entry := Copy(Path, 0, SepPos);
@@ -228,7 +228,7 @@ var
 begin
   Result := GetEnvironmentVariable('BLAISE_RTL');
   if (Result <> '') and FileExists(Result) then Exit;
-  BinDir := CompilerBinDir;
+  BinDir := CompilerBinDir();
   Result := IncludeTrailingPathDelimiter(BinDir) + 'blaise_rtl.a';
   if FileExists(Result) then Exit;
   Result := '';
@@ -240,8 +240,8 @@ end;
 
 function ResolveToolchain(const ATarget: TTargetDesc): TToolchain;
 begin
-  Result.QBE       := ResolveQBE;
-  Result.Assembler := ResolveAssembler;
+  Result.QBE       := ResolveQBE();
+  Result.Assembler := ResolveAssembler();
   Result.Linker    := ResolveLinker(ATarget);
   Result.RTLPath   := FindRTLArchive(ATarget);
 end;

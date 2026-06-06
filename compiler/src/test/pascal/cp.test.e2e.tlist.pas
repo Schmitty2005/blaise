@@ -102,7 +102,7 @@ const
 
 procedure TE2ETListTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-tlist')
 end;
 

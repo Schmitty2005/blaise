@@ -115,7 +115,7 @@ begin
     Result := IncludeTrailingPathDelimiter(Result);
     Exit;
   end;
-  Dir := GetCurrentDir;
+  Dir := GetCurrentDir();
   for Steps := 0 to 6 do
   begin
     if FileExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe/qbe') then
@@ -127,7 +127,7 @@ begin
     if (Parent = '') or (Parent = Dir) then Break;
     Dir := Parent;
   end;
-  Result := IncludeTrailingPathDelimiter(GetCurrentDir);
+  Result := IncludeTrailingPathDelimiter(GetCurrentDir());
 end;
 
 function RunCmdAttr(const AExe: string; const AArgs: array of string): Integer;
@@ -161,7 +161,7 @@ var
   Chunk:                    string;
 begin
   Result := '';
-  Root   := ProjectRootAttr;
+  Root   := ProjectRootAttr();
   QBE    := Root + 'vendor/qbe/qbe';
   RTL    := Root + 'compiler/target/blaise_rtl.a';
   if not (FileExists(QBE) and FileExists(RTL)) then

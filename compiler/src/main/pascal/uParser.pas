@@ -119,7 +119,7 @@ implementation
 
 constructor TParser.Create(ALexer: TLexer);
 begin
-  inherited Create;
+  inherited Create();
   FLexer      := ALexer;
   FCurrent    := FLexer.Next();
   FLookahead  := FLexer.Next();

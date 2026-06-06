@@ -364,7 +364,7 @@ end;
 
 constructor TSemanticAnalyser.Create;
 begin
-  inherited Create;
+  inherited Create();
   FTable                := TSymbolTable.Create();
   FMethodIndex          := TStringList.Create();
   FMethodIndex.CaseSensitive := False;
@@ -390,7 +390,7 @@ begin
   FProcIndex.Free();
   FMethodIndex.Free();
   FTable.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 procedure TSemanticAnalyser.SemanticError(const AMsg: string; ALine, ACol: Integer);
@@ -5250,9 +5250,22 @@ begin
     MDecl := ResolveMethodOverload(RT.Name, ACall.Name, ACall.Args,
       ACall.Line, ACall.Col);
     if MDecl = nil then
+    begin
+      FldInfo := RT.FindField(ACall.Name);
+      if (FldInfo <> nil) and (FldInfo.TypeDesc <> nil) and
+         (FldInfo.TypeDesc.Kind = tyProcedural) then
+      begin
+        ACall.IsProcFieldCall   := True;
+        ACall.ProcFieldInfo     := FldInfo;
+        ACall.ResolvedProcType  := FldInfo.TypeDesc;
+        ACall.ResolvedClassType := RT;
+        ACall.ResolvedMethod    := nil;
+        Exit;
+      end;
       SemanticError(
         Format('Class ''%s'' has no method ''%s''', [RT.Name, ACall.Name]),
         ACall.Line, ACall.Col);
+    end;
     ACall.ResolvedClassType := RT;
     ACall.ResolvedMethod    := MDecl;
     Exit;
@@ -7204,7 +7217,7 @@ begin
   if SameText(AExpr.Name, 'GetCurrentDir') then
   begin
     if AExpr.Args.Count <> 0 then
-      SemanticError('GetCurrentDir takes no arguments', AExpr.Line, AExpr.Col);
+      SemanticError('GetCurrentDir() takes no arguments', AExpr.Line, AExpr.Col);
     Result := FTable.TypeString;
     AExpr.ResolvedType := Result;
     Exit;
@@ -7420,6 +7433,7 @@ var
   IntfDesc: TInterfaceTypeDesc;
   ObjType:  TTypeDesc;
   ResolvedObjName: string;
+  FldInfo: TFieldInfo;
 begin
   { Call on an arbitrary expression (e.g. TCast(x).Method(y)) }
   if AExpr.ObjExpr <> nil then
@@ -7479,9 +7493,23 @@ begin
     MDecl := ResolveMethodOverload(RT.Name, AExpr.Name, AExpr.Args,
       AExpr.Line, AExpr.Col);
     if MDecl = nil then
+    begin
+      FldInfo := RT.FindField(AExpr.Name);
+      if (FldInfo <> nil) and (FldInfo.TypeDesc <> nil) and
+         (FldInfo.TypeDesc.Kind = tyProcedural) then
+      begin
+        AExpr.IsProcFieldCall   := True;
+        AExpr.ProcFieldInfo     := FldInfo;
+        AExpr.ResolvedProcType  := FldInfo.TypeDesc;
+        AExpr.ResolvedClassType := RT;
+        AExpr.ResolvedMethod    := nil;
+        AExpr.ResolvedType      := nil;
+        Exit;
+      end;
       SemanticError(
         Format('Class ''%s'' has no method ''%s''', [RT.Name, AExpr.Name]),
         AExpr.Line, AExpr.Col);
+    end;
     AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
     AExpr.ResolvedClassType := RT;
     AExpr.ResolvedMethod    := MDecl;
@@ -7561,9 +7589,23 @@ begin
       MDecl := ResolveMethodOverload(RT.Name, AExpr.Name, AExpr.Args,
         AExpr.Line, AExpr.Col);
       if MDecl = nil then
+      begin
+        FldInfo := RT.FindField(AExpr.Name);
+        if (FldInfo <> nil) and (FldInfo.TypeDesc <> nil) and
+           (FldInfo.TypeDesc.Kind = tyProcedural) then
+        begin
+          AExpr.IsProcFieldCall   := True;
+          AExpr.ProcFieldInfo     := FldInfo;
+          AExpr.ResolvedProcType  := FldInfo.TypeDesc;
+          AExpr.ResolvedClassType := RT;
+          AExpr.ResolvedMethod    := nil;
+          AExpr.ResolvedType      := nil;
+          Exit;
+        end;
         SemanticError(
           Format('Class ''%s'' has no method ''%s''', [RT.Name, AExpr.Name]),
           AExpr.Line, AExpr.Col);
+      end;
       AppendDefaultArgs(AExpr.Args, MDecl, AExpr.Name, AExpr.Line, AExpr.Col);
       { Validate var/out-param arguments (type compatibility scored by
         overload resolver; only lvalue constraint needs rechecking). }
@@ -7708,9 +7750,28 @@ begin
     Exit;
   end;
   if MDecl = nil then
+  begin
+    FldInfo := RT.FindField(AExpr.Name);
+    if (FldInfo <> nil) and (FldInfo.TypeDesc <> nil) and
+       (FldInfo.TypeDesc.Kind = tyProcedural) then
+    begin
+      AExpr.IsProcFieldCall   := True;
+      AExpr.ProcFieldInfo     := FldInfo;
+      AExpr.ResolvedProcType  := FldInfo.TypeDesc;
+      AExpr.ResolvedClassType := RT;
+      AExpr.ResolvedMethod    := nil;
+      AExpr.IsGlobal          := ObjSym.IsGlobal;
+      AExpr.IsVarParam        :=
+        (ObjSym.Kind = skVarParameter) or
+        ((ObjSym.Kind = skParameter) and (ObjSym.TypeDesc <> nil) and
+         (ObjSym.TypeDesc.Kind in [tyRecord, tyStaticArray]));
+      AExpr.ResolvedType      := nil;
+      Exit;
+    end;
     SemanticError(
       Format('Class ''%s'' has no method ''%s''', [RT.Name, AExpr.Name]),
       AExpr.Line, AExpr.Col);
+  end;
   if MDecl.ResolvedReturnType = nil then
     SemanticError(
       Format('Method ''%s.%s'' is a procedure (no return value)',
@@ -7747,7 +7808,6 @@ var
   Sym:       TSymbol;
   FldInfo:   TFieldInfo;
   PropInfo:  TPropertyInfo;
-  NoArgIdx:  Integer;
 begin
   if AExpr is TNilLiteral then
     Result := FTable.TypeNil
@@ -7866,16 +7926,6 @@ begin
       if Result = nil then Result := FTable.TypePointer;
       AExpr.ResolvedType := Result;
       Exit;
-    end;
-    { Bare function reference without parens — mark as no-arg call for codegen.
-      Covers both builtins (not in FProcIndex) and user-defined standalone functions. }
-    if (Sym.Kind = skFunction) and (Sym.TypeDesc <> nil) then
-    begin
-      TIdentExpr(AExpr).IsNoArgFuncCall := True;
-      { Propagate TMethodDecl for user-defined functions so codegen can emit the call }
-      NoArgIdx := FProcIndex.IndexOf(TIdentExpr(AExpr).Name);
-      if NoArgIdx >= 0 then
-        TIdentExpr(AExpr).NoArgFuncDecl := FProcIndex.Objects[NoArgIdx];
     end;
     Result := Sym.TypeDesc;
   end

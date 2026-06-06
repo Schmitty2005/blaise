@@ -62,7 +62,7 @@ begin
   CliMode := False;
 
   I := 1;
-  while I <= ParamCount do
+  while I <= ParamCount() do
   begin
     Arg := ParamStr(I);
 
@@ -72,7 +72,7 @@ begin
     else if Arg = '--add' then
     begin
       CliMode := True;
-      if I + 1 <= ParamCount then
+      if I + 1 <= ParamCount() then
       begin
         I := I + 1;
         AddTitle := ParamStr(I)
@@ -81,7 +81,7 @@ begin
 
     else if Arg = '--detail' then
     begin
-      if I + 1 <= ParamCount then
+      if I + 1 <= ParamCount() then
       begin
         I := I + 1;
         DetailText := ParamStr(I)
@@ -90,7 +90,7 @@ begin
 
     else if Arg = '--detail-file' then
     begin
-      if I + 1 <= ParamCount then
+      if I + 1 <= ParamCount() then
       begin
         I := I + 1;
         DetailFile := ParamStr(I)
@@ -99,7 +99,7 @@ begin
 
     else if Arg = '--priority' then
     begin
-      if I + 1 <= ParamCount then
+      if I + 1 <= ParamCount() then
       begin
         I := I + 1;
         PriorityVal := ParamStr(I)
@@ -108,7 +108,7 @@ begin
 
     else if Arg = '--status' then
     begin
-      if I + 1 <= ParamCount then
+      if I + 1 <= ParamCount() then
       begin
         I := I + 1;
         Arg := ParamStr(I);

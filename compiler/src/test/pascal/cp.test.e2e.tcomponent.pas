@@ -127,7 +127,7 @@ const
 
 procedure TE2ETComponentTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-tcomponent')
 end;
 

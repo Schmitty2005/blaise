@@ -231,7 +231,7 @@ procedure TConfigTests.TestFindConfigFile_NextToBinary;
 var
   CfgPath: string;
 begin
-  CfgPath := FindConfigFile;
+  CfgPath := FindConfigFile();
   if CfgPath = '' then
     AssertTrue('no config found (acceptable in test env)', True)
   else

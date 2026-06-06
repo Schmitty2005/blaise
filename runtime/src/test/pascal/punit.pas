@@ -1524,7 +1524,7 @@ begin
     on E : TObject do
       begin
       CurrentResult := @CurrentRun.Results;
-      SetTestResult(trHandlerError, E.ToString, True);
+      SetTestResult(trHandlerError, E.ToString(), True);
       Result := SetTestError(teRunStartHandler);
       end;
   end;
@@ -1540,7 +1540,7 @@ begin
       on E : TObject do
         begin
         CurrentResult := @CurrentRun.Results;
-        SetTestResult(trHandlerError, E.ToString, False);
+        SetTestResult(trHandlerError, E.ToString(), False);
         Result := SetTestError(teRunCompleteHandler);
         end;
     end;
@@ -1554,11 +1554,11 @@ begin
       GlobalSuiteStartHandler(ASuite);
     except
       on E : EIgnore do
-        SetTestResult(trTestIgnore, E.ToString);
+        SetTestResult(trTestIgnore, E.ToString());
       on E : EFail do
-        SetTestResult(trAssertFailed, E.ToString);
+        SetTestResult(trAssertFailed, E.ToString());
       on E : TObject do
-        SetTestResult(trHandlerError, E.ToString);
+        SetTestResult(trHandlerError, E.ToString());
     end;
 end;
 
@@ -1576,11 +1576,11 @@ begin
       GlobalSuiteCompleteHandler(ASuite, SuiteResult);
     except
       on E : EIgnore do
-        SetTestResult(trTestIgnore, E.ToString);
+        SetTestResult(trTestIgnore, E.ToString());
       on E : EFail do
-        SetTestResultRec(SuiteResult^, trAssertFailed, E.ToString);
+        SetTestResultRec(SuiteResult^, trAssertFailed, E.ToString());
       on E : TObject do
-        SetTestResultRec(SuiteResult^, trHandlerError, E.ToString);
+        SetTestResultRec(SuiteResult^, trHandlerError, E.ToString());
     end;
     CurrentResult := C;
     end;
@@ -1600,7 +1600,7 @@ begin
     S := SetupFn();
   except
     on E : TObject do
-      S := E.ToString;
+      S := E.ToString();
   end;
   if S <> '' then
     begin
@@ -1629,7 +1629,7 @@ begin
     S := TearDownFn();
   except
     on E : TObject do
-      S := E.ToString;
+      S := E.ToString();
   end;
   if S <> '' then
     begin
@@ -1677,7 +1677,7 @@ begin
       ExcRaised    := True;
       ExcClass     := E.ClassType;
       ExcClassName := E.ClassName;
-      EM := E.ToString;
+      EM := E.ToString();
       end;
   end;
   if CurrentResult^.ExpectException <> nil then
@@ -1834,7 +1834,7 @@ begin
       begin
       S := TestStagePrefix(Stage);
       if S <> '' then S := '[' + S + '] ';
-      S := S + E.ToString;
+      S := S + E.ToString();
       SetTestResultRec(CurrentResult^, TestStageError(Stage), S, True);
       end;
   end;
@@ -1929,7 +1929,7 @@ begin
       begin
       S := SuiteStagePrefix(Stage);
       if S <> '' then S := '[' + S + '] ';
-      S := S + E.ToString;
+      S := S + E.ToString();
       SetTestResultRec(SuiteResult^, SuiteStageError(Stage), S, True);
       end;
   end;
@@ -2453,7 +2453,7 @@ var
 begin
   SysRunMode := rmTest;
   I := 1;
-  while I <= ParamCount do
+  while I <= ParamCount() do
     begin
     S := ParamStr(I);
     if (S = '-v') or (S = '--verbose') then

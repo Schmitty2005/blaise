@@ -66,7 +66,7 @@ implementation
 
 constructor TNativeBackend.Create(const ATarget: TTargetDesc);
 begin
-  inherited Create;
+  inherited Create();
   FTarget   := ATarget;
   FSymTable := nil;
   FAsm      := TStringBuilder.Create();
@@ -75,7 +75,7 @@ end;
 destructor TNativeBackend.Destroy;
 begin
   FAsm.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 procedure TNativeBackend.SetSymbolTable(ASymTable: TSymbolTable);

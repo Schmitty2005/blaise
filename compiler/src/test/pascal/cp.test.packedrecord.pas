@@ -229,7 +229,7 @@ begin
   Prog := AnalyseSrc(Src);
   try
     RT := TRecordTypeDesc(TVarDecl(Prog.Block.Decls.Items[0]).ResolvedType);
-    AssertEquals('TotalSize = 1 + 4 = 5 (no tail pad)', 5, RT.TotalSize);
+    AssertEquals('TotalSize = 1 + 4 = 5 (no tail pad)', 5, RT.TotalSize());
   finally
     Prog.Free();
   end;
@@ -256,7 +256,7 @@ begin
     AssertEquals('MaxAlign = 1 for packed', 1, RT.MaxAlign);
     AssertEquals('B offset = 1 (no 8-byte align)', 1,
                  RT.FindField('B').Offset);
-    AssertEquals('TotalSize = 9 (no tail pad)', 9, RT.TotalSize);
+    AssertEquals('TotalSize = 9 (no tail pad)', 9, RT.TotalSize());
   finally
     Prog.Free();
   end;
@@ -373,7 +373,7 @@ end;
 
 procedure TPackedRecordE2ETests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-packed-record');
 end;
 

@@ -671,7 +671,7 @@ end;
 
 function TRtlPlatformPosix.GetProcessID: Integer;
 begin
-  Result := libc_getpid;
+  Result := libc_getpid();
 end;
 
 function TRtlPlatformPosix.GetEnvVar(const AName: string): string;
@@ -1047,7 +1047,7 @@ begin
     ArgvSet(Argv, I + 1, ArgvGet(P^.Argv, I));
   ArgvSet(Argv, Total - 1, nil);
 
-  Pid := libc_fork;
+  Pid := libc_fork();
   if Pid < 0 then
   begin
     _BlaiseFreeMem(Argv);
@@ -1177,7 +1177,7 @@ end;
 
 function _ParamCount: Integer;
 begin
-  Result := GRtlPlatform.ParamCount;
+  Result := GRtlPlatform.ParamCount();
 end;
 
 function _ParamStr(Index: Integer): Pointer;
@@ -1237,7 +1237,7 @@ end;
 
 function _GetCurrentDir: Pointer;
 begin
-  Result := Pointer(GRtlPlatform.GetCurrentDir);
+  Result := Pointer(GRtlPlatform.GetCurrentDir());
 end;
 
 function _SetCurrentDir(Path: Pointer): Integer;
@@ -1247,7 +1247,7 @@ end;
 
 function _GetTempDir: Pointer;
 begin
-  Result := Pointer(GRtlPlatform.GetTempDir);
+  Result := Pointer(GRtlPlatform.GetTempDir());
 end;
 
 function _GetTempFileName(Dir, Prefix: Pointer): Pointer;
@@ -1257,7 +1257,7 @@ end;
 
 function _GetProcessID: Integer;
 begin
-  Result := GRtlPlatform.GetProcessID;
+  Result := GRtlPlatform.GetProcessID();
 end;
 
 function _GetEnvVar(Name: Pointer): Pointer;
@@ -1362,12 +1362,12 @@ end;
 
 function _TimeNow: Int64;
 begin
-  Result := GRtlPlatform.TimeNow;
+  Result := GRtlPlatform.TimeNow();
 end;
 
 function _TimeLocalOffsetSecs: Integer;
 begin
-  Result := GRtlPlatform.TimeLocalOffsetSecs;
+  Result := GRtlPlatform.TimeLocalOffsetSecs();
 end;
 
 procedure _TimeSplit(Nanos: Int64;
@@ -1393,7 +1393,7 @@ end;
 
 function _ProcessCreate: Pointer;
 begin
-  Result := GRtlPlatform.ProcessCreate;
+  Result := GRtlPlatform.ProcessCreate();
 end;
 
 procedure _ProcessSetExe(Proc: Pointer; ExeStr: Pointer);

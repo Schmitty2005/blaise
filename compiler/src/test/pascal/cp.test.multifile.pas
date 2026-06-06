@@ -58,7 +58,7 @@ implementation
 
 procedure TMultifileTests.SetUp;
 begin
-  FTmpDir := GetTempDir + 'blaise_mf_' + IntToStr(GetProcessID);
+  FTmpDir := GetTempDir() + 'blaise_mf_' + IntToStr(GetProcessID());
   ForceDirectories(FTmpDir);
 end;
 

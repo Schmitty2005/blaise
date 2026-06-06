@@ -90,7 +90,7 @@ end;
 
 constructor TCodeGenNative.Create;
 begin
-  inherited Create;
+  inherited Create();
   MakeTarget(osLinux, cpuX86_64, FTarget);
   FSymTable  := nil;
   FDebugMode := False;
@@ -101,7 +101,7 @@ end;
 destructor TCodeGenNative.Destroy;
 begin
   FBackend.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 procedure TCodeGenNative.SetTarget(const ATarget: TTargetDesc);

@@ -470,7 +470,7 @@ end;
 
 constructor TTestCase.Create(AName: string);
 begin
-  inherited Create;
+  inherited Create();
   Self.FName      := AName;
   Self.FClassName := '';
 end;
@@ -557,7 +557,7 @@ end;
 
 constructor TTestResult.Create;
 begin
-  inherited Create;
+  inherited Create();
   Self.FNumberOfTests    := 0;
   Self.FNumberOfFailures := 0;
   Self.FNumberOfErrors   := 0;
@@ -573,7 +573,7 @@ destructor TTestResult.Destroy;
 begin
   Self.FFailureList.Free();
   Self.FErrorList.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 procedure TTestResult.StartTest(AClassName, ATestName: string);
@@ -642,7 +642,7 @@ end;
 
 constructor EAssertionFailed.Create(AMessage: string);
 begin
-  inherited Create;
+  inherited Create();
   Self.FMessage := AMessage;
 end;
 
@@ -653,7 +653,7 @@ end;
 
 constructor EIgnoredTest.Create(AMessage: string);
 begin
-  inherited Create;
+  inherited Create();
   Self.FMessage := AMessage;
 end;
 

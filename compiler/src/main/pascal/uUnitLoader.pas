@@ -318,7 +318,7 @@ end;
 
 constructor TUnitLoader.Create(const ASearchPaths: TStringList);
 begin
-  inherited Create;
+  inherited Create();
   FSearchPaths := ASearchPaths;
   FLoading     := TStringList.Create();
   FLoading.CaseSensitive := False;
@@ -335,7 +335,7 @@ begin
   FPrebuiltIfaces.Free();
   FLoadedNames.Free();
   FLoading.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 function TUnitLoader.LoadAll(const AUnitNames: TStringList): TObjectList;

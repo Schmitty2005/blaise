@@ -236,7 +236,7 @@ begin
     AssertEquals('B at 2', 2, RT.FindField('B').Offset);
     AssertEquals('C at 4', 4, RT.FindField('C').Offset);
     AssertEquals('D at 6', 6, RT.FindField('D').Offset);
-    AssertEquals('total 8', 8, RT.TotalSize);
+    AssertEquals('total 8', 8, RT.TotalSize());
   finally
     Prog.Free();
   end;
@@ -266,7 +266,7 @@ begin
     AssertEquals('Tag at 0', 0, RT.FindField('Tag').Offset);
     AssertEquals('ID at 2 (after 1-byte pad)', 2, RT.FindField('ID').Offset);
     AssertEquals('Val at 4', 4, RT.FindField('Val').Offset);
-    AssertEquals('total 8',  8, RT.TotalSize);
+    AssertEquals('total 8',  8, RT.TotalSize());
   finally
     Prog.Free();
   end;
@@ -320,7 +320,7 @@ end;
 
 procedure TSmallIntWordE2ETests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-smallint-word');
 end;
 

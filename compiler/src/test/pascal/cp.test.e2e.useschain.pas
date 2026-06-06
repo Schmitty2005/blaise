@@ -35,7 +35,7 @@ implementation
 
 procedure TE2EUsesChainTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-useschain');
 end;
 

@@ -1258,7 +1258,7 @@ begin
     { Append to tail if there is room; otherwise allocate a new segment. }
     if (Self.FTail = nil) or (Self.FTail.FLimit >= kSegmentSize) then
     begin
-      Seg := AcquireSegment;
+      Seg := AcquireSegment();
       if Self.FTail = nil then
         Self.FHead := Seg
       else
@@ -1388,7 +1388,7 @@ begin
       if Int64(Take) > HeadAvail then Take := Integer(HeadAvail);
       if (Dst.FTail = nil) or (Dst.FTail.FLimit >= kSegmentSize) then
       begin
-        Seg := AcquireSegment;
+        Seg := AcquireSegment();
         if Dst.FTail = nil then
           Dst.FHead := Seg
         else

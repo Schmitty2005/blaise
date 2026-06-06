@@ -153,7 +153,7 @@ end;
 
 constructor TLexer.Create(const ASource: string; const AFilename: string = '');
 begin
-  inherited Create;
+  inherited Create();
   FTok := TFpgPascalTokeniser.Create();
   FTok.SetSource(ASource);
   FFilename := AFilename;
@@ -162,7 +162,7 @@ end;
 destructor TLexer.Destroy;
 begin
   FTok.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 function TLexer.MapKeyword(const AUpper: string): TTokenKind;

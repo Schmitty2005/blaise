@@ -76,8 +76,6 @@ type
     IsConstant:        Boolean;  { set by uSemantic — True if this ident is a skConstant symbol }
     ConstValue:        Int64;    { valid when IsConstant = True; integer/bool/enum value }
     ConstString:       string;   { valid when IsConstant = True and type is tyString }
-    IsNoArgFuncCall:   Boolean;  { set by uSemantic — bare ident that resolves to a 0-arg function }
-    [Unretained] NoArgFuncDecl:     TObject;  { TMethodDecl — not owned; valid when IsNoArgFuncCall and user-defined }
     IsGlobal:          Boolean;  { set by uSemantic — this ident is a program-level global var }
     IsThreadVar:       Boolean;  { set by uSemantic — threadvar (TLS) global }
     IsImplicitSelf:    Boolean;  { set by uSemantic — bare field name implicitly referencing Self }
@@ -673,6 +671,9 @@ type
     IsVarParam:         Boolean;    { set by uSemantic — ObjectName is a var/out parameter }
     IsBuiltinToString:    Boolean;  { set by uSemantic — built-in TObject.ToString virtual dispatch }
     IsBuiltinInheritsFrom: Boolean; { set by uSemantic — SomeClass.InheritsFrom(OtherClass) }
+    IsProcFieldCall:    Boolean;    { set by uSemantic — Name is a procedural-typed field }
+    [Unretained] ProcFieldInfo:      TFieldInfo;  { not owned — the procedural field }
+    [Unretained] ResolvedProcType:   TObject;     { TProceduralTypeDesc — not owned }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -942,21 +943,21 @@ end;
 destructor TIfStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TCompoundStmt }
 
 constructor TCompoundStmt.Create;
 begin
-  inherited Create;
+  inherited Create();
   Stmts := TObjectList.Create(True);
 end;
 
 destructor TCompoundStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TWhileStmt }
@@ -964,7 +965,7 @@ end;
 destructor TWhileStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TRepeatStmt }
@@ -972,7 +973,7 @@ end;
 destructor TRepeatStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TForStmt }
@@ -980,7 +981,7 @@ end;
 destructor TForStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TForInStmt }
@@ -988,7 +989,7 @@ end;
 destructor TForInStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TTryFinallyStmt }
@@ -996,7 +997,7 @@ end;
 destructor TTryFinallyStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TExceptHandlerClause }
@@ -1004,21 +1005,21 @@ end;
 destructor TExceptHandlerClause.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TTryExceptStmt }
 
 constructor TTryExceptStmt.Create;
 begin
-  inherited Create;
+  inherited Create();
   Handlers := TObjectList.Create(True);
 end;
 
 destructor TTryExceptStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TRaiseStmt }
@@ -1026,13 +1027,13 @@ end;
 destructor TRaiseStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 destructor TExitStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TFieldAccessExpr }
@@ -1040,7 +1041,7 @@ end;
 destructor TFieldAccessExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TIsExpr }
@@ -1048,7 +1049,7 @@ end;
 destructor TIsExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TAsExpr }
@@ -1056,7 +1057,7 @@ end;
 destructor TAsExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TSupportsExpr }
@@ -1064,7 +1065,7 @@ end;
 destructor TSupportsExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TBinaryExpr }
@@ -1072,7 +1073,7 @@ end;
 destructor TBinaryExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TNotExpr }
@@ -1080,7 +1081,7 @@ end;
 destructor TNotExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TAssignment }
@@ -1088,7 +1089,7 @@ end;
 destructor TAssignment.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TFieldAssignment }
@@ -1096,7 +1097,7 @@ end;
 destructor TFieldAssignment.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TStaticSubscriptAssign }
@@ -1104,7 +1105,7 @@ end;
 destructor TStaticSubscriptAssign.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TPointerWriteStmt }
@@ -1112,7 +1113,7 @@ end;
 destructor TPointerWriteStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TDerefExpr }
@@ -1120,103 +1121,103 @@ end;
 destructor TDerefExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 destructor TAddrOfExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 destructor TStringSubscriptExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TArrayLiteralExpr }
 
 constructor TArrayLiteralExpr.Create;
 begin
-  inherited Create;
+  inherited Create();
   Elements := TObjectList.Create(True);
 end;
 
 destructor TArrayLiteralExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TProcCall }
 
 constructor TProcCall.Create;
 begin
-  inherited Create;
+  inherited Create();
   Args := TObjectList.Create(True);
 end;
 
 destructor TProcCall.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TFuncCallExpr }
 
 constructor TFuncCallExpr.Create;
 begin
-  inherited Create;
+  inherited Create();
   Args := TObjectList.Create(True);
 end;
 
 destructor TFuncCallExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TIndirectFuncCallExpr }
 
 constructor TIndirectFuncCallExpr.Create;
 begin
-  inherited Create;
+  inherited Create();
   Args := TObjectList.Create(True);
 end;
 
 destructor TIndirectFuncCallExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TMethodCallStmt }
 
 constructor TMethodCallStmt.Create;
 begin
-  inherited Create;
+  inherited Create();
   Args := TObjectList.Create(True);
 end;
 
 destructor TMethodCallStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TInheritedCallStmt }
 
 constructor TInheritedCallStmt.Create;
 begin
-  inherited Create;
+  inherited Create();
   Args := TObjectList.Create(True);
 end;
 
 destructor TInheritedCallStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TMethodParam }
@@ -1224,14 +1225,14 @@ end;
 destructor TMethodParam.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TVarDecl }
 
 constructor TVarDecl.Create;
 begin
-  inherited Create;
+  inherited Create();
   Names      := TStringList.Create();
   Attributes := TStringList.Create();
   IsWeak     := False;
@@ -1240,14 +1241,14 @@ end;
 destructor TVarDecl.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TFieldDecl }
 
 constructor TFieldDecl.Create;
 begin
-  inherited Create;
+  inherited Create();
   Names      := TStringList.Create();
   Attributes := TStringList.Create();
   IsWeak       := False;
@@ -1257,14 +1258,14 @@ end;
 destructor TFieldDecl.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TRecordTypeDef }
 
 constructor TRecordTypeDef.Create;
 begin
-  inherited Create;
+  inherited Create();
   Fields  := TObjectList.Create(True);
   Methods := TObjectList.Create(True);
 end;
@@ -1272,14 +1273,14 @@ end;
 destructor TRecordTypeDef.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TProceduralTypeDef }
 
 constructor TProceduralTypeDef.Create;
 begin
-  inherited Create;
+  inherited Create();
   Params     := TObjectList.Create(True);
   IsFunction := False;
 end;
@@ -1287,14 +1288,14 @@ end;
 destructor TProceduralTypeDef.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TMethodDecl }
 
 constructor TMethodDecl.Create;
 begin
-  inherited Create;
+  inherited Create();
   Params     := TObjectList.Create(True);
   VTableSlot := -1;
   OwnBody    := True;
@@ -1308,28 +1309,28 @@ begin
   OwnerTypeParams.Free();
   CapturedVars.Free();
   if OwnBody then Body.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TMethodCallExpr }
 
 constructor TMethodCallExpr.Create;
 begin
-  inherited Create;
+  inherited Create();
   Args := TObjectList.Create(True);
 end;
 
 destructor TMethodCallExpr.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TClassTypeDef }
 
 constructor TClassTypeDef.Create;
 begin
-  inherited Create;
+  inherited Create();
   ImplementsNames := TStringList.Create();
   ConstDecls      := TObjectList.Create(True);
   Fields          := TObjectList.Create(True);
@@ -1341,28 +1342,28 @@ end;
 destructor TClassTypeDef.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TInterfaceTypeDef }
 
 constructor TInterfaceTypeDef.Create;
 begin
-  inherited Create;
+  inherited Create();
   Methods := TObjectList.Create(True);
 end;
 
 destructor TInterfaceTypeDef.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TGenericTypeDef }
 
 constructor TGenericTypeDef.Create;
 begin
-  inherited Create;
+  inherited Create();
   ParamNames       := TStringList.Create();
   ParamConstraints := TStringList.Create();
   ClassDef         := TClassTypeDef.Create();
@@ -1371,7 +1372,7 @@ end;
 destructor TGenericTypeDef.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TGenericInstance }
@@ -1380,20 +1381,20 @@ end;
 
 constructor TGenericFuncInstance.Create;
 begin
-  inherited Create;
+  inherited Create();
 end;
 
 destructor TGenericFuncInstance.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TGenericInterfaceDef }
 
 constructor TGenericInterfaceDef.Create;
 begin
-  inherited Create;
+  inherited Create();
   ParamNames       := TStringList.Create();
   ParamConstraints := TStringList.Create();
   IntfDef          := TInterfaceTypeDef.Create();
@@ -1401,14 +1402,14 @@ end;
 
 destructor TGenericInterfaceDef.Destroy;
 begin
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TGenericRecordDef }
 
 constructor TGenericRecordDef.Create;
 begin
-  inherited Create;
+  inherited Create();
   ParamNames       := TStringList.Create();
   ParamConstraints := TStringList.Create();
   RecordDef        := TRecordTypeDef.Create();
@@ -1416,48 +1417,48 @@ end;
 
 destructor TGenericRecordDef.Destroy;
 begin
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TGenericRecordInstance }
 
 constructor TGenericRecordInstance.Create;
 begin
-  inherited Create;
+  inherited Create();
   RecordDef := TRecordTypeDef.Create();
 end;
 
 destructor TGenericRecordInstance.Destroy;
 begin
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TGenericInterfaceInstance }
 
 constructor TGenericInterfaceInstance.Create;
 begin
-  inherited Create;
+  inherited Create();
   IntfDef := TInterfaceTypeDef.Create();
 end;
 
 destructor TGenericInterfaceInstance.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TGenericInstance }
 
 constructor TGenericInstance.Create;
 begin
-  inherited Create;
+  inherited Create();
   ClassDef := TClassTypeDef.Create();
 end;
 
 destructor TGenericInstance.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TTypeDecl }
@@ -1465,14 +1466,14 @@ end;
 destructor TTypeDecl.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TBlock }
 
 constructor TBlock.Create;
 begin
-  inherited Create;
+  inherited Create();
   TypeDecls  := TObjectList.Create(True);
   ConstDecls := TObjectList.Create(True);
   Decls      := TObjectList.Create(True);
@@ -1483,21 +1484,21 @@ end;
 destructor TBlock.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TEnumTypeDef }
 
 constructor TEnumTypeDef.Create;
 begin
-  inherited Create;
+  inherited Create();
   Members := TStringList.Create();
 end;
 
 destructor TEnumTypeDef.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 procedure TEnumTypeDef.AddMember(const AName: string; AValue: Integer);
@@ -1514,35 +1515,35 @@ end;
 
 constructor TCaseBranch.Create;
 begin
-  inherited Create;
+  inherited Create();
   Values := TObjectList.Create(True);
 end;
 
 destructor TCaseBranch.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TCaseStmt }
 
 constructor TCaseStmt.Create;
 begin
-  inherited Create;
+  inherited Create();
   Branches := TObjectList.Create(True);
 end;
 
 destructor TCaseStmt.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TProgram }
 
 constructor TProgram.Create;
 begin
-  inherited Create;
+  inherited Create();
   UsedUnits              := TStringList.Create();
   GenericInstances       := TObjectList.Create(True);
   GenericFuncInstances   := TObjectList.Create(True);
@@ -1553,20 +1554,20 @@ end;
 destructor TConstDecl.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 destructor TProgram.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { TUnit }
 
 constructor TUnit.Create;
 begin
-  inherited Create;
+  inherited Create();
   UsedUnits     := TStringList.Create();
   ImplUsedUnits := TStringList.Create();
   IntfBlock  := TBlock.Create();
@@ -1582,7 +1583,7 @@ end;
 destructor TUnit.Destroy;
 begin
   { Owned class fields released by ARC field cleanup. }
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 { ------------------------------------------------------------------ }

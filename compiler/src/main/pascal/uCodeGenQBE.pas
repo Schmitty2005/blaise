@@ -410,7 +410,7 @@ end;
 
 constructor TIRBuffer.Create;
 begin
-  inherited Create;
+  inherited Create();
   FCap  := IR_INIT_CAP;
   FLen  := 0;
   FData := GetMem(FCap);
@@ -419,7 +419,7 @@ end;
 destructor TIRBuffer.Destroy;
 begin
   FreeMem(FData);
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 procedure TIRBuffer.Grow(ANeed: Integer);
@@ -479,7 +479,7 @@ end;
 
 constructor TCodeGenQBE.Create;
 begin
-  inherited Create;
+  inherited Create();
   FOutput          := TIRBuffer.Create();
   FStrLits         := TStringList.Create();
   FStrLits.CaseSensitive := True;
@@ -533,7 +533,7 @@ begin
   FInlineResultQTypes.Free();
   FOutput.Free();
   FStrLits.Free();
-  inherited Destroy;
+  inherited Destroy();
 end;
 
 function TCodeGenQBE.ExportPrefix: string;
@@ -3417,14 +3417,11 @@ begin
   if AExpr = nil then Exit;
   if AExpr.ResolvedType = nil then Exit;
   if AExpr.ResolvedType.Kind <> tyClass then Exit;
-  { TIdentExpr with IsNoArgFuncCall: bare zero-arg function call (no parens) }
   if AExpr is TIdentExpr then
   begin
     IE := TIdentExpr(AExpr);
-    if IE.IsNoArgFuncCall or IE.IsImplicitSelfMethod then
-    begin
+    if IE.IsImplicitSelfMethod then
       Exit(True);
-    end;
   end;
   { Constructor calls via TFieldAccessExpr (TFoo.Create) — do NOT own }
   if AExpr is TFieldAccessExpr then
@@ -4954,6 +4951,43 @@ begin
       Exit;
     end;
     SelfTemp := EmitExpr(ACall.ObjExpr);
+    if ACall.IsProcFieldCall then
+    begin
+      PT := TProceduralTypeDesc(ACall.ResolvedProcType);
+      if ACall.ProcFieldInfo.Offset > 0 then
+      begin
+        SlotAddr := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d',
+          [SlotAddr, SelfTemp, ACall.ProcFieldInfo.Offset]));
+      end
+      else
+        SlotAddr := SelfTemp;
+      FPtrTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [FPtrTemp, SlotAddr]));
+      if PT.IsMethodPtr then
+      begin
+        ArgTemp := AllocTemp;
+        EmitLine(Format('  %s =l add %s, 8', [ArgTemp, SlotAddr]));
+        DataTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [DataTemp, ArgTemp]));
+        ArgLine := Format('l %s', [DataTemp]);
+      end
+      else
+        ArgLine := '';
+      for I := 0 to ACall.Args.Count - 1 do
+      begin
+        if ArgLine <> '' then ArgLine := ArgLine + ', ';
+        ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+        QType   := QbeTypeOf(TProcParamInfo(PT.Params.Items[I]).TypeDesc);
+        ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
+        ArgLine := ArgLine + Format('%s %s',
+          [QbeParamTypeOf(TProcParamInfo(PT.Params.Items[I]).TypeDesc), ArgTemp]);
+      end;
+      EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+      if ExprOwnsRef(ACall.ObjExpr) then
+        EmitLine(Format('  call $_ClassRelease(l %s)', [SelfTemp]));
+      Exit;
+    end;
     ArgLine := Format('l %s', [SelfTemp]);
     ArgTemps := TStringList.Create();
     for I := 0 to ACall.Args.Count - 1 do
@@ -7200,6 +7234,9 @@ var
   IsIntArg:     Boolean;
   FT:           string;
   ItabName:     string;
+  PT:           TProceduralTypeDesc;
+  SlotAddr:     string;
+  DataTemp:     string;
 begin
   if AExpr is TFuncCallExpr then
   begin
@@ -8476,6 +8513,61 @@ begin
   begin
     MCallExpr := TMethodCallExpr(AExpr);
 
+    { Procedure-type field call expression: load (Code, Data) pair and
+      dispatch indirectly. Only applies to function-of-object fields that
+      return a value (otherwise they go through TMethodCallStmt). }
+    if MCallExpr.IsProcFieldCall then
+    begin
+      PT := TProceduralTypeDesc(MCallExpr.ResolvedProcType);
+      if MCallExpr.ObjExpr <> nil then
+        SelfTemp := EmitExpr(MCallExpr.ObjExpr)
+      else if MCallExpr.IsVarParam then
+      begin
+        FPtrTemp := AllocTemp;
+        SelfTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %%_var_%s', [FPtrTemp, MCallExpr.ObjectName]));
+        EmitLine(Format('  %s =l loadl %s', [SelfTemp, FPtrTemp]));
+      end
+      else
+      begin
+        SelfTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s',
+          [SelfTemp, VarRef(MCallExpr.ObjectName, MCallExpr.IsGlobal)]));
+      end;
+      if MCallExpr.ProcFieldInfo.Offset > 0 then
+      begin
+        SlotAddr := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d',
+          [SlotAddr, SelfTemp, MCallExpr.ProcFieldInfo.Offset]));
+      end
+      else
+        SlotAddr := SelfTemp;
+      FPtrTemp := AllocTemp;
+      EmitLine(Format('  %s =l loadl %s', [FPtrTemp, SlotAddr]));
+      if PT.IsMethodPtr then
+      begin
+        ArgTemp := AllocTemp;
+        EmitLine(Format('  %s =l add %s, 8', [ArgTemp, SlotAddr]));
+        DataTemp := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [DataTemp, ArgTemp]));
+        ArgLine := Format('l %s', [DataTemp]);
+      end
+      else
+        ArgLine := '';
+      for I := 0 to MCallExpr.Args.Count - 1 do
+      begin
+        if ArgLine <> '' then ArgLine := ArgLine + ', ';
+        ArgTemp := EmitExpr(TASTExpr(MCallExpr.Args.Items[I]));
+        QType   := QbeTypeOf(TProcParamInfo(PT.Params.Items[I]).TypeDesc);
+        ArgTemp := CoerceArg(ArgTemp, TASTExpr(MCallExpr.Args.Items[I]), QType);
+        ArgLine := ArgLine + Format('%s %s',
+          [QbeParamTypeOf(TProcParamInfo(PT.Params.Items[I]).TypeDesc), ArgTemp]);
+      end;
+      T := AllocTemp;
+      EmitLine(Format('  %s =l call %s(%s)', [T, FPtrTemp, ArgLine]));
+      Exit(T);
+    end;
+
     { Interface method call expression: dispatch through itab }
     if (MCallExpr.ResolvedClassType <> nil) and
        (MCallExpr.ResolvedClassType.Kind = tyInterface) then
@@ -9632,22 +9724,6 @@ begin
         NoArgCall.ResolvedType         := AExpr.ResolvedType;
         NoArgCall.ResolvedDecl         := TIdentExpr(AExpr).ImplicitMethodDecl;
         NoArgCall.IsImplicitSelfMethod := True;
-        Result := EmitExpr(NoArgCall);
-      finally
-        NoArgCall.Free();
-      end;
-      Exit;
-    end
-    else if TIdentExpr(AExpr).IsNoArgFuncCall then
-    begin
-      { Bare identifier resolving to a zero-arg function (no parens in source).
-        Synthesise a temporary TFuncCallExpr so existing builtin dispatch
-        handles it without duplicating logic. }
-      NoArgCall := TFuncCallExpr.Create();
-      try
-        NoArgCall.Name         := TIdentExpr(AExpr).Name;
-        NoArgCall.ResolvedType := AExpr.ResolvedType;
-        NoArgCall.ResolvedDecl := TIdentExpr(AExpr).NoArgFuncDecl;
         Result := EmitExpr(NoArgCall);
       finally
         NoArgCall.Free();

@@ -111,7 +111,7 @@ begin
   SearchPaths := TStringList.Create();
 
   I := 1;
-  while I <= ParamCount do
+  while I <= ParamCount() do
   begin
     Arg := ParamStr(I);
 
@@ -177,7 +177,7 @@ var
   Arg: string;
 begin
   Result := False;
-  for I := 1 to ParamCount do
+  for I := 1 to ParamCount() do
   begin
     Arg := ParamStr(I);
     if (Length(Arg) >= 2) and (StrAt(Arg, 0) = Ord('-')) and (StrAt(Arg, 1) <> Ord('-')) then
@@ -215,7 +215,7 @@ begin
   OPDFEnabled    := False;
   DebugMode      := False;
   UseNative      := False;
-  Target         := HostTarget;
+  Target         := HostTarget();
   SkipDepCodegen := False;
   EmitIfaceDir   := '';
   Incremental    := False;
@@ -223,20 +223,20 @@ begin
   SearchPaths    := TStringList.Create();
 
   I := 1;
-  while I <= ParamCount do
+  while I <= ParamCount() do
   begin
     Arg := ParamStr(I);
-    if (Arg = '--source') and (I < ParamCount) then
+    if (Arg = '--source') and (I < ParamCount()) then
     begin
       Inc(I);
       SourceFile := ParamStr(I);
     end
-    else if (Arg = '--output') and (I < ParamCount) then
+    else if (Arg = '--output') and (I < ParamCount()) then
     begin
       Inc(I);
       OutputFile := ParamStr(I);
     end
-    else if (Arg = '--unit-path') and (I < ParamCount) then
+    else if (Arg = '--unit-path') and (I < ParamCount()) then
     begin
       Inc(I);
       SearchPaths.Add(ParamStr(I));
@@ -246,7 +246,7 @@ begin
         unit call becomes an extern reference.  Caller is responsible
         for linking pre-built dep object files at link time. }
       SkipDepCodegen := True
-    else if (Arg = '--emit-iface') and (I < ParamCount) then
+    else if (Arg = '--emit-iface') and (I < ParamCount()) then
     begin
       { Write each compiled unit's TUnitInterface as <Dir>/<Unit>.bif
         for later use as a separate-compilation cache. }
@@ -261,7 +261,7 @@ begin
         files instead).  Next compile auto-discovers the .o's
         and skips parsing the .pas entirely. }
       Incremental := True
-    else if (Arg = '--unit-cache') and (I < ParamCount) then
+    else if (Arg = '--unit-cache') and (I < ParamCount()) then
     begin
       Inc(I);
       UnitCacheDir := ParamStr(I);
@@ -276,7 +276,7 @@ begin
       DebugMode := True
     else if Arg = '--debug-opdf' then
       OPDFEnabled := True
-    else if (Arg = '--backend') and (I < ParamCount) then
+    else if (Arg = '--backend') and (I < ParamCount()) then
     begin
       Inc(I);
       if ParamStr(I) = 'qbe' then
@@ -290,7 +290,7 @@ begin
         Exit;
       end;
     end
-    else if (Arg = '--target') and (I < ParamCount) then
+    else if (Arg = '--target') and (I < ParamCount()) then
     begin
       Inc(I);
       if not ParseTargetName(ParamStr(I), Target) then
@@ -457,7 +457,7 @@ var
   I:                Integer;
 begin
   AsmFile := ChangeFileExt(AIRFile, '.s');
-  RTLPath := FindRTL;
+  RTLPath := FindRTL();
 
   Args := TStringList.Create();
   try
@@ -677,7 +677,7 @@ begin
   UnitCacheDir   := '';
   TopUnit        := nil;
   IsUnitMode     := False;
-  if IsFPCStyleInvocation then
+  if IsFPCStyleInvocation() then
   begin
     if not ParseFPCArgs(SourceFile, OutputFile, SearchPaths, OPDFEnabled) then
     begin

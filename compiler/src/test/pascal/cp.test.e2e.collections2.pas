@@ -31,7 +31,7 @@ implementation
 
 procedure TE2ECollections2Tests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-collections2');
 end;
 

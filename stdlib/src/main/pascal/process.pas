@@ -56,7 +56,7 @@ implementation
 
 constructor TProcess.Create(AOwner: TObject);
 begin
-  Self.FHandle := ProcessCreate;
+  Self.FHandle := ProcessCreate();
   Self.FParameters := TStringList.Create()
 end;
 

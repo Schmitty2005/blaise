@@ -69,7 +69,7 @@ implementation
 
 constructor TBoard.Create(const AFilePath: string);
 begin
-  inherited Create;
+  inherited Create();
   FFilePath := AFilePath;
   FTasks := TObjectList.Create(True);
   FDeletedIds := TObjectList.Create(True);
@@ -231,7 +231,7 @@ var
   I: Integer;
   Task: TTask;
 begin
-  if Self.HasExternalChanges then
+  if Self.HasExternalChanges() then
     Self.MergeFromDisk();
   Lines := TStringList.Create();
   try
@@ -281,7 +281,7 @@ var
   Now: TInstant;
   UtcDT: TDateTime;
 begin
-  Now := InstantNow;
+  Now := InstantNow();
   UtcDT := Now.ToUtcDateTime();
   Result := TTask.Create();
   Result.FId := FNextId;

@@ -1850,7 +1850,7 @@ begin
     U.AddConst(MakeConstEntry('Pi'));
     U.AddRoutine(MakeRoutineSig('DoIt'));
     U.AddGenericBody(MakeGenericBody('TList'));
-    U.AddInlineBody(MakeInlineBody);
+    U.AddInlineBody(MakeInlineBody());
 
     AssertEquals('type missing',     True, U.FindType('TBar') = nil);
     AssertEquals('const missing',    True, U.FindConst('E') = nil);
@@ -1942,7 +1942,7 @@ var
   Sym:   TSymbol;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     Sym := Tab.Lookup('Answer');
@@ -1969,7 +1969,7 @@ var
   Sym:   TSymbol;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     Sym := Tab.Lookup('Greeting');
@@ -1997,7 +1997,7 @@ var
   Sym:   TSymbol;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     TyDesc := Tab.FindType('TColor');
@@ -2030,7 +2030,7 @@ var
   TyDesc: TTypeDesc;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     TyDesc := Tab.FindType('TColors');
@@ -2060,7 +2060,7 @@ var
   TyDesc: TTypeDesc;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     TyDesc := Tab.FindType('TMyInt');
@@ -2087,7 +2087,7 @@ var
   Sym:   TSymbol;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     Sym := Tab.Lookup('DoIt');
@@ -2117,7 +2117,7 @@ var
   Sym:   TSymbol;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     Sym := Tab.Lookup('Sum');
@@ -2147,7 +2147,7 @@ var
   Fx, Fy: TFieldInfo;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     TyDesc := Tab.FindType('TPoint');
@@ -2183,7 +2183,7 @@ var
   Rec:   TRecordTypeDesc;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     TyDesc := Tab.FindType('TFoo');
@@ -2214,7 +2214,7 @@ var
   Fi:    TFieldInfo;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     Rec := TRecordTypeDesc(Tab.FindType('TFoo'));
@@ -2247,7 +2247,7 @@ var
   Fa, Fb: TFieldInfo;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     Derived := TRecordTypeDesc(Tab.FindType('TDerived'));
@@ -2288,7 +2288,7 @@ var
   Ent:   TVTableEntry;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     RT := TRecordTypeDesc(Tab.FindType('TFoo'));
@@ -2322,7 +2322,7 @@ var
   BaseSlot, DerSlot: Integer;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     Base    := TRecordTypeDesc(Tab.FindType('TBase'));
@@ -2362,7 +2362,7 @@ var
   ITD:   TInterfaceTypeDesc;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     ITD := TInterfaceTypeDesc(Tab.FindType('IGreeter'));
@@ -2393,7 +2393,7 @@ var
   RT:    TRecordTypeDesc;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     RT := TRecordTypeDesc(Tab.FindType('TFoo'));
@@ -2426,7 +2426,7 @@ var
   RT:    TRecordTypeDesc;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     RT := TRecordTypeDesc(Tab.FindType('TFoo'));
@@ -2453,7 +2453,7 @@ var
   Templ: TObject;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     Templ := Tab.FindGeneric('TBox');
@@ -2485,7 +2485,7 @@ var
   Templ: TObject;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     Templ := Tab.FindGeneric('IBox');
@@ -2517,7 +2517,7 @@ var
   MD:    TMethodDecl;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     Templ := Tab.FindGenericRoutine('Identity');
@@ -2548,7 +2548,7 @@ begin
   try
     Parser := TParser.Create(Lex);
     try
-      Result := Parser.ParseProgram;
+      Result := Parser.ParseProgram();
     finally
       Parser.Free();
     end;
@@ -2643,7 +2643,7 @@ var
   Sym:   TSymbol;
 begin
   Iface := ParseAnalyseAndExport(SRC);
-  Tab   := FreshTableWithBuiltins;
+  Tab   := FreshTableWithBuiltins();
   try
     ImportUnitInterface(Iface, Tab);
     Sym := Tab.Lookup('Counter');
@@ -2713,7 +2713,7 @@ var
   C:        TConstEntry;
   Buf:      string;
 begin
-  Src := BuildIfaceWithIntConst;
+  Src := BuildIfaceWithIntConst();
   try
     Buf := WriteUnitInterface(Src);
     Dst := ReadUnitInterface(Buf);
@@ -3138,7 +3138,7 @@ begin
     Src.Free();
   end;
   AIface := ReadUnitInterface(Buf);
-  ATab   := FreshTableWithBuiltins;
+  ATab   := FreshTableWithBuiltins();
   ImportUnitInterface(AIface, ATab);
 end;
 

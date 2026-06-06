@@ -50,7 +50,7 @@ implementation
 
 procedure TE2EStreamsTests.SetUp;
 begin
-  inherited SetUp;
+  inherited SetUp();
   SetUpScratch('compiler/target/test-e2e-streams')
 end;
 

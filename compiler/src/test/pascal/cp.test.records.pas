@@ -709,7 +709,7 @@ begin
   try
     RT := TRecordTypeDesc(TVarDecl(Prog.Block.Decls.Items[0]).ResolvedType);
     AssertEquals('record of four Byte fields totals 4 bytes',
-      4, RT.TotalSize);
+      4, RT.TotalSize());
   finally
     Prog.Free();
   end;
@@ -738,7 +738,7 @@ begin
     RT := TRecordTypeDesc(TVarDecl(Prog.Block.Decls.Items[0]).ResolvedType);
     F  := RT.FindField('B');
     AssertEquals('Integer after Byte aligns to offset 4', 4, F.Offset);
-    AssertEquals('record total size is 8 (1 byte + 3 pad + 4)', 8, RT.TotalSize);
+    AssertEquals('record total size is 8 (1 byte + 3 pad + 4)', 8, RT.TotalSize());
   finally
     Prog.Free();
   end;
@@ -837,7 +837,7 @@ begin
   try
     RT := TRecordTypeDesc(TVarDecl(Prog.Block.Decls.Items[0]).ResolvedType);
     AssertEquals('record of three Single fields totals 12 bytes (4-byte align)',
-      12, RT.TotalSize);
+      12, RT.TotalSize());
   finally
     Prog.Free();
   end;

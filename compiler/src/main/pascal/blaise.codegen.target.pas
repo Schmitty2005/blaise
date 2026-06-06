@@ -172,6 +172,6 @@ begin
 end;
 
 initialization
-  GTarget := HostTarget;
+  GTarget := HostTarget();
 
 end.
