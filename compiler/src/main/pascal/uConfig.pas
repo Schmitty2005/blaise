@@ -69,7 +69,7 @@ begin
       APaths.Add(Value);
     end
     else
-      WriteLn(StdErr, 'blaise.cfg: unknown key ''', Key, '''');
+      ; { silently skip unrecognised keys }
   end;
 end;
 
