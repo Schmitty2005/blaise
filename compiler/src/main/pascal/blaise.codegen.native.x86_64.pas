@@ -451,14 +451,13 @@ begin
   end;
   if FProgExcFrameCount > 0 then HasData := True;
   { Two passes: first .data globals, then .tbss threadvars. }
+  if HasData then
+    Self.Emit('.data');
   for I := 0 to FDataGlobals.Count - 1 do
   begin
     Name  := FDataGlobals.Keys[I];
     IsTls := Self.IsThreadVarGlobal(Name);
     if IsTls then Continue;
-    if HasData and (I = 0) then
-      Self.Emit('.data');
-    HasData := False;
     { Method pointers (of-object): 16-byte Code+Data block, zero-initialised. }
     if (Self.GlobalType(Name) <> nil) and
        (Self.GlobalType(Name).Kind = tyProcedural) and
