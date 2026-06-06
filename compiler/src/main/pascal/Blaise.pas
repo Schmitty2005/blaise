@@ -25,7 +25,7 @@ uses
   uLexer, uParser, uAST, uSemantic, uCodeGen, uCodeGenQBE,
   blaise.codegen.target, blaise.codegen.native, uToolchain,
   uUnitLoader, uDebugOPDF, uUnitInterface, uSemanticExport, uSemanticImport,
-  uUnitInterfaceIO, uIfaceObject,
+  uUnitInterfaceIO, uIfaceObject, uASTDump,
   uStrCompat, uConfig;
 
 const
@@ -54,6 +54,7 @@ begin
   WriteLn('  --skip-dep-codegen  Omit dep unit bodies from emitted IR (separate-compilation path)');
   WriteLn('  --incremental       Compile each dep to its own .o as a side effect');
   WriteLn('  --unit-cache <dir>  Where --incremental writes per-unit .o (default: alongside output)');
+  WriteLn('  --dump-ast          Print the resolved AST to stdout after semantic analysis');
   WriteLn('  --debug             Enable runtime memory leak reporting on exit');
   WriteLn('  --debug-opdf        Emit OPDF debug info (.opdf.s companion file)');
   WriteLn('');
@@ -191,6 +192,7 @@ function ParseArgs(
   out OutputFile:     string;
   out EmitIR:         Boolean;
   out EmitAsm:        Boolean;
+  out DumpAST:        Boolean;
   out OPDFEnabled:    Boolean;
   out DebugMode:      Boolean;
   out UseNative:      Boolean;
@@ -209,6 +211,7 @@ begin
   OutputFile     := '';
   EmitIR         := False;
   EmitAsm        := False;
+  DumpAST        := False;
   OPDFEnabled    := False;
   DebugMode      := False;
   UseNative      := False;
@@ -267,6 +270,8 @@ begin
       EmitIR := True
     else if Arg = '--emit-asm' then
       EmitAsm := True
+    else if Arg = '--dump-ast' then
+      DumpAST := True
     else if Arg = '--debug' then
       DebugMode := True
     else if Arg = '--debug-opdf' then
@@ -316,9 +321,9 @@ begin
     SearchPaths.Free;
     Exit;
   end;
-  if (not EmitIR) and (not EmitAsm) and (OutputFile = '') then
+  if (not EmitIR) and (not EmitAsm) and (not DumpAST) and (OutputFile = '') then
   begin
-    WriteLn(StdErr, 'Error: --output is required (or use --emit-ir / --emit-asm)');
+    WriteLn(StdErr, 'Error: --output is required (or use --emit-ir / --emit-asm / --dump-ast)');
     SearchPaths.Free;
     Exit;
   end;
@@ -603,6 +608,7 @@ var
   ConfigPaths: TStringList;
   EmitIR:      Boolean;
   EmitAsm:     Boolean;
+  DumpAST:     Boolean;
   OPDFEnabled: Boolean;
   DebugMode:   Boolean;
   UseNative:   Boolean;
@@ -683,7 +689,8 @@ begin
   end
   else
   begin
-    if not ParseArgs(SourceFile, OutputFile, EmitIR, EmitAsm, OPDFEnabled, DebugMode,
+    if not ParseArgs(SourceFile, OutputFile, EmitIR, EmitAsm, DumpAST,
+                     OPDFEnabled, DebugMode,
                      UseNative, Target, SearchPaths, SkipDepCodegen, EmitIfaceDir,
                      Incremental, UnitCacheDir) then
     begin
@@ -832,6 +839,15 @@ begin
       end
       else
         Semantic.Analyse(Prog);
+
+      if DumpAST then
+      begin
+        if IsUnitMode then
+          DumpUnit(TopUnit)
+        else if Prog <> nil then
+          DumpProgram(Prog);
+        Halt(0);
+      end;
     except
       on E: ESemanticError do
       begin
