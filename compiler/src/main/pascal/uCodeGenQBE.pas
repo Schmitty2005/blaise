@@ -4310,6 +4310,25 @@ begin
         [T, VarRef(FldAcc.RecordName, FldAcc.IsGlobal)]));
       BaseAddr := T;
     end
+    else if FldAcc.IsImplicitSelf then
+    begin
+      T := AllocTemp;
+      EmitLine(Format('  %s =l loadl %%_var_Self', [T]));
+      if (FldAcc.ImplicitBaseInfo <> nil) and (FldAcc.ImplicitBaseInfo.Offset > 0) then
+      begin
+        BaseAddr := AllocTemp;
+        EmitLine(Format('  %s =l add %s, %d',
+          [BaseAddr, T, FldAcc.ImplicitBaseInfo.Offset]));
+      end
+      else
+        BaseAddr := T;
+      if FldAcc.IsClassAccess then
+      begin
+        T := AllocTemp;
+        EmitLine(Format('  %s =l loadl %s', [T, BaseAddr]));
+        BaseAddr := T;
+      end;
+    end
     else if FldAcc.IsVarParam then
     begin
       { Var-record param leaf: dereference the param slot. }
@@ -11523,19 +11542,7 @@ begin
       else
         Exit('$' + TIdentExpr(AExpr.Expr).Name);
     end;
-    { @VarParam: the address is the dereferenced param slot value, not the
-      local slot itself.  Without this, @ARun on a var-record param yields
-      the local 8-byte slot's address instead of the caller's record. }
-    if TIdentExpr(AExpr.Expr).IsVarParam then
-    begin
-      StrPtr := AllocTemp;
-      EmitLine(Format('  %s =l loadl %s',
-        [StrPtr, VarRef(TIdentExpr(AExpr.Expr).Name,
-                        TIdentExpr(AExpr.Expr).IsGlobal)]));
-      Exit(StrPtr);
-    end;
-    Result := VarRef(TIdentExpr(AExpr.Expr).Name,
-                     TIdentExpr(AExpr.Expr).IsGlobal);
+    Result := EmitVarArgAddr(TIdentExpr(AExpr.Expr));
     Exit;
   end;
   { @Rec.Arr[I] — address of array-field element.  The parser absorbs [I]

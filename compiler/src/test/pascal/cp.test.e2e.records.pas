@@ -34,6 +34,7 @@ type
     procedure TestRun_Record_StmtMethodCall_Local;
     procedure TestRun_Record_StmtMethodCall_ImplicitSelf;
     procedure TestRun_Record_StmtMethodCall_Result;
+    procedure TestRun_Record_AddrOfImplicitSelf;
   end;
 
 implementation
@@ -273,6 +274,33 @@ const
     end.
     ''';
 
+  SrcRecordAddrOfImplicitSelf = '''
+    program P;
+    type
+      TPoint = record
+        X, Y: Integer;
+      end;
+      TApp = class
+        Pt: TPoint;
+        procedure Run;
+      end;
+    procedure TApp.Run;
+    var PP: ^TPoint;
+    begin
+      Pt.X := 10;
+      Pt.Y := 20;
+      PP := @Pt;
+      WriteLn(PP^.X);
+      WriteLn(PP^.Y)
+    end;
+    var
+      A: TApp;
+    begin
+      A := TApp.Create;
+      A.Run
+    end.
+    ''';
+
   SrcRecordNestedFieldAssignMethodCall = '''
     program P;
     type
@@ -405,6 +433,12 @@ procedure TE2ERecordsTests.TestRun_Record_StmtMethodCall_Result;
 begin
   if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcRecordStmtMethodCallResult, '5' + LE + '8' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_Record_AddrOfImplicitSelf;
+begin
+  if not ToolchainAvailable then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcRecordAddrOfImplicitSelf, '10' + LE + '20' + LE, 0);
 end;
 
 initialization

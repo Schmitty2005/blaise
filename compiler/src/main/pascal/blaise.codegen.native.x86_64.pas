@@ -2913,6 +2913,18 @@ begin
       Exit;
     end;
 
+    { @ImplicitSelfField — field of Self accessed by bare name inside a method. }
+    if (AOE.Expr is TIdentExpr) and
+       TIdentExpr(AOE.Expr).IsImplicitSelf and
+       (TIdentExpr(AOE.Expr).ImplicitFieldInfo <> nil) then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+      if TFieldInfo(TIdentExpr(AOE.Expr).ImplicitFieldInfo).Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rax',
+          [TFieldInfo(TIdentExpr(AOE.Expr).ImplicitFieldInfo).Offset]));
+      Exit;
+    end;
+
     { @Variable — take the address of a local or global variable. }
     if AOE.Expr is TIdentExpr then
     begin
@@ -3069,8 +3081,17 @@ begin
   if AExpr is TDerefExpr then
   begin
     Self.EmitExprToEax(TDerefExpr(AExpr).Expr);
-    Self.Emit(#9'movq %rax, %rcx');
-    Self.EmitLoadVar('(%rcx)', AExpr.ResolvedType);
+    if (AExpr.ResolvedType <> nil) and
+       (AExpr.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
+    begin
+      { Pointer-to-record/array: the pointer value IS the record address.
+        Callers (field access, assignment) work with addresses for records. }
+    end
+    else
+    begin
+      Self.Emit(#9'movq %rax, %rcx');
+      Self.EmitLoadVar('(%rcx)', AExpr.ResolvedType);
+    end;
     Exit;
   end;
 
