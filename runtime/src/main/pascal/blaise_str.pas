@@ -71,6 +71,16 @@ function  _StringCompareText(S1, S2: Pointer): Integer;
 function  _StringFromPChar(P: PChar): Pointer;
 
 { ------------------------------------------------------------------ }
+{ UTF-8 codepoint decoding                                             }
+{ ------------------------------------------------------------------ }
+
+{ Decode one UTF-8 codepoint at byte position Idx in string S.
+  Returns a packed Int64: low 21 bits = codepoint value (0..U+10FFFF),
+  bits 32..33 = byte count consumed (1..4).
+  Caller extracts: CodePoint = Result and $1FFFFF; Advance = Result shr 32. }
+function _Utf8DecodeAt(S: Pointer; Idx: Integer): Int64;
+
+{ ------------------------------------------------------------------ }
 { Dynamic array RTL                                                    }
 { ------------------------------------------------------------------ }
 
@@ -853,6 +863,43 @@ begin
   Result := StrAlloc(Len);
   if (Result <> nil) and (Len > 0) then
     MemCopy(StrData(Result), P, Len);
+end;
+
+{ ------------------------------------------------------------------ }
+{ _Utf8DecodeAt                                                        }
+{ ------------------------------------------------------------------ }
+
+function _Utf8DecodeAt(S: Pointer; Idx: Integer): Int64;
+var
+  P: PChar;
+  B0, B1, B2, B3: Integer;
+  CP: Integer;
+begin
+  P := StrData(S);
+  B0 := P[Idx];
+  if B0 < 128 then
+    Result := (Int64(1) shl 32) or Int64(B0)
+  else if (B0 and $E0) = $C0 then
+  begin
+    B1 := P[Idx + 1] and $3F;
+    CP := ((B0 and $1F) shl 6) or B1;
+    Result := (Int64(2) shl 32) or Int64(CP);
+  end
+  else if (B0 and $F0) = $E0 then
+  begin
+    B1 := P[Idx + 1] and $3F;
+    B2 := P[Idx + 2] and $3F;
+    CP := ((B0 and $0F) shl 12) or (B1 shl 6) or B2;
+    Result := (Int64(3) shl 32) or Int64(CP);
+  end
+  else
+  begin
+    B1 := P[Idx + 1] and $3F;
+    B2 := P[Idx + 2] and $3F;
+    B3 := P[Idx + 3] and $3F;
+    CP := ((B0 and $07) shl 18) or (B1 shl 12) or (B2 shl 6) or B3;
+    Result := (Int64(4) shl 32) or Int64(CP);
+  end;
 end;
 
 { ------------------------------------------------------------------ }
