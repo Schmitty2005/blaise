@@ -190,6 +190,10 @@ type
     procedure TestRun_Native_BitwiseNot_Integer;
     procedure TestRun_Native_BitwiseNot_Bitmask;
 
+    { SizeOf }
+    procedure TestRun_Native_SizeOf_Record;
+    procedure TestRun_Native_SizeOf_GenericRecord;
+
     { Generics }
     procedure TestRun_Native_GenericRecord_Method;
     procedure TestRun_Native_GenericClass_Method;
@@ -863,6 +867,34 @@ const
       Pt := MakePoint(3, 7);
       WriteLn(Pt.X);
       WriteLn(Pt.Y)
+    end.
+    ''';
+
+  SrcSizeOfRecord = '''
+    program P;
+    type
+      TPoint = record
+        X: Integer;
+        Y: Integer;
+      end;
+    begin
+      WriteLn(SizeOf(TPoint))
+    end.
+    ''';
+
+  SrcSizeOfGenericRecord = '''
+    program P;
+    type
+      TPair<T1, T2> = record
+        First: T1;
+        Second: T2;
+      end;
+    var
+      A: TPair<Integer, Integer>;
+      B: TPair<Integer, Int64>;
+    begin
+      WriteLn(SizeOf(A));
+      WriteLn(SizeOf(B))
     end.
     ''';
 
@@ -2948,6 +2980,18 @@ procedure TE2ENativeTests.TestRun_Native_GenericClass_Interface;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcGenericClassInterface, '55' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_SizeOf_Record;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcSizeOfRecord, '8' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_SizeOf_GenericRecord;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcSizeOfGenericRecord, '8' + LE + '16' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Record_NestedFieldAssign;

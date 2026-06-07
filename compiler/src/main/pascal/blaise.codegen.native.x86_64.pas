@@ -2215,6 +2215,13 @@ begin
       { Result = method code pointer in %rax. }
       Exit;
     end;
+    { SizeOf(expr) → integer literal = byte size of the resolved type. }
+    if SameText(FC.Name, 'SizeOf') and (FC.Args.Count = 1) then
+    begin
+      Self.Emit(Format(#9'movq $%d, %%rax',
+        [TASTExpr(FC.Args.Items[0]).ResolvedType.ByteSize()]));
+      Exit;
+    end;
     { Length/High/Low built-ins for arrays and strings. }
     if SameText(FC.Name, 'High') and (FC.Args.Count = 1) and
        (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) then
