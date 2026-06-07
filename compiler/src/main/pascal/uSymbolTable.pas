@@ -1543,6 +1543,8 @@ begin
   Define(Sym);
   Sym := TSymbol.Create('Int64ToStr',  skFunction, FTypeString);
   Define(Sym);
+  Sym := TSymbol.Create('UInt64ToStr', skFunction, FTypeString);
+  Define(Sym);
   Sym := TSymbol.Create('DoubleToStr', skFunction, FTypeString);
   Define(Sym);
   Sym := TSymbol.Create('SingleToStr', skFunction, FTypeString);

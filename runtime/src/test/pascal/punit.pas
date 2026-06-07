@@ -300,6 +300,7 @@ function AssertEquals(AMessage : string; const AExpected, AActual : Byte) : Bool
 function AssertEquals(AMessage : string; const AExpected, AActual : Integer) : Boolean; overload;
 function AssertEquals(AMessage : string; const AExpected, AActual : Cardinal) : Boolean; overload;
 function AssertEquals(AMessage : string; const AExpected, AActual : Int64) : Boolean; overload;
+function AssertEquals(AMessage : string; const AExpected, AActual : UInt64) : Boolean; overload;
 function AssertEquals(AMessage : string; const AExpected, AActual : Double) : Boolean; overload;
 function AssertEquals(AMessage : string; const AExpected, AActual, ADelta : Double) : Boolean; overload;
 
@@ -1293,6 +1294,13 @@ function AssertEquals(AMessage : string; const AExpected, AActual : Int64) : Boo
 begin
   Result := AssertTrue(
     AMessage + '. ' + ExpectMessage(Int64ToStr(AExpected), Int64ToStr(AActual)),
+    AExpected = AActual);
+end;
+
+function AssertEquals(AMessage : string; const AExpected, AActual : UInt64) : Boolean; overload;
+begin
+  Result := AssertTrue(
+    AMessage + '. ' + ExpectMessage(UInt64ToStr(AExpected), UInt64ToStr(AActual)),
     AExpected = AActual);
 end;
 
