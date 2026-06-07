@@ -47,7 +47,7 @@ var
 begin
   Result := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
   if Result <> '' then begin Result := IncludeTrailingPathDelimiter(Result); Exit end;
-  Dir := GetCurrentDir;
+  Dir := GetCurrentDir();
   for Steps := 0 to 5 do
   begin
     if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
@@ -60,19 +60,19 @@ begin
     if (Parent = '') or (Parent = Dir) then Break;
     Dir := Parent
   end;
-  Result := IncludeTrailingPathDelimiter(GetCurrentDir)
+  Result := IncludeTrailingPathDelimiter(GetCurrentDir())
 end;
 
 function TBifCoverageTests.ModuleDir: string;
 begin
-  Result := ProjectRoot + 'tools/bif-coverage/'
+  Result := ProjectRoot() + 'tools/bif-coverage/'
 end;
 
 function TBifCoverageTests.BinaryPath: string;
 var
   WithExt: string;
 begin
-  Result  := ModuleDir + 'target/bif-coverage';
+  Result  := ModuleDir() + 'target/bif-coverage';
   WithExt := Result + '.exe';
   if not FileExists(Result) and FileExists(WithExt) then Result := WithExt
 end;
@@ -83,7 +83,7 @@ var
   Proc: TProcess;
   Code: Integer;
 begin
-  Bin := BinaryPath;
+  Bin := BinaryPath();
   if not FileExists(Bin) then
     Fail('bif-coverage binary not built at ' + Bin +
          ' — build tools/bif-coverage before running TestRunner');
@@ -91,13 +91,13 @@ begin
   Proc := TProcess.Create(nil);
   try
     Proc.Executable := Bin;
-    Proc.Execute;
+    Proc.Execute();
     Stdout := '';
     repeat
-      Chunk  := Proc.ReadOutput;
+      Chunk  := Proc.ReadOutput();
       Stdout := Stdout + Chunk
     until (Chunk = '') and not Proc.Running;
-    Proc.WaitOnExit;
+    Proc.WaitOnExit();
     Code := Proc.ExitCode
   finally
     Proc.Free
@@ -105,7 +105,7 @@ begin
 
   if Code <> 0 then
     Fail('bif-coverage reported drift (exit ' + IntToStr(Code) +
-         '):' + sLineBreak + Stdout)
+         '):' + LineEnding + Stdout)
 end;
 
 initialization

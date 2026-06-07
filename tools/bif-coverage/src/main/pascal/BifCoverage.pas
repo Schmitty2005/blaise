@@ -47,12 +47,12 @@ var
    `compiler/src/main/pascal/uAST.pas` and `project.xml`. Lets the
    binary be invoked from any subdir of the repo - tests run from
    compiler/, dev runs from tools/bif-coverage/, etc. *)
-function FindProjectRoot: string;
+function FindProjectRoot(): string;
 var
   Dir, Parent: string;
   I: Integer;
 begin
-  Dir := GetCurrentDir;
+  Dir := GetCurrentDir();
   for I := 0 to 6 do
   begin
     if FileExists(IncludeTrailingPathDelimiter(Dir) + AST_REL) and
@@ -215,7 +215,7 @@ begin
 end;
 
 (* Line number for a field by index in Cls.Fields, recovered from the
-   parallel Objects[] slot stamped by ScanAST. Falls back to the class
+   parallel Objects[] slot stamped by ScanAST(). Falls back to the class
    header line when zero. *)
 function FieldLineNo(ACls: TASTClass; AFieldIndex: Integer): Integer;
 begin
@@ -283,7 +283,7 @@ begin
 end;
 
 (* Strip leading [Attr] (one or more bracketed FPC-style attributes) and
-   return the remainder. Pure helper - the attribute survives StripLine
+   return the remainder. Pure helper - the attribute survives StripLine()
    (it's not a comment) but precedes the field name. *)
 function StripAttrs(const ALine: string): string;
 var
@@ -367,7 +367,7 @@ begin
     Exit(True);
 end;
 
-procedure ScanAST;
+procedure ScanAST();
 var
   Lines: TStringList;
   InBlockComment, InPublic, InClassBody, HasBody, IsEnd: Boolean;
@@ -612,7 +612,7 @@ begin
   end;
 end;
 
-procedure ScanIO;
+procedure ScanIO();
 var
   Raw, Cleaned: TStringList;
   I: Integer;
@@ -657,7 +657,7 @@ end;
 
 (* Read the root project.xml's <version>...</version> body. Returns ''
    if the file or tag isn't readable. *)
-function ReadProjectVersion: string;
+function ReadProjectVersion(): string;
 var
   Raw: string;
   Lines: TStringList;
@@ -688,7 +688,7 @@ end;
 
 (* Read uCompilerId.pas and pull the string literal assigned to
    COMPILER_ID. Returns '' on failure. *)
-function ReadCompilerId: string;
+function ReadCompilerId(): string;
 var
   Lines: TStringList;
   I, Q1, Q2: Integer;
@@ -764,7 +764,7 @@ end;
 var
   GDecoderStart: Integer;
 
-function DecoderStartLine: Integer;
+function DecoderStartLine(): Integer;
 var
   Lines: TStringList;
   I: Integer;
@@ -796,12 +796,12 @@ begin
   end;
 end;
 
-procedure CheckVersion;
+procedure CheckVersion();
 var
   ProjVer, CompId, Tail: string;
 begin
-  ProjVer := ReadProjectVersion;
-  CompId := ReadCompilerId;
+  ProjVer := ReadProjectVersion();
+  CompId := ReadCompilerId();
   if ProjVer = '' then
   begin
     Report('  [version] could not read <version> from ' + GRootProject);
@@ -839,7 +839,7 @@ end;
    TASTExpr, dump each public field as either `serialise` (if found in
    the corresponding encoder block) or `safe` (if not). Outpput goes to
    GStatusFile for hand-curation thereafter. *)
-procedure WriteStatus;
+procedure WriteStatus();
 var
   Outp: TStringList;
   I, J: Integer;
@@ -886,7 +886,7 @@ end;
    - status names a field/class not in AST               → "stale entry"
    - status says `serialise` but encoder/decoder missing → "broken: not encoded/decoded"
    - status says `safe` but encoder references the field → "should be serialise" *)
-procedure CheckAgainstStatus;
+procedure CheckAgainstStatus();
 var
   Status: TStringList;
   I, J, SpacePos: Integer;
@@ -962,7 +962,7 @@ begin
                  ' marked safe but decoder reads it' +
                  ' (uUnitInterfaceIO.pas:' +
                  IntToStr(FindIORefLine(ClsName, FieldName,
-                                        DecoderStartLine, False)) +
+                                        DecoderStartLine(), False)) +
                  ')');
       end
       else
@@ -1009,7 +1009,7 @@ begin
   end;
 end;
 
-procedure FreeAll;
+procedure FreeAll();
 begin
   GASTObjs.Free;     { owns: frees TASTClass instances }
   GEncodeObjs.Free;  { owns: frees TIOBlock instances }
@@ -1022,11 +1022,11 @@ end;
 begin
   GErrors := 0;
   GDecoderStart := -1;
-  GRoot := FindProjectRoot;
+  GRoot := FindProjectRoot();
   if GRoot = '' then
   begin
     WriteLn('bif-coverage: could not locate project root from CWD ' +
-            GetCurrentDir);
+            GetCurrentDir());
     Halt(2);
   end;
   GAstFile        := GRoot + AST_REL;
@@ -1052,23 +1052,23 @@ begin
     WriteLn('bif-coverage: cannot open ' + GIoFile);
     Halt(2);
   end;
-  ScanAST;
-  ScanIO;
+  ScanAST();
+  ScanIO();
   WriteLn('bif-coverage: scanned ' + IntToStr(GASTNames.Count) +
           ' AST classes, ' + IntToStr(GEncodeNames.Count) +
           ' encoder cases, ' + IntToStr(GDecodeNames.Count) +
           ' decoder cases');
-  if (ParamCount > 0) and (ParamStr(1) = '--reset') then
-    WriteStatus
+  if (ParamCount() > 0) and (ParamStr(1) = '--reset') then
+    WriteStatus()
   else
   begin
-    CheckVersion;
-    CheckAgainstStatus;
+    CheckVersion();
+    CheckAgainstStatus();
   end;
   if GErrors = 0 then
     WriteLn('bif-coverage: OK')
   else
     WriteLn('bif-coverage: ' + IntToStr(GErrors) + ' gap(s) found');
-  FreeAll;
+  FreeAll();
   if GErrors > 0 then Halt(1);
 end.
