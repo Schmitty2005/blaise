@@ -29,7 +29,7 @@ uses
   uStrCompat, uConfig;
 
 const
-  Version = '0.10.0-dev';
+  Version = '0.10.0';
   CompilerName = 'Blaise';
 
 procedure PrintUsage;
