@@ -2566,6 +2566,19 @@ begin
       Self.Emit(#9'movslq %eax, %rax');
       Exit;
     end;
+    if SameText(FC.Name, 'Chr') and (FC.Args.Count = 1) then
+    begin
+      { Chr(N) returns a one-character heap String (tyString) — the data pointer
+        of a freshly-allocated string.  Lower to _Chr(N), matching the QBE
+        backend; the result (in %rax) is a String pointer, so it flows through
+        the String ARC assignment/concat paths unchanged.  (Emitting the integer
+        N here, as the missing case used to, fed a raw 66 into _StringAddRef and
+        crashed.) }
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movl %eax, %edi');
+      Self.Emit(#9'callq _Chr');
+      Exit;
+    end;
     if SameText(FC.Name, 'IntToStr') and (FC.Args.Count = 1) then
     begin
       Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));

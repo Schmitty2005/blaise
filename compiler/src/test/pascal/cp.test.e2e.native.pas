@@ -120,6 +120,7 @@ type
     procedure TestRun_Native_String_Format_StrArg;
     procedure TestRun_Native_String_Format_MixedArgs;
     procedure TestRun_Native_String_ConcatWithInt;
+    procedure TestRun_Native_String_ChrConcat;
 
     { M7d — exception handling }
     procedure TestRun_Native_TryFinally_Normal;
@@ -1390,6 +1391,28 @@ const
     end.
     ''';
 
+  { Chr(N) returns a one-character heap String.  Assigning and concatenating it
+    must lower to _Chr (string pointer), not treat N as the pointer itself (the
+    latter crashed: a raw integer fed into _StringAddRef). }
+  SrcChrConcat = '''
+    program P;
+    var
+      S: string;
+      I: Integer;
+    begin
+      S := 'A' + Chr(66) + 'C';
+      WriteLn(S);
+      S := '';
+      I := 65;
+      while I < 70 do
+      begin
+        S := S + Chr(I);
+        I := I + 1
+      end;
+      WriteLn(S)
+    end.
+    ''';
+
   SrcStrLength = '''
     program P;
     var S: string;
@@ -1660,6 +1683,12 @@ procedure TE2ENativeTests.TestRun_Native_String_ConcatWithInt;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcConcatWithInt, 'x=7' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_String_ChrConcat;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcChrConcat, 'ABC' + LE + 'ABCDE' + LE, 0);
 end;
 
 { M7d — exception handling source programs }
