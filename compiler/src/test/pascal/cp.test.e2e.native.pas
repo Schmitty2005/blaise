@@ -179,6 +179,8 @@ type
       and implicit-Self managed-field stores (native-backend parity with QBE). }
     procedure TestRun_Native_ArcDynArrayField_StoreAndRead;
     procedure TestRun_Native_ArcInterfaceField_AssignAndDispatch;
+    procedure TestRun_Native_IntfFieldDispatch;
+    procedure TestRun_Native_IntfFieldReadIntoLocal;
     procedure TestRun_Native_ArcNestedRecordField_FullCleanup;
     procedure TestRun_Native_ArcStringReturnToField_NoDoubleRetain;
     procedure TestRun_Native_ArcImplicitSelfStringField_Reassign;
@@ -2618,6 +2620,58 @@ const
     is released — proving the field stored a refcounted obj and that field
     cleanup releases it.  (Dispatch directly through a non-Self interface field
     is a separate, pre-existing native gap not covered here.) }
+  { Dispatch a method directly through an interface stored in a (non-Self)
+    class field — H.G.Greet() — including a method that takes an argument.  The
+    receiver's fat pointer must be loaded from the field's contiguous memory. }
+  SrcIntfFieldDispatch = '''
+    program P;
+    type
+      IShape = interface
+        function Area(Scale: Integer): Integer;
+      end;
+      TBox = class(TObject, IShape)
+        function Area(Scale: Integer): Integer;
+      end;
+      THolder = class
+        S: IShape;
+      end;
+    function TBox.Area(Scale: Integer): Integer;
+    begin Result := 10 * Scale end;
+    var H: THolder;
+    begin
+      H := THolder.Create();
+      H.S := TBox.Create();
+      WriteLn(H.S.Area(3));
+      WriteLn(H.S.Area(5))
+    end.
+    ''';
+
+  { Read an interface OUT of a field into an interface local (G := H.G), then
+    dispatch on the local.  Exercises the interface-to-interface assignment with
+    a field-access source. }
+  SrcIntfFieldReadIntoLocal = '''
+    program P;
+    type
+      IShape = interface
+        function Area(Scale: Integer): Integer;
+      end;
+      TBox = class(TObject, IShape)
+        function Area(Scale: Integer): Integer;
+      end;
+      THolder = class
+        S: IShape;
+      end;
+    function TBox.Area(Scale: Integer): Integer;
+    begin Result := 10 * Scale end;
+    var H: THolder; G: IShape;
+    begin
+      H := THolder.Create();
+      H.S := TBox.Create();
+      G := H.S;
+      WriteLn(G.Area(4))
+    end.
+    ''';
+
   SrcArcInterfaceField = '''
     program P;
     type
@@ -3097,6 +3151,18 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcArcInterfaceField,
     'mid' + LE + 'greeter-gone' + LE + 'end' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IntfFieldDispatch;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIntfFieldDispatch, '30' + LE + '50' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IntfFieldReadIntoLocal;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIntfFieldReadIntoLocal, '40' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ArcNestedRecordField_FullCleanup;

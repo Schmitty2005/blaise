@@ -155,10 +155,17 @@ type
     { Lower one interface method call (TFieldAccessExpr.IsInterfaceCall or a
       TMethodCallExpr/Stmt whose ResolvedClassType is tyInterface): load obj +
       itab, index the itab by method slot, call the loaded pointer with obj as
-      Self and AArgs after it.  Result (if any) left in %rax/%xmm0. }
+      Self and AArgs after it.  Result (if any) left in %rax/%xmm0.
+
+      The receiver is normally a named interface local/global (AObjName, split
+      _obj/_itab slots).  When AObjExpr is a non-nil interface-typed
+      TFieldAccessExpr (the receiver is an interface stored in a record/class
+      field, e.g. H.G.Greet()), obj/itab are loaded from that field's contiguous
+      fat pointer instead and AObjName is ignored. }
     procedure EmitInterfaceCall(const AObjName: string; AIsGlobal: Boolean;
                                 AIntf: TInterfaceTypeDesc;
-                                const AMethName: string; AArgs: TObjectList);
+                                const AMethName: string; AArgs: TObjectList;
+                                AObjExpr: TASTExpr = nil);
     procedure EmitInterfaceFieldCall(AFld: TFieldInfo; AIntf: TInterfaceTypeDesc;
                                 const AMethName: string; AArgs: TObjectList);
     { Emit typeinfo / itab / impllist blocks for interfaces and the classes
@@ -179,6 +186,13 @@ type
       obj+itab), retaining the new obj and releasing the old. }
     procedure EmitInterfaceToFieldSlotsAt(AExpr: TASTExpr;
       const ABaseReg: string; AOffset: Integer; AIntfType: TTypeDesc);
+    { Compute the address of an interface-typed FIELD's contiguous fat pointer
+      (obj at the address, itab at +8) into ADstReg (an AT&T register operand
+      such as '%r15').  Handles the receiver shapes a TFieldAccessExpr can take:
+      implicit-Self field, class-access (H.G), var-param/record receiver, and
+      a nested receiver expression (FA.Base).  ADstReg must be free to clobber;
+      callers that need it across calls pick a callee-saved register. }
+    procedure EmitInterfaceFieldAddr(AFA: TFieldAccessExpr; const ADstReg: string);
     { True when AMethName resolves to an abstract slot on ARec (the itab entry
       must then point at _AbstractMethodError). }
     function IsAbstractClassMethod(ARec: TRecordTypeDesc;
@@ -1264,9 +1278,26 @@ begin
       Self.Emit(#9'pushq %rax');
     end;
   end;
-  { Load obj (Self) into %r10 and the itab into %rax, then index the itab. }
-  Self.Emit(Format(#9'movq %s, %%r10', [Self.IntfObjOperand(AObjName, AIsGlobal)]));
-  Self.Emit(Format(#9'movq %s, %%rax', [Self.IntfItabOperand(AObjName, AIsGlobal)]));
+  { Load obj (Self) into %r10 and the itab into %rax, then index the itab.
+    For a field receiver the fat pointer is contiguous (obj at the field
+    address, itab at +8); EmitInterfaceFieldAddr leaves that address in %r10.
+    The receiver shapes that need EmitExprToEax (FA.Base) are not yet reachable
+    here — args are already on the stack, so only the call-free shapes (class
+    access, local/global record, var-param) are safe; reject the rest loudly. }
+  if (AObjExpr <> nil) and (AObjExpr is TFieldAccessExpr) then
+  begin
+    if TFieldAccessExpr(AObjExpr).Base <> nil then
+      raise ENativeCodeGenError.Create(
+        'native backend: nested interface-field receiver in dispatch not supported');
+    Self.EmitInterfaceFieldAddr(TFieldAccessExpr(AObjExpr), '%r10');
+    Self.Emit(#9'movq 8(%r10), %rax');   { itab }
+    Self.Emit(#9'movq (%r10), %r10');    { obj }
+  end
+  else
+  begin
+    Self.Emit(Format(#9'movq %s, %%r10', [Self.IntfObjOperand(AObjName, AIsGlobal)]));
+    Self.Emit(Format(#9'movq %s, %%rax', [Self.IntfItabOperand(AObjName, AIsGlobal)]));
+  end;
   SlotOff := AIntf.MethodIndex(AMethName) * Ps;
   if SlotOff = 0 then
     Self.Emit(#9'movq (%rax), %r11')
@@ -1662,6 +1693,32 @@ begin
     Exit;
   end;
 
+  { F := H.G where the RHS is an interface stored in a record/class field.  The
+    fat pointer is contiguous in the field's memory (obj at the field address,
+    itab at +8) — load both, addref the new obj, release the old, store both. }
+  if (AAsgn.Expr.ResolvedType <> nil) and
+     (AAsgn.Expr.ResolvedType.Kind = tyInterface) and
+     (AAsgn.Expr is TFieldAccessExpr) then
+  begin
+    { Compute the source field's base address into %r15 (callee-saved). }
+    Self.Emit(#9'pushq %r15');
+    Self.EmitInterfaceFieldAddr(TFieldAccessExpr(AAsgn.Expr), '%r15');
+    Self.Emit(#9'movq 8(%r15), %rax');     { src itab }
+    Self.Emit(#9'pushq %rax');             { itab }
+    Self.Emit(#9'movq (%r15), %rax');      { src obj }
+    Self.Emit(#9'pushq %rax');             { obj; stack now (obj, itab) }
+    Self.Emit(#9'movq %rax, %rdi');
+    Self.Emit(#9'callq _ClassAddRef');
+    Self.Emit(Format(#9'movq %s, %%rdi', [ObjOp]));   { old obj }
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'popq %rax');              { new obj }
+    Self.Emit(Format(#9'movq %%rax, %s', [ObjOp]));
+    Self.Emit(#9'popq %rax');              { itab }
+    Self.Emit(Format(#9'movq %%rax, %s', [ItabOp]));
+    Self.Emit(#9'popq %r15');
+    Exit;
+  end;
+
   raise ENativeCodeGenError.Create(
     'native backend: unsupported interface assignment RHS');
 end;
@@ -1741,6 +1798,50 @@ begin
       'native backend: unsupported interface-field store RHS');
 
   Self.Emit(#9'popq %r15');
+end;
+
+procedure TX86_64Backend.EmitInterfaceFieldAddr(AFA: TFieldAccessExpr;
+  const ADstReg: string);
+{ Leave the address of AFA's interface field (the contiguous obj/itab fat
+  pointer) in ADstReg.  Mirrors the receiver-base resolution used by the
+  field-read path, but stops at the address rather than loading a value. }
+begin
+  if AFA.Base <> nil then
+  begin
+    { Nested receiver expression (e.g. Outer.Inner.G): evaluate it to the base
+      address. }
+    Self.EmitExprToEax(AFA.Base);
+    Self.Emit(Format(#9'movq %%rax, %s', [ADstReg]));
+  end
+  else if AFA.IsImplicitSelf then
+  begin
+    Self.Emit(Format(#9'movq %s, %s', [Self.VarOperand('Self'), ADstReg]));
+    if (AFA.ImplicitBaseInfo <> nil) and (AFA.ImplicitBaseInfo.Offset > 0) then
+      Self.Emit(Format(#9'addq $%d, %s', [AFA.ImplicitBaseInfo.Offset, ADstReg]));
+    if AFA.IsClassAccess then
+      Self.Emit(Format(#9'movq (%s), %s', [ADstReg, ADstReg]));
+  end
+  else if AFA.IsClassAccess then
+  begin
+    if Self.IsLocal(AFA.RecordName) then
+      Self.Emit(Format(#9'movq %s, %s', [Self.VarOperand(AFA.RecordName), ADstReg]))
+    else
+      Self.Emit(Format(#9'movq %s(%%rip), %s', [AFA.RecordName, ADstReg]));
+  end
+  else if AFA.IsVarParam then
+  begin
+    if Self.IsLocal(AFA.RecordName) then
+      Self.Emit(Format(#9'movq %s, %s', [Self.VarOperand(AFA.RecordName), ADstReg]))
+    else
+      Self.Emit(Format(#9'movq %s(%%rip), %s', [AFA.RecordName, ADstReg]));
+  end
+  else if Self.IsLocal(AFA.RecordName) then
+    Self.Emit(Format(#9'leaq %s, %s', [Self.VarOperand(AFA.RecordName), ADstReg]))
+  else
+    Self.Emit(Format(#9'leaq %s(%%rip), %s', [AFA.RecordName, ADstReg]));
+  { Add the field offset to reach the fat pointer's obj slot. }
+  if AFA.FieldInfo.Offset > 0 then
+    Self.Emit(Format(#9'addq $%d, %s', [AFA.FieldInfo.Offset, ADstReg]));
 end;
 
 procedure TX86_64Backend.EmitClassMethods(AProg: TProgram);
@@ -3439,8 +3540,13 @@ begin
   if (ACall.ResolvedClassType <> nil) and
      (ACall.ResolvedClassType.Kind = tyInterface) then
   begin
+    { When the receiver is an expression (an interface stored in a field, e.g.
+      H.G.Greet()), ACall.ObjectName is empty — pass ACall.ObjExpr so the obj/
+      itab are loaded from the field's fat pointer rather than bogus _obj/_itab
+      operands. }
     Self.EmitInterfaceCall(ACall.ObjectName, ACall.IsGlobal,
-      TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args);
+      TInterfaceTypeDesc(ACall.ResolvedClassType), ACall.Name, ACall.Args,
+      ACall.ObjExpr);
     Exit;
   end;
 

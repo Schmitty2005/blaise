@@ -3854,18 +3854,22 @@ begin
   { Interface-to-interface direct assignment: F := G where both sides are
     interface-typed.  Copy obj and itab from G's fat pointer to F's; for
     strong F, retain the backing object and release F's prior obj ref;
-    for weak F, route the obj through _WeakAssign. }
+    for weak F, route the obj through _WeakAssign.
+
+    The source may be a plain interface local/global (split _obj/_itab slots) or
+    an interface stored in a record/class field (a contiguous fat pointer).
+    EmitInterfaceExprPair resolves obj/itab for every supported source shape
+    (TIdentExpr, implicit-Self field, as-cast, TFieldAccessExpr) — without it a
+    TFieldAccessExpr source (G := H.G) fell through to the scalar store path and
+    emitted a bogus single-slot `storew ..., $F` against a name that has no
+    `$F` data definition (only `$F_obj`/`$F_itab`). }
   if (AAssign.ResolvedLhsType <> nil) and
      (AAssign.ResolvedLhsType.Kind = tyInterface) and
+     (AAssign.Expr.ResolvedType <> nil) and
      (AAssign.Expr.ResolvedType.Kind = tyInterface) and
-     (AAssign.Expr is TIdentExpr) then
+     ((AAssign.Expr is TIdentExpr) or (AAssign.Expr is TFieldAccessExpr)) then
   begin
-    ObjTemp  := AllocTemp();
-    ItabTemp := AllocTemp();
-    EmitLine(Format('  %s =l loadl %s_obj',
-      [ObjTemp, VarRef(TIdentExpr(AAssign.Expr).Name, TIdentExpr(AAssign.Expr).IsGlobal)]));
-    EmitLine(Format('  %s =l loadl %s_itab',
-      [ItabTemp, VarRef(TIdentExpr(AAssign.Expr).Name, TIdentExpr(AAssign.Expr).IsGlobal)]));
+    EmitInterfaceExprPair(AAssign.Expr, ObjTemp, ItabTemp);
     if AAssign.IsWeakLhs then
     begin
       EmitLine(Format('  call $_WeakAssign(l %s_obj, l %s)',
