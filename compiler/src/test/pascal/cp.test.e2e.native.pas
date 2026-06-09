@@ -230,6 +230,9 @@ type
     procedure TestRun_Native_ShortCircuit_OrSkipsRhs;
     procedure TestRun_Native_ShortCircuit_AndNilGuard;
     procedure TestRun_Native_ProceduralParam;
+    procedure TestRun_Native_IsExpr_Class;
+    procedure TestRun_Native_AsExpr_Class;
+    procedure TestRun_Native_SupportsExpr;
   end;
 
 implementation
@@ -3723,6 +3726,60 @@ begin
     + '  WriteLn(Apply(@Twice, 21))'
     + 'end.',
     '42' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IsExpr_Class;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type'
+    + '  TBase = class public N: Integer; end;'
+    + '  TChild = class(TBase) public S: string; end;'
+    + 'var Obj: TBase;'
+    + 'begin'
+    + '  Obj := TChild.Create();'
+    + '  if Obj is TChild then WriteLn(''child-yes'') else WriteLn(''child-no'');'
+    + '  if Obj is TBase then WriteLn(''base-yes'') else WriteLn(''base-no'');'
+    + '  Obj := TBase.Create();'
+    + '  if Obj is TChild then WriteLn(''child-yes'') else WriteLn(''child-no'')'
+    + 'end.',
+    'child-yes' + LE + 'base-yes' + LE + 'child-no' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_AsExpr_Class;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type'
+    + '  TBase = class public N: Integer; end;'
+    + '  TChild = class(TBase) public S: string; end;'
+    + 'var B: TBase; C: TChild;'
+    + 'begin'
+    + '  B := TChild.Create();'
+    + '  TChild(B).S := ''hello'';'
+    + '  C := TChild(B as TChild);'
+    + '  WriteLn(C.S)'
+    + 'end.',
+    'hello' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_SupportsExpr;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type'
+    + '  IGreet = interface procedure Greet; end;'
+    + '  TFoo = class(IGreet) public procedure Greet; end;'
+    + 'procedure TFoo.Greet; begin WriteLn(''hi'') end;'
+    + 'var Obj: TFoo;'
+    + 'begin'
+    + '  Obj := TFoo.Create();'
+    + '  if Supports(Obj, IGreet) then WriteLn(''supports'') else WriteLn(''no'')'
+    + 'end.',
+    'supports' + LE, 0);
 end;
 
 initialization

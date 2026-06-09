@@ -160,6 +160,10 @@ type
                                AGenericInstances: TObjectList;
                                AGenericRecordInstances: TObjectList);
 
+    { Resolve a class/interface name to its assembly symbol form, adding the
+      unit prefix when the type is defined in a non-system unit.  Mirrors the
+      QBE backend's ClassSymName logic. }
+    function ClassSymName(const AClassName: string): string;
     { True when AName is a slot in the current function frame. }
     function IsLocal(const AName: string): Boolean;
     { The AT&T operand addressing AName: "-N(%rbp)" for a frame local,
@@ -794,6 +798,38 @@ begin
       Result := Result + Chr(C);
     end;
   end;
+end;
+
+function TX86_64Backend.ClassSymName(const AClassName: string): string;
+var
+  Sym: TSymbol;
+  Owner: string;
+  I: Integer;
+  Ch: string;
+begin
+  Result := '';
+  if FSymTable <> nil then
+  begin
+    Sym := FSymTable.Lookup(AClassName);
+    if Sym <> nil then
+    begin
+      Owner := Sym.OwningUnit;
+      if (Owner <> '') and
+         not SameText(Owner, 'System') and
+         not ((Length(Owner) >= 4) and SameText(Copy(Owner, 0, 4), 'rtl.')) and
+         not ((Length(Owner) >= 7) and SameText(Copy(Owner, 0, 7), 'blaise_')) then
+      begin
+        for I := 0 to Length(Owner) - 1 do
+        begin
+          Ch := Copy(Owner, I, 1);
+          if Ch = '.' then Result := Result + '_'
+          else              Result := Result + Ch;
+        end;
+        Result := Result + '_';
+      end;
+    end;
+  end;
+  Result := Result + NativeMangle(AClassName);
 end;
 
 function FindMethodInClassDef(AClassDef: TClassTypeDef;
@@ -1729,7 +1765,7 @@ begin
     Self.EmitExprToEax(AE.Obj);          { obj -> %rax }
     Self.Emit(#9'pushq %rax');            { keep obj on the stack across calls }
     Self.Emit(#9'movq %rax, %rdi');
-    Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi', [NativeMangle(AE.TypeName)]));
+    Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi', [Self.ClassSymName(AE.TypeName)]));
     Self.Emit(#9'callq _GetItab');         { itab -> %rax }
     Self.Emit(#9'pushq %rax');            { keep itab; stack now (itab, obj) }
     LFail := Self.NewLabel('as_fail');
@@ -3709,6 +3745,59 @@ begin
     Exit;
   end;
 
+  { X is TFoo — class type test via _IsInstance / _ImplementsInterface.
+    Result: 0/1 in %eax. }
+  if AExpr is TIsExpr then
+  begin
+    Self.EmitExprToEax(TIsExpr(AExpr).Obj);
+    Self.Emit(#9'movq %rax, %rdi');
+    if (TIsExpr(AExpr).ResolvedTargetType <> nil) and
+       (TIsExpr(AExpr).ResolvedTargetType.Kind = tyInterface) then
+    begin
+      Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi',
+        [Self.ClassSymName(TIsExpr(AExpr).TypeName)]));
+      Self.Emit(#9'callq _ImplementsInterface');
+    end
+    else
+    begin
+      Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi',
+        [Self.ClassSymName(TIsExpr(AExpr).TypeName)]));
+      Self.Emit(#9'callq _IsInstance');
+    end;
+    Exit;
+  end;
+
+  { X as TFoo — checked downcast.  Calls _IsInstance; raises EInvalidCast on
+    failure; result = original object pointer (class-to-class). }
+  if AExpr is TAsExpr then
+  begin
+    ScEndLbl := Self.NewLabel('as_ok');
+    Self.EmitExprToEax(TAsExpr(AExpr).Obj);
+    Self.Emit(#9'pushq %rax');
+    Self.Emit(#9'movq %rax, %rdi');
+    Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi',
+      [Self.ClassSymName(TAsExpr(AExpr).TypeName)]));
+    Self.Emit(#9'callq _IsInstance');
+    Self.Emit(#9'testl %eax, %eax');
+    Self.Emit(#9'jnz ' + ScEndLbl);
+    Self.Emit(#9'callq _Raise_InvalidCast');
+    Self.Emit(ScEndLbl + ':');
+    Self.Emit(#9'popq %rax');
+    Exit;
+  end;
+
+  { Supports(Obj, IFoo) — interface query via _ImplementsInterface.
+    Result: 0/1 in %eax. }
+  if AExpr is TSupportsExpr then
+  begin
+    Self.EmitExprToEax(TSupportsExpr(AExpr).Obj);
+    Self.Emit(#9'movq %rax, %rdi');
+    Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi',
+      [Self.ClassSymName(TSupportsExpr(AExpr).IntfTypeName)]));
+    Self.Emit(#9'callq _ImplementsInterface');
+    Exit;
+  end;
+
   raise ENativeCodeGenError.Create(
     'native backend: unsupported expression form ' + AExpr.ClassName);
 end;
@@ -3867,7 +3956,7 @@ begin
       Self.Emit(#9'pushq %rax');         { save obj for push below }
       Self.Emit(#9'movq %rax, %rdi');
       Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi',
-        [NativeMangle(TAsExpr(AArg).TypeName)]));
+        [Self.ClassSymName(TAsExpr(AArg).TypeName)]));
       Self.Emit(#9'callq _GetItab');
       Self.Emit(#9'pushq %rax');         { itab on top; obj below }
       { Stack top: itab, below: obj — but we need obj first (lower slot).
@@ -5049,7 +5138,7 @@ begin
 
       { _IsInstance(obj, typeinfo): returns non-zero if obj is an instance of the type. }
       Self.Emit(#9'movq %r15, %rdi');
-      Self.Emit(#9'leaq typeinfo_' + H.TypeName + '(%rip), %rsi');
+      Self.Emit(#9'leaq typeinfo_' + Self.ClassSymName(H.TypeName) + '(%rip), %rsi');
       Self.Emit(#9'callq _IsInstance');
       Self.Emit(#9'testl %eax, %eax');
       Self.Emit(#9'jnz ' + LblBody);
