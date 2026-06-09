@@ -9905,6 +9905,13 @@ begin
       begin
         Exit(Ptr);
       end;
+      { Record / static-array field: inline aggregate storage — return the
+        field ADDRESS, not a loaded scalar.  (Mirrors the record-field branch
+        below; without this, passing a class-field record/array by value emitted
+        `loadl` of the field address and passed the first 8 bytes as the
+        aggregate, crashing the callee.) }
+      if FldAccess.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+        Exit(Ptr);
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
       T         := AllocTemp();
