@@ -7378,6 +7378,30 @@ begin
       Self.Emit(#9'popq %rcx');
       Self.Emit(#9'movq %rax, (%rcx)');
     end
+    else if (TPointerWriteStmt(AStmt).BaseTy <> nil) and
+            (TPointerWriteStmt(AStmt).BaseTy.Kind = tyDouble) then
+    begin
+      Self.EmitExprToXmm0(TPointerWriteStmt(AStmt).ValExpr);
+      Self.Emit(#9'subq $8, %rsp');
+      Self.Emit(#9'movsd %xmm0, (%rsp)');
+      Self.EmitExprToEax(TPointerWriteStmt(AStmt).PtrExpr);
+      Self.Emit(#9'movq %rax, %rcx');
+      Self.Emit(#9'movsd (%rsp), %xmm0');
+      Self.Emit(#9'addq $8, %rsp');
+      Self.Emit(#9'movsd %xmm0, (%rcx)');
+    end
+    else if (TPointerWriteStmt(AStmt).BaseTy <> nil) and
+            (TPointerWriteStmt(AStmt).BaseTy.Kind = tySingle) then
+    begin
+      Self.EmitExprToXmm0(TPointerWriteStmt(AStmt).ValExpr);
+      Self.Emit(#9'subq $8, %rsp');
+      Self.Emit(#9'movss %xmm0, (%rsp)');
+      Self.EmitExprToEax(TPointerWriteStmt(AStmt).PtrExpr);
+      Self.Emit(#9'movq %rax, %rcx');
+      Self.Emit(#9'movss (%rsp), %xmm0');
+      Self.Emit(#9'addq $8, %rsp');
+      Self.Emit(#9'movss %xmm0, (%rcx)');
+    end
     else
     begin
       Self.EmitExprToEax(TPointerWriteStmt(AStmt).ValExpr);

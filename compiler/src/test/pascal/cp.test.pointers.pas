@@ -49,6 +49,8 @@ type
     procedure TestCodegen_FreeMem_EmitsFree;
     procedure TestCodegen_Deref_EmitsLoad;
     procedure TestCodegen_PointerWrite_EmitsStore;
+    procedure TestCodegen_DoublePointerWrite_EmitsStored;
+    procedure TestCodegen_SinglePointerWrite_EmitsStores;
     procedure TestCodegen_PointerArith_EmitsAdd;
 
     { ------------------------------------------------------------------ }
@@ -117,6 +119,30 @@ const
         begin
           Ptr^ := 42;
           V := Ptr^
+        end.
+        ''';
+
+  SrcDoublePtrWrite =
+    '''
+        program P;
+        var
+          PD: ^Double;
+          D:  Double;
+        begin
+          PD := @D;
+          PD^ := 3.14
+        end.
+        ''';
+
+  SrcSinglePtrWrite =
+    '''
+        program P;
+        var
+          PS: ^Single;
+          S:  Single;
+        begin
+          PS := @S;
+          PS^ := 1.25
         end.
         ''';
 
@@ -373,6 +399,28 @@ var
 begin
   IR := GenIR(SrcTypedPtrRW);
   AssertTrue('Pointer write should emit storew', Pos('storew', IR) > 0);
+end;
+
+procedure TPointerTests.TestCodegen_DoublePointerWrite_EmitsStored;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcDoublePtrWrite);
+  AssertTrue('PDouble^ := val must emit stored',
+    Pos('stored', IR) > 0);
+  AssertFalse('PDouble^ write must not use storel',
+    Pos('storel %_t', IR) > 0);
+end;
+
+procedure TPointerTests.TestCodegen_SinglePointerWrite_EmitsStores;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcSinglePtrWrite);
+  AssertTrue('PSingle^ := val must emit stores',
+    Pos('stores', IR) > 0);
+  AssertFalse('PSingle^ write must not use storel',
+    Pos('storel %_t', IR) > 0);
 end;
 
 procedure TPointerTests.TestCodegen_PointerArith_EmitsAdd;

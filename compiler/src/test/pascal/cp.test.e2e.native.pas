@@ -252,6 +252,10 @@ type
     { Trig / math builtins with Single dispatch }
     procedure TestRun_Native_Builtin_SinCos;
     procedure TestRun_Native_Builtin_SqrtDouble;
+
+    { Typed-pointer float writes }
+    procedure TestRun_Native_DoublePtrWrite;
+    procedure TestRun_Native_SinglePtrWrite_NoAdjacentClobber;
   end;
 
 implementation
@@ -3990,6 +3994,37 @@ begin
     + '  WriteLn(IntToStr(R))'
     + 'end.',
     '2' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_DoublePtrWrite;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'var D: Double; PD: ^Double;'
+    + 'begin'
+    + '  D := 0.0;'
+    + '  PD := @D;'
+    + '  PD^ := 3.14;'
+    + '  WriteLn(D)'
+    + 'end.',
+    '3.14' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_SinglePtrWrite_NoAdjacentClobber;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'var A: Single; B: Single; PA: ^Single;'
+    + 'begin'
+    + '  A := 0.0;'
+    + '  B := 9.5;'
+    + '  PA := @A;'
+    + '  PA^ := 1.25;'
+    + '  WriteLn(B)'
+    + 'end.',
+    '9.5' + LE, 0);
 end;
 
 initialization

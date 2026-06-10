@@ -28,6 +28,8 @@ type
     procedure TestRun_PCharSubscript_ChrAssignment;
     procedure TestRun_PCharSubscript_HashCharLiteralAssignment;
     procedure TestRun_StaticArrayOfPChar_ElementPreservesAllBits;
+    procedure TestRun_DoublePointerWrite_PreservesValue;
+    procedure TestRun_SinglePointerWrite_NoAdjacentSlotClobber;
   end;
 
 implementation
@@ -142,6 +144,34 @@ const
     end.
     ''';
 
+  SrcDoublePtrWriteE2E = '''
+    program P;
+    var
+      D:  Double;
+      PD: ^Double;
+    begin
+      D := 0.0;
+      PD := @D;
+      PD^ := 3.14;
+      WriteLn(D)
+    end.
+    ''';
+
+  SrcSinglePtrAdjacentE2E = '''
+    program P;
+    var
+      A:  Single;
+      B:  Single;
+      PA: ^Single;
+    begin
+      A := 0.0;
+      B := 9.5;
+      PA := @A;
+      PA^ := 1.25;
+      WriteLn(B)
+    end.
+    ''';
+
 procedure TE2EPointersTests.TestRun_Pointer_GetMem_WriteRead_FreeMem;
 var Output: string; RCode: Integer;
 begin
@@ -195,6 +225,26 @@ begin
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('two PChar values round-tripped through static array',
     'HI' + LE + 'YZ' + LE, Output);
+end;
+
+procedure TE2EPointersTests.TestRun_DoublePointerWrite_PreservesValue;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcDoublePtrWriteE2E, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('Double round-trips through PDouble^',
+    '3.14' + LE, Output);
+end;
+
+procedure TE2EPointersTests.TestRun_SinglePointerWrite_NoAdjacentSlotClobber;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcSinglePtrAdjacentE2E, Output, RCode));
+  AssertEquals('exit code 0', 0, RCode);
+  AssertEquals('PSingle^ write must not clobber adjacent Single B',
+    '9.5' + LE, Output);
 end;
 
 initialization

@@ -7473,7 +7473,7 @@ var
   PtrTemp:    string;
   ValTemp:    string;
   OldTemp:    string;
-  QType:      string;
+  ExtTemp:    string;
   StoreInstr: string;
 begin
   PtrTemp := EmitExpr(AStmt.PtrExpr);
@@ -7505,15 +7505,24 @@ begin
     ValTemp := EmitByteRhs(AStmt.ValExpr)
   else
     ValTemp := EmitExpr(AStmt.ValExpr);
-  QType   := QbeTypeOf(AStmt.BaseTy);
-  { Byte/Boolean stores must use storeb — storew would write four
-    bytes and clobber three adjacent bytes.  Symmetric with the
-    loadub fix in the TDerefExpr branch of EmitExpr. }
-  if (AStmt.BaseTy <> nil) and
-     (AStmt.BaseTy.Kind in [tyByte, tyBoolean]) then
-    StoreInstr := 'storeb'
-  else if QType = 'w' then StoreInstr := 'storew'
-                      else StoreInstr := 'storel';
+  if AStmt.BaseTy <> nil then
+    StoreInstr := StoreInstrFor(AStmt.BaseTy)
+  else
+    StoreInstr := 'storel';
+  if (AStmt.BaseTy <> nil) and (AStmt.BaseTy.Kind = tySingle) and
+     (QbeTypeOf(AStmt.ValExpr.ResolvedType) = 'd') then
+  begin
+    ExtTemp := AllocTemp();
+    EmitLine(Format('  %s =s truncd %s', [ExtTemp, ValTemp]));
+    ValTemp := ExtTemp;
+  end
+  else if (AStmt.BaseTy <> nil) and (AStmt.BaseTy.Kind = tyDouble) and
+          (QbeTypeOf(AStmt.ValExpr.ResolvedType) = 's') then
+  begin
+    ExtTemp := AllocTemp();
+    EmitLine(Format('  %s =d exts %s', [ExtTemp, ValTemp]));
+    ValTemp := ExtTemp;
+  end;
   EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, PtrTemp]));
 end;
 
