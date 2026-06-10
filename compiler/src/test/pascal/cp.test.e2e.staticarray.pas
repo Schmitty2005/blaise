@@ -495,7 +495,7 @@ var LE: string;
 begin
   LE := LineEnding;
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
-  AssertRunsOnBoth(Src, '10' + LE + '20' + LE + '30' + LE + '40' + LE, 0);
+  AssertRunsOnAll(Src, '10' + LE + '20' + LE + '30' + LE + '40' + LE, 0);
 end;
 
 procedure TE2EStaticArrayTests.TestRun_DynArray_ForIn_EmptyArray_NoIterations;
@@ -515,7 +515,7 @@ const Src =
   ''';
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
-  AssertRunsOnBoth(Src, '0' + LineEnding, 0);
+  AssertRunsOnAll(Src, '0' + LineEnding, 0);
 end;
 
 initialization

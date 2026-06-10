@@ -661,13 +661,13 @@ end;
 procedure TE2EMiscTests.TestRun_WriteLn_BoolVar_PrintsTrueOrFalse;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcWriteLnBoolVar, 'True' + LE + 'False' + LE, 0);
+  AssertRunsOnAll(SrcWriteLnBoolVar, 'True' + LE + 'False' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_WriteLn_BoolExpr_PrintsTrueOrFalse;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcWriteLnBoolExpr, 'True' + LE + 'False' + LE, 0);
+  AssertRunsOnAll(SrcWriteLnBoolExpr, 'True' + LE + 'False' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_MultiArgWriteLn_PrintsAllArgs;
@@ -683,13 +683,13 @@ end;
 procedure TE2EMiscTests.TestRun_ForBreak_StopsAtFiveHalt;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcForBreak, '5' + LE, 0);
+  AssertRunsOnAll(SrcForBreak, '5' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ExitFromFunction_ReturnsImmediately;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcExitFunc, '7' + LE + '9' + LE, 0);
+  AssertRunsOnAll(SrcExitFunc, '7' + LE + '9' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ChainedRecordField_LoadsInner;
@@ -704,7 +704,7 @@ end;
 procedure TE2EMiscTests.TestRun_Const_IntegerConst;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcConstInt, '101' + LE, 0);
+  AssertRunsOnAll(SrcConstInt, '101' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_Const_StringConst;
@@ -729,7 +729,7 @@ end;
 procedure TE2EMiscTests.TestRun_Const_NegativeConst;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcConstNeg, '-20' + LE, 0);
+  AssertRunsOnAll(SrcConstNeg, '-20' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ProcType_CallViaVariable;
@@ -753,7 +753,7 @@ end;
 procedure TE2EMiscTests.TestRun_DefaultParam_OmitLast;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcDefaultParam, '15' + LE + '25' + LE, 0);
+  AssertRunsOnAll(SrcDefaultParam, '15' + LE + '25' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_DefaultParam_OmitMultiple;
@@ -768,7 +768,7 @@ end;
 procedure TE2EMiscTests.TestRun_VarParam_SwapIntegers;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcVarParamSwap, '7' + LE + '3' + LE, 0);
+  AssertRunsOnAll(SrcVarParamSwap, '7' + LE + '3' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_VarParam_ModifyString;
@@ -783,13 +783,13 @@ end;
 procedure TE2EMiscTests.TestRun_ConstParam_CanRead;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcConstParam, '42' + LE, 0);
+  AssertRunsOnAll(SrcConstParam, '42' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_TypeCast_IntegerByte;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcTypeCastIntByte, '44' + LE, 0);
+  AssertRunsOnAll(SrcTypeCastIntByte, '44' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_TypeCast_PointerInteger;
@@ -907,45 +907,45 @@ end;
 procedure TE2EMiscTests.TestRun_ForIn_String_ByteVar_PrintsBytes;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcForInStringByte, '72' + LE + '105' + LE, 0);
+  AssertRunsOnAll(SrcForInStringByte, '72' + LE + '105' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_String_IntegerVar_PrintsCodePoints;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcForInStringInteger, '72' + LE + '105' + LE, 0);
+  AssertRunsOnAll(SrcForInStringInteger, '72' + LE + '105' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_String_IntegerVar_CodePoints_TwoByte;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcForInStringCP2Byte,
+  AssertRunsOnAll(SrcForInStringCP2Byte,
     '65' + LE + '226' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_String_IntegerVar_CodePoints_ThreeByte;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcForInStringCP3Byte,
+  AssertRunsOnAll(SrcForInStringCP3Byte,
     '8364' + LE + '88' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_Array_Integer_PrintsElements;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcForInArrayInteger, '10' + LE + '20' + LE + '30' + LE, 0);
+  AssertRunsOnAll(SrcForInArrayInteger, '10' + LE + '20' + LE + '30' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_ClassEnumerator_PrintsElements;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcForInClassEnum, '3' + LE + '4' + LE + '5' + LE, 0);
+  AssertRunsOnAll(SrcForInClassEnum, '3' + LE + '4' + LE + '5' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_ForIn_Set_PrintsMembers;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcForInSet, '0' + LE + '2' + LE, 0);
+  AssertRunsOnAll(SrcForInSet, '0' + LE + '2' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_NestedProc_MutatesCapturedVar;

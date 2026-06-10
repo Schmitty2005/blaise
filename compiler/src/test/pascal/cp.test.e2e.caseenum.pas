@@ -101,13 +101,13 @@ const
 procedure TE2ECaseEnumTests.TestRun_Case_IntegerBranch;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcCaseInt, '22' + LineEnding, 0);
+  AssertRunsOnAll(SrcCaseInt, '22' + LineEnding, 0);
 end;
 
 procedure TE2ECaseEnumTests.TestRun_Case_ElseBranch;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcCaseElse, '99' + LineEnding, 0);
+  AssertRunsOnAll(SrcCaseElse, '99' + LineEnding, 0);
 end;
 
 procedure TE2ECaseEnumTests.TestRun_Enum_OrdinalValues;
@@ -129,7 +129,7 @@ end;
 procedure TE2ECaseEnumTests.TestRun_Enum_InCase;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcEnumCase, '2' + LineEnding, 0);
+  AssertRunsOnAll(SrcEnumCase, '2' + LineEnding, 0);
 end;
 
 const

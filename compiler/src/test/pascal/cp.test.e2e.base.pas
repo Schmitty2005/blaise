@@ -22,13 +22,15 @@ uses
   blaise.codegen, blaise.codegen.target, blaise.codegen.native;
 
 type
-  { Code-generation backends an e2e test can run against.  The native backend
-    currently supports a subset of the language (integer family, control flow,
-    direct calls); a test opts into it explicitly (AssertRunsOnBoth, or
-    CompileAndRunOn for one backend), so QBE-only features stay QBE-only until
-    native catches up. }
   TBackend = (beQBE, beNative);
+  TBackends = set of TBackend;
 
+const
+  AllBackends: TBackends = [beQBE, beNative];
+
+function BackendName(ABackend: TBackend): string;
+
+type
   TE2ETestCase = class(TTestCase)
   private
     FQBE:         string;
@@ -65,16 +67,16 @@ type
     function  CompileAndRunOn(ABackend: TBackend; const ASrc: string;
                             out AStdout: string;
                             out AExitCode: Integer): Boolean;
-    { Run ASrc on BOTH backends and assert each produces AExpectedOut on stdout
-      and AExpectedCode as its exit code.  Failures name the offending backend,
-      so a native-only regression is unambiguous.  This is the primary helper
-      for tests the native backend supports: write the expected output once,
-      exercise both code generators.  (A set-of-backends parameter would read
-      better but Blaise does not yet accept a set literal as a set-typed
-      argument — see bugs.txt; two booleans avoid that.) }
-    procedure AssertRunsOnBoth(const ASrc, AExpectedOut: string;
+    { Run ASrc on every backend in AllBackends and assert each produces
+      AExpectedOut / AExpectedCode.  When a new backend is added to AllBackends,
+      all callers pick it up automatically. }
+    procedure AssertRunsOnAll(const ASrc, AExpectedOut: string;
                             AExpectedCode: Integer);
-    { Per-backend worker for AssertRunsOnBoth (separate method because Blaise
+    { Run ASrc on a specific set of backends only.  Use when a test should
+      exercise fewer than AllBackends (e.g. a feature not yet ported). }
+    procedure AssertRunsOn(ABackends: TBackends; const ASrc, AExpectedOut: string;
+                            AExpectedCode: Integer);
+    { Per-backend worker used by AssertRunsOn (separate method because Blaise
       has no nested procedures). }
     procedure AssertRunsOnOne(ABackend: TBackend; const AName, ASrc,
                             AExpectedOut: string; AExpectedCode: Integer);
@@ -330,11 +332,30 @@ begin
   AssertEquals('[' + AName + '] stdout', AExpectedOut, Output)
 end;
 
-procedure TE2ETestCase.AssertRunsOnBoth(const ASrc, AExpectedOut: string;
-                                        AExpectedCode: Integer);
+function BackendName(ABackend: TBackend): string;
 begin
-  Self.AssertRunsOnOne(beQBE, 'qbe', ASrc, AExpectedOut, AExpectedCode);
-  Self.AssertRunsOnOne(beNative, 'native', ASrc, AExpectedOut, AExpectedCode)
+  case ABackend of
+    beQBE:    Result := 'qbe';
+    beNative: Result := 'native'
+  else
+    Result := 'unknown'
+  end
+end;
+
+procedure TE2ETestCase.AssertRunsOnAll(const ASrc, AExpectedOut: string;
+                                       AExpectedCode: Integer);
+begin
+  Self.AssertRunsOn(AllBackends, ASrc, AExpectedOut, AExpectedCode)
+end;
+
+procedure TE2ETestCase.AssertRunsOn(ABackends: TBackends; const ASrc, AExpectedOut: string;
+                                    AExpectedCode: Integer);
+var
+  BE: TBackend;
+begin
+  for BE := Low(TBackend) to High(TBackend) do
+    if BE in ABackends then
+      Self.AssertRunsOnOne(BE, BackendName(BE), ASrc, AExpectedOut, AExpectedCode)
 end;
 
 function TE2ETestCase.CompileAndRun(const ASrc: string;

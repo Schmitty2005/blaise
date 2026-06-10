@@ -662,31 +662,31 @@ end;
 procedure TE2ERecordsTests.TestRun_Record_StmtMethodCall_Local;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcRecordStmtMethodCallLocal, '3' + LE, 0);
+  AssertRunsOnAll(SrcRecordStmtMethodCallLocal, '3' + LE, 0);
 end;
 
 procedure TE2ERecordsTests.TestRun_Record_StmtMethodCall_ImplicitSelf;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcRecordStmtMethodCallImplicitSelf, '3' + LE, 0);
+  AssertRunsOnAll(SrcRecordStmtMethodCallImplicitSelf, '3' + LE, 0);
 end;
 
 procedure TE2ERecordsTests.TestRun_Record_StmtMethodCall_Result;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcRecordStmtMethodCallResult, '5' + LE + '8' + LE, 0);
+  AssertRunsOnAll(SrcRecordStmtMethodCallResult, '5' + LE + '8' + LE, 0);
 end;
 
 procedure TE2ERecordsTests.TestRun_Record_AddrOfImplicitSelf;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcRecordAddrOfImplicitSelf, '10' + LE + '20' + LE, 0);
+  AssertRunsOnAll(SrcRecordAddrOfImplicitSelf, '10' + LE + '20' + LE, 0);
 end;
 
 procedure TE2ERecordsTests.TestRun_Record_PointerDerefFieldAccess;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnBoth(SrcRecordPointerDerefFieldAccess, '42' + LE + '99' + LE, 0);
+  AssertRunsOnAll(SrcRecordPointerDerefFieldAccess, '42' + LE + '99' + LE, 0);
 end;
 
 procedure TE2ERecordsTests.TestRun_Class_RecordField_NestedClass_FullCleanup;
