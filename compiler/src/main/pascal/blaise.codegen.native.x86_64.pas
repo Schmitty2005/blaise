@@ -8643,26 +8643,42 @@ begin
        (SSA.ResolvedArrayType.Kind <> tyStaticArray) then
       raise ENativeCodeGenError.Create(
         'native backend: static subscript assign on non-static-array');
-    { Compute element address: base + (Index - LowBound) * ElemSize }
-    { Evaluate value first, push to preserve across address computation. }
+    DAElemType := TStaticArrayTypeDesc(SSA.ResolvedArrayType).ElementType;
     Self.EmitExprToEax(SSA.ValueExpr);
     Self.Emit(#9'pushq %rax');
-    { Compute index offset into %rax. }
     Self.EmitExprToEax(SSA.IndexExpr);
     if TStaticArrayTypeDesc(SSA.ResolvedArrayType).LowBound <> 0 then
       Self.Emit(Format(#9'subq $%d, %%rax',
         [TStaticArrayTypeDesc(SSA.ResolvedArrayType).LowBound]));
-    Self.Emit(Format(#9'imulq $%d, %%rax',
-      [TStaticArrayTypeDesc(SSA.ResolvedArrayType).ElementType.RawSize()]));
-    { Base address into %rcx. }
+    Self.Emit(Format(#9'imulq $%d, %%rax', [DAElemType.RawSize()]));
     if Self.IsLocal(SSA.ArrayName) then
       Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
     else
       Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [SSA.ArrayName]));
-    Self.Emit(#9'addq %rcx, %rax');   { %rax = element address }
-    Self.Emit(#9'movq %rax, %rcx');   { save element address to %rcx }
-    Self.Emit(#9'popq %rax');          { restore value }
-    Self.EmitStoreVar('(%rcx)', TStaticArrayTypeDesc(SSA.ResolvedArrayType).ElementType);
+    Self.Emit(#9'addq %rcx, %rax');
+    Self.Emit(#9'movq %rax, %rcx');
+    if DAElemType.Kind = tyString then
+    begin
+      Self.Emit(#9'pushq %rcx');
+      Self.Emit(#9'movq 8(%rsp), %rdi');
+      Self.Emit(#9'callq _StringAddRef');
+      Self.Emit(#9'movq (%rsp), %rcx');
+      Self.Emit(#9'movq (%rcx), %rdi');
+      Self.Emit(#9'callq _StringRelease');
+      Self.Emit(#9'popq %rcx');
+    end
+    else if DAElemType.Kind = tyClass then
+    begin
+      Self.Emit(#9'pushq %rcx');
+      Self.Emit(#9'movq 8(%rsp), %rdi');
+      Self.Emit(#9'callq _ClassAddRef');
+      Self.Emit(#9'movq (%rsp), %rcx');
+      Self.Emit(#9'movq (%rcx), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rcx');
+    end;
+    Self.Emit(#9'popq %rax');
+    Self.EmitStoreVar('(%rcx)', DAElemType);
     Exit;
   end;
 
