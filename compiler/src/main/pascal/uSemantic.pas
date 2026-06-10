@@ -34,6 +34,21 @@ type
     FCurrentUnit:          TUnit;        { current unit being analysed; nil during program analysis }
     FMethodIndex:          TStringList;  { 'TypeName.MethodName' → TMethodDecl (not owned) }
     FProcIndex:            TStringList;  { 'ProcName' → TMethodDecl (not owned) }
+    { Overload groups: same keys as FProcIndex/FMethodIndex, but each entry's
+      Object is a TObjectList(False) holding EVERY decl registered under that
+      key, in insertion order.  Lets per-call-site overload resolution fetch
+      all candidates with one hashed IndexOf instead of a full scan of the
+      index (which was O(calls × decls)).  Kept in sync by the Register*
+      helpers and ReplaceProcIndexObject. }
+    FProcGroups:           TStringList;  { 'ProcName' → TObjectList of TMethodDecl }
+    FMethodGroups:         TStringList;  { 'Type.Method' → TObjectList of TMethodDecl }
+    { Owns the group lists.  TStringList.Objects holds raw (non-retained)
+      pointers, so a group whose only strong reference were a local would be
+      released at the creating routine's exit (TObjectList.Add retains its
+      items; TStringList.AddObject does not).  Every group created by
+      AddGroupEntry is also added here, which retains it for the analyser's
+      lifetime; the destructor frees this list, releasing the groups. }
+    FGroupKeepAlive:       TObjectList;
     FGenericFuncTemplates: TStringList;  { base name → TMethodDecl template (not owned) }
     FLoopDepth:            Integer;      { depth of enclosing while/for — Break only legal if > 0 }
     FScopeDepth:           Integer;      { mirrors FTable scope depth; used to detect main-level globals }
@@ -73,6 +88,15 @@ type
       chain-aware filter can read OwningUnit off any FProcIndex
       entry. }
     procedure RegisterProcDecl(const AName: string; ADecl: TMethodDecl);
+
+    { Overload-group plumbing (see FProcGroups/FMethodGroups).  Every
+      FProcIndex/FMethodIndex AddObject must go through the Add*GroupEntry
+      sibling so the groups stay complete; FProcIndex.Objects[] rewrites go
+      through ReplaceProcIndexObject so the group sees the swap. }
+    procedure AddGroupEntry(AGroups: TStringList; const AKey: string;
+                            ADecl: TMethodDecl);
+    function  GroupOf(AGroups: TStringList; const AKey: string): TObjectList;
+    procedure ReplaceProcIndexObject(AIdx: Integer; ANew: TMethodDecl);
 
     { Populates FCurrentUsesChain from a program/unit's UsedUnits list.
       Pure plumbing — no behavior change today; consumed by uses-chain
@@ -370,6 +394,11 @@ begin
   FMethodIndex.CaseSensitive := False;
   FProcIndex            := TStringList.Create();
   FProcIndex.CaseSensitive := False;
+  FProcGroups           := TStringList.Create();
+  FProcGroups.CaseSensitive := False;
+  FMethodGroups         := TStringList.Create();
+  FMethodGroups.CaseSensitive := False;
+  FGroupKeepAlive       := TObjectList.Create(False);
   FGenericFuncTemplates := TStringList.Create();
   FGenericFuncTemplates.CaseSensitive := False;
   FCurrentUsesChain     := TStringList.Create();
@@ -387,6 +416,11 @@ begin
   FUnitIfaces.Free();
   FCurrentUsesChain.Free();
   FGenericFuncTemplates.Free();
+  { Releasing the keep-alive releases every group list; the group string
+    lists themselves only hold raw pointers. }
+  FGroupKeepAlive.Free();
+  FProcGroups.Free();
+  FMethodGroups.Free();
   FProcIndex.Free();
   FMethodIndex.Free();
   FTable.Free();
@@ -722,11 +756,60 @@ begin
     Result := MangleUnitPrefix(FCurrentUnitName);
 end;
 
+procedure TSemanticAnalyser.AddGroupEntry(AGroups: TStringList;
+  const AKey: string; ADecl: TMethodDecl);
+var
+  GIdx: Integer;
+  Grp:  TObjectList;
+begin
+  GIdx := AGroups.IndexOf(AKey);
+  if GIdx < 0 then
+  begin
+    Grp := TObjectList.Create(False);
+    AGroups.AddObject(AKey, Grp);
+    FGroupKeepAlive.Add(Grp);
+  end
+  else
+    Grp := TObjectList(AGroups.Objects[GIdx]);
+  Grp.Add(ADecl);
+end;
+
+function TSemanticAnalyser.GroupOf(AGroups: TStringList;
+  const AKey: string): TObjectList;
+var
+  GIdx: Integer;
+begin
+  GIdx := AGroups.IndexOf(AKey);
+  if GIdx >= 0 then
+    Result := TObjectList(AGroups.Objects[GIdx])
+  else
+    Result := nil;
+end;
+
+procedure TSemanticAnalyser.ReplaceProcIndexObject(AIdx: Integer;
+  ANew: TMethodDecl);
+var
+  Old: TMethodDecl;
+  Grp: TObjectList;
+  K:   Integer;
+begin
+  Old := TMethodDecl(FProcIndex.Objects[AIdx]);
+  FProcIndex.Objects[AIdx] := ANew;
+  Grp := GroupOf(FProcGroups, FProcIndex.Strings[AIdx]);
+  if Grp <> nil then
+  begin
+    K := Grp.IndexOf(Old);
+    if K >= 0 then
+      Grp.Items[K] := ANew;
+  end;
+end;
+
 procedure TSemanticAnalyser.RegisterProcDecl(const AName: string; ADecl: TMethodDecl);
 begin
   if (ADecl.OwningUnit = '') and (FCurrentUnitName <> '') then
     ADecl.OwningUnit := FCurrentUnitName;
   FProcIndex.AddObject(AName, ADecl);
+  AddGroupEntry(FProcGroups, AName, ADecl);
 end;
 
 procedure TSemanticAnalyser.BuildUsesChain(AUsedUnits: TStringList);
@@ -997,7 +1080,7 @@ begin
         ImplDecl.ResolvedQbeName := MDecl.ResolvedQbeName;
         ImplDecl.IsOverload      := MDecl.IsOverload;
         TransferDefaultValues(MDecl, ImplDecl);
-        FProcIndex.Objects[ImplIdx] := ImplDecl;
+        ReplaceProcIndexObject(ImplIdx, ImplDecl);
       end
       else
       begin
@@ -1301,7 +1384,7 @@ begin
         ImplDecl.ResolvedQbeName := MDecl.ResolvedQbeName;
         ImplDecl.IsOverload      := MDecl.IsOverload;
         TransferDefaultValues(MDecl, ImplDecl);
-        FProcIndex.Objects[ImplIdx] := ImplDecl;
+        ReplaceProcIndexObject(ImplIdx, ImplDecl);
       end
       else
       begin
@@ -1379,12 +1462,14 @@ begin
     iface's unit name before we get here; don't overwrite with
     FCurrentUnitName since the analyser may not be mid-analysis. }
   FProcIndex.AddObject(AName, ADecl);
+  AddGroupEntry(FProcGroups, AName, ADecl);
 end;
 
 procedure TSemanticAnalyser.RegisterImportedMethod(const ATypeName: string;
                                                     ADecl: TMethodDecl);
 begin
   FMethodIndex.AddObject(ATypeName + '.' + ADecl.Name, ADecl);
+  AddGroupEntry(FMethodGroups, ATypeName + '.' + ADecl.Name, ADecl);
 end;
 
 procedure TSemanticAnalyser.RegisterUnitIface(AIface: TUnitInterface);
@@ -1546,6 +1631,7 @@ var
   Key:      string;
   CD:       TMethodDecl;
   Match:    TMethodDecl;
+  Grp:      TObjectList;
   ImplSig:  string;
   Par:      TMethodParam;
 begin
@@ -1565,10 +1651,11 @@ begin
 
     Key   := Decl.OwnerTypeName + '.' + Decl.Name;
     Match := nil;
-    for K := 0 to FMethodIndex.Count - 1 do
-      if SameText(FMethodIndex.Strings[K], Key) then
+    Grp   := GroupOf(FMethodGroups, Key);
+    if Grp <> nil then
+      for K := 0 to Grp.Count - 1 do
       begin
-        CD := TMethodDecl(FMethodIndex.Objects[K]);
+        CD := TMethodDecl(Grp.Items[K]);
         if CD.IsOverload then
         begin
           if MangleParamSig(CD) = ImplSig then
@@ -2116,6 +2203,7 @@ begin
       NewMDecl := TMethodDecl(ClonedCD.Methods.Items[J]);
       Key      := ATypeName + '.' + NewMDecl.Name;
       FMethodIndex.AddObject(Key, NewMDecl);
+      AddGroupEntry(FMethodGroups, Key, NewMDecl);
       { Pin the QBE symbol now so the def and call sites agree.  The
         instance's type symbol inherits OwningUnit from the analysing
         compilation (program/unit name) via DefineGlobal's auto-tag;
@@ -2378,6 +2466,7 @@ begin
       NewMDecl := TMethodDecl(ClonedRD.Methods.Items[J]);
       Key      := ATypeName + '.' + NewMDecl.Name;
       FMethodIndex.AddObject(Key, NewMDecl);
+      AddGroupEntry(FMethodGroups, Key, NewMDecl);
       NewMDecl.OwningUnit      := Sym.OwningUnit;
       NewMDecl.ResolvedQbeName := CurrentUnitPrefix() +
                                   ATypeName + '_' + NewMDecl.Name;
@@ -3046,6 +3135,7 @@ var
   TD:         TTypeDecl;
   FieldList:  TObjectList;
   MethodList: TObjectList;
+  Grp:        TObjectList;
   FDecl:      TFieldDecl;
   MDecl:      TMethodDecl;
   Par:        TMethodParam;
@@ -3592,17 +3682,19 @@ begin
           any sibling has IsOverload=False or the new MDecl lacks
           IsOverload, this is a duplicate-identifier error. }
         Key := TD.Name + '.' + MDecl.Name;
-        for K := 0 to FMethodIndex.Count - 1 do
-          if SameText(FMethodIndex.Strings[K], Key) then
+        Grp := GroupOf(FMethodGroups, Key);
+        if Grp <> nil then
+          for K := 0 to Grp.Count - 1 do
           begin
             if (not MDecl.IsOverload) or
-               (not TMethodDecl(FMethodIndex.Objects[K]).IsOverload) then
+               (not TMethodDecl(Grp.Items[K]).IsOverload) then
               SemanticError(
                 Format('Duplicate method ''%s.%s'' (missing ''overload'' directive?)',
                   [TD.Name, MDecl.Name]),
                 MDecl.Line, MDecl.Col);
           end;
         FMethodIndex.AddObject(Key, MDecl);
+        AddGroupEntry(FMethodGroups, Key, MDecl);
         if SameText(MDecl.Name, 'Destroy') then
         begin
           RT.HasDestroyMethod := True;
@@ -3964,6 +4056,7 @@ var
   RT:          TRecordTypeDesc;
   Key:         string;
   Cand:        TMethodDecl;
+  Grp:         TObjectList;
   ArityMatch:  TObjectList;
   J, K, Score: Integer;
   ArgScore:    Integer;
@@ -3987,11 +4080,12 @@ begin
     while CurrName <> '' do
     begin
       Key := CurrName + '.' + AMethodName;
-      for K := 0 to FMethodIndex.Count - 1 do
-        if SameText(FMethodIndex.Strings[K], Key) then
+      Grp := GroupOf(FMethodGroups, Key);
+      if Grp <> nil then
+        for K := 0 to Grp.Count - 1 do
         begin
           Inc(TotalCnt);
-          Cand := TMethodDecl(FMethodIndex.Objects[K]);
+          Cand := TMethodDecl(Grp.Items[K]);
           if (Arity < 0) or
              ((Arity >= MinArity(Cand)) and (Arity <= Cand.Params.Count)) then
             ArityMatch.Add(Cand);
@@ -4154,7 +4248,7 @@ begin
       if (J >= 0) and (TMethodDecl(FProcIndex.Objects[J]).Body = nil) and
          (not TMethodDecl(FProcIndex.Objects[J]).IsOverload) then
       begin
-        FProcIndex.Objects[J] := ADecl;
+        ReplaceProcIndexObject(J, ADecl);
         Continue;
       end;
     end;
@@ -6160,6 +6254,7 @@ function TSemanticAnalyser.ResolveStandaloneOverload(const AName: string;
 var
   I, J:        Integer;
   Cand:        TMethodDecl;
+  Grp:         TObjectList;
   ArityMatch:  TObjectList;
   Score:       Integer;
   ArgScore:    Integer;
@@ -6177,11 +6272,12 @@ begin
   TotalCnt  := 0;
   ArityMatch := TObjectList.Create(False);
   try
-    for I := 0 to FProcIndex.Count - 1 do
-      if SameText(FProcIndex.Strings[I], AName) then
+    Grp := GroupOf(FProcGroups, AName);
+    if Grp <> nil then
+      for I := 0 to Grp.Count - 1 do
       begin
         Inc(TotalCnt);
-        Cand := TMethodDecl(FProcIndex.Objects[I]);
+        Cand := TMethodDecl(Grp.Items[I]);
         if (AArity >= MinArity(Cand)) and (AArity <= Cand.Params.Count) then
           ArityMatch.Add(Cand);
       end;
