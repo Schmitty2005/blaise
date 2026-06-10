@@ -303,6 +303,7 @@ type
 
     { Method call returning a record (sret convention) }
     procedure TestRun_Native_MethodSretReturn;
+    procedure TestRun_Native_FieldSretReturn;
   end;
 
 implementation
@@ -4452,6 +4453,36 @@ begin
     + '  M.Free() '
     + 'end.',
     '10' + LE + '20' + LE + '30' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_FieldSretReturn;
+begin
+  AssertRunsOnBoth(
+    'program T;'
+    + 'type '
+    + '  TRec = record A: Integer; S: string; B: Integer; end; '
+    + '  TGen = class '
+    + '    function Make(V: Integer; N: string): TRec; '
+    + '  end; '
+    + '  THold = class '
+    + '    FR: TRec; '
+    + '    FG: TGen; '
+    + '    constructor Create(AG: TGen); '
+    + '  end; '
+    + 'function TGen.Make(V: Integer; N: string): TRec; '
+    + 'begin Result.A := V; Result.S := N; Result.B := V * 2 end; '
+    + 'constructor THold.Create(AG: TGen); '
+    + 'begin inherited Create(); FG := AG; FR := FG.Make(5, ''hi'') end; '
+    + 'var G: TGen; H: THold; '
+    + 'begin '
+    + '  G := TGen.Create(); '
+    + '  H := THold.Create(G); '
+    + '  WriteLn(H.FR.A); '
+    + '  WriteLn(H.FR.S); '
+    + '  WriteLn(H.FR.B); '
+    + '  H.Free(); G.Free() '
+    + 'end.',
+    '5' + LE + 'hi' + LE + '10' + LE, 0);
 end;
 
 initialization

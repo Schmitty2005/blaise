@@ -6871,6 +6871,38 @@ begin
         Self.Emit(#9'movq %rax, (%r15)');
         Self.Emit(#9'popq %r15');
       end
+      else if (Asgn.ResolvedLhsType.Kind = tyRecord) and
+              (Asgn.Expr is TMethodCallExpr) and
+              (TMethodCallExpr(Asgn.Expr).ResolvedMethod <> nil) and
+              (TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType <> nil) and
+              (TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType.Kind = tyRecord) then
+      begin
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand('Self')]));
+        if ISFld.Offset > 0 then
+          Self.Emit(Format(#9'addq $%d, %%rbx', [ISFld.Offset]));
+        Self.EmitRecordFieldReleases(TRecordTypeDesc(Asgn.ResolvedLhsType), '%rbx');
+        Self.EmitMethodSretCall(TMethodCallExpr(Asgn.Expr), '(%rbx)');
+        Self.Emit(#9'popq %rbx');
+      end
+      else if (Asgn.ResolvedLhsType.Kind = tyRecord) and
+              (Asgn.Expr is TFuncCallExpr) and
+              (TFuncCallExpr(Asgn.Expr).ResolvedDecl <> nil) and
+              (TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl).ResolvedReturnType <> nil) and
+              (TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl).ResolvedReturnType.Kind = tyRecord) then
+      begin
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand('Self')]));
+        if ISFld.Offset > 0 then
+          Self.Emit(Format(#9'addq $%d, %%rbx', [ISFld.Offset]));
+        Self.EmitRecordFieldReleases(TRecordTypeDesc(Asgn.ResolvedLhsType), '%rbx');
+        Self.EmitSretCall(
+          FuncSymbolOf(TFuncCallExpr(Asgn.Expr)),
+          TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl),
+          TFuncCallExpr(Asgn.Expr).Args,
+          '(%rbx)');
+        Self.Emit(#9'popq %rbx');
+      end
       else
       begin
         { Non-managed implicit-Self field (integer, float, record, etc.). }
@@ -7744,6 +7776,107 @@ begin
         Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FA.RecordName]));
       Self.EmitInterfaceToFieldSlotsAt(FA.Expr, '%rcx', FA.FieldInfo.Offset,
         FA.FieldInfo.TypeDesc);
+      Exit;
+    end;
+    { Field := MethodCall() where the method returns a record via sret.
+      Compute the field address into %rbx (callee-saved), release managed
+      fields of the old record, then call with %rbx as the sret destination. }
+    if (FA.FieldInfo.TypeDesc.Kind = tyRecord) and
+       (FA.Expr is TMethodCallExpr) and
+       (TMethodCallExpr(FA.Expr).ResolvedMethod <> nil) and
+       (TMethodDecl(TMethodCallExpr(FA.Expr).ResolvedMethod).ResolvedReturnType <> nil) and
+       (TMethodDecl(TMethodCallExpr(FA.Expr).ResolvedMethod).ResolvedReturnType.Kind = tyRecord) then
+    begin
+      Self.Emit(#9'pushq %rbx');
+      if FA.ObjExpr <> nil then
+      begin
+        Self.EmitExprToEax(FA.ObjExpr);
+        Self.Emit(#9'movq %rax, %rbx');
+      end
+      else if FSretFunc and (FA.RecordName = 'Result') then
+        Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand('Result')]))
+      else if FA.IsImplicitSelf then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand('Self')]));
+        if (FA.ImplicitBaseInfo <> nil) and (FA.ImplicitBaseInfo.Offset > 0) then
+          Self.Emit(Format(#9'addq $%d, %%rbx', [FA.ImplicitBaseInfo.Offset]));
+        if FA.IsClassAccess then
+          Self.Emit(#9'movq (%rbx), %rbx');
+      end
+      else if FA.IsClassAccess then
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rbx', [FA.RecordName]));
+      end
+      else if FA.IsVarParam then
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rbx', [FA.RecordName]));
+      end
+      else
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'leaq %s, %%rbx', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rbx', [FA.RecordName]));
+      end;
+      if FA.FieldInfo.Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rbx', [FA.FieldInfo.Offset]));
+      Self.EmitRecordFieldReleases(TRecordTypeDesc(FA.FieldInfo.TypeDesc), '%rbx');
+      Self.EmitMethodSretCall(TMethodCallExpr(FA.Expr), '(%rbx)');
+      Self.Emit(#9'popq %rbx');
+      Exit;
+    end;
+    { Field := FuncCall() where the function returns a record via sret. }
+    if (FA.FieldInfo.TypeDesc.Kind = tyRecord) and
+       (FA.Expr is TFuncCallExpr) and
+       (TFuncCallExpr(FA.Expr).ResolvedDecl <> nil) and
+       (TMethodDecl(TFuncCallExpr(FA.Expr).ResolvedDecl).ResolvedReturnType <> nil) and
+       (TMethodDecl(TFuncCallExpr(FA.Expr).ResolvedDecl).ResolvedReturnType.Kind = tyRecord) then
+    begin
+      Self.Emit(#9'pushq %rbx');
+      if FA.ObjExpr <> nil then
+      begin
+        Self.EmitExprToEax(FA.ObjExpr);
+        Self.Emit(#9'movq %rax, %rbx');
+      end
+      else if FSretFunc and (FA.RecordName = 'Result') then
+        Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand('Result')]))
+      else if FA.IsImplicitSelf then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand('Self')]));
+        if (FA.ImplicitBaseInfo <> nil) and (FA.ImplicitBaseInfo.Offset > 0) then
+          Self.Emit(Format(#9'addq $%d, %%rbx', [FA.ImplicitBaseInfo.Offset]));
+        if FA.IsClassAccess then
+          Self.Emit(#9'movq (%rbx), %rbx');
+      end
+      else if FA.IsClassAccess then
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rbx', [FA.RecordName]));
+      end
+      else
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'leaq %s, %%rbx', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rbx', [FA.RecordName]));
+      end;
+      if FA.FieldInfo.Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rbx', [FA.FieldInfo.Offset]));
+      Self.EmitRecordFieldReleases(TRecordTypeDesc(FA.FieldInfo.TypeDesc), '%rbx');
+      Self.EmitSretCall(
+        FuncSymbolOf(TFuncCallExpr(FA.Expr)),
+        TMethodDecl(TFuncCallExpr(FA.Expr).ResolvedDecl),
+        TFuncCallExpr(FA.Expr).Args,
+        '(%rbx)');
+      Self.Emit(#9'popq %rbx');
       Exit;
     end;
     Self.EmitExprToEax(FA.Expr);
