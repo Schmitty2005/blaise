@@ -7151,6 +7151,7 @@ var
   FAE:   TFieldAccessExpr;
   SSA:   TStaticSubscriptAssign;
   MD:    TMethodDecl;
+  DAElemType: TTypeDesc;
   I:     Integer;
   LThen, LElse, LEnd:    string;
   LCond, LBody:          string;
@@ -8602,23 +8603,39 @@ begin
     if (SSA.ResolvedArrayType <> nil) and
        (SSA.ResolvedArrayType.Kind = tyDynArray) then
     begin
-      { Dynamic array element write: A[I] := V.
-        Data pointer lives directly in the variable slot. }
+      DAElemType := TDynArrayTypeDesc(SSA.ResolvedArrayType).ElementType;
       Self.EmitExprToEax(SSA.ValueExpr);
       Self.Emit(#9'pushq %rax');
-      { Index * elem_size. }
       Self.EmitExprToEax(SSA.IndexExpr);
-      Self.Emit(Format(#9'imulq $%d, %%rax',
-        [TDynArrayTypeDesc(SSA.ResolvedArrayType).ElementType.RawSize()]));
-      { Base pointer into %rcx. }
+      Self.Emit(Format(#9'imulq $%d, %%rax', [DAElemType.RawSize()]));
       if Self.IsLocal(SSA.ArrayName) then
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
       else
         Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [SSA.ArrayName]));
       Self.Emit(#9'addq %rcx, %rax');
       Self.Emit(#9'movq %rax, %rcx');
+      if DAElemType.Kind = tyString then
+      begin
+        Self.Emit(#9'pushq %rcx');
+        Self.Emit(#9'movq 8(%rsp), %rdi');
+        Self.Emit(#9'callq _StringAddRef');
+        Self.Emit(#9'movq (%rsp), %rcx');
+        Self.Emit(#9'movq (%rcx), %rdi');
+        Self.Emit(#9'callq _StringRelease');
+        Self.Emit(#9'popq %rcx');
+      end
+      else if DAElemType.Kind = tyClass then
+      begin
+        Self.Emit(#9'pushq %rcx');
+        Self.Emit(#9'movq 8(%rsp), %rdi');
+        Self.Emit(#9'callq _ClassAddRef');
+        Self.Emit(#9'movq (%rsp), %rcx');
+        Self.Emit(#9'movq (%rcx), %rdi');
+        Self.Emit(#9'callq _ClassRelease');
+        Self.Emit(#9'popq %rcx');
+      end;
       Self.Emit(#9'popq %rax');
-      Self.EmitStoreVar('(%rcx)', TDynArrayTypeDesc(SSA.ResolvedArrayType).ElementType);
+      Self.EmitStoreVar('(%rcx)', DAElemType);
       Exit;
     end;
     { Static array element write. }

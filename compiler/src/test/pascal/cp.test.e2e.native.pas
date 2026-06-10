@@ -325,6 +325,8 @@ type
     procedure TestRun_Native_IntfFieldAsArg;
     { M8b — nil assignment to interface-typed fields (implicit-Self and non-Self). }
     procedure TestRun_Native_IntfFieldNilAssign;
+    { M8b — dynarray element ARC: A[I] := 'new' releases old string at A[I]. }
+    procedure TestRun_Native_DynArrayElemArc_String;
   end;
 
 implementation
@@ -2861,6 +2863,21 @@ const
     end.
     ''';
 
+  SrcDynArrayElemArcString = '''
+    program P;
+    var A: array of String;
+    begin
+      SetLength(A, 2);
+      A[0] := 'first';
+      A[1] := 'second';
+      WriteLn(A[0]);
+      WriteLn(A[1]);
+      A[0] := 'replaced';
+      WriteLn(A[0]);
+      WriteLn(A[1])
+    end.
+    ''';
+
   { Dyn-array field inside a class: the field must be ARC-refcounted on store
     and released when the holder is destroyed (f74e5cc).  Observed by reading an
     element back after the field assignment — a dropped/garbled buffer would
@@ -4790,6 +4807,13 @@ procedure TE2ENativeTests.TestRun_Native_IntfFieldNilAssign;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIntfFieldNilAssign, '99' + LE + 'cleared' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_DynArrayElemArc_String;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcDynArrayElemArcString,
+    'first' + LE + 'second' + LE + 'replaced' + LE + 'second' + LE, 0);
 end;
 
 initialization
