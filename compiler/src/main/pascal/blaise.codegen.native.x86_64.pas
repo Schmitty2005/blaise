@@ -3087,6 +3087,33 @@ begin
       Self.Emit(#9'callq _UpCase');
       Exit;
     end;
+    if SameText(FC.Name, 'ClassCreate') and (FC.Args.Count >= 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ClassCreate');
+      if (FC.ResolvedDecl <> nil) and (FC.Args.Count > 1) then
+      begin
+        Self.Emit(#9'pushq %rax');
+        for SetI := 1 to FC.Args.Count - 1 do
+        begin
+          Self.EmitExprToEax(TASTExpr(FC.Args.Items[SetI]));
+          Self.Emit(#9'pushq %rax');
+        end;
+        for SetI := FC.Args.Count - 1 downto 1 do
+          Self.Emit(Format(#9'popq %s', [SysVArgRegs64[SetI]]));
+        Self.Emit(#9'popq ' + SysVArgRegs64[0]);
+        Self.Emit(Format(#9'callq %s',
+          [NativeMangle(TMethodDecl(FC.ResolvedDecl).OwnerTypeName + '_Create')]));
+      end
+      else if FC.ResolvedDecl <> nil then
+      begin
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(Format(#9'callq %s',
+          [NativeMangle(TMethodDecl(FC.ResolvedDecl).OwnerTypeName + '_Create')]));
+      end;
+      Exit;
+    end;
     if SameText(FC.Name, 'OrdAt') and (FC.Args.Count = 2) then
     begin
       Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
