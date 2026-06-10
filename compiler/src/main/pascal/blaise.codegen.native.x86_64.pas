@@ -4755,13 +4755,13 @@ begin
      (TStringSubscriptExpr(AExpr).StrExpr.ResolvedType.Kind = tyOpenArray) then
   begin
     SAE := TStringSubscriptExpr(AExpr);
-    { Load data pointer from the param slot into %rcx. }
-    Self.Emit(Format(#9'movq %s, %%rcx',
+    Self.Emit(Format(#9'movq %s, %%rax',
       [Self.VarOperand(TIdentExpr(SAE.StrExpr).Name)]));
-    { Index * elem_size → element address. }
+    Self.Emit(#9'pushq %rax');
     Self.EmitExprToEax(SAE.IndexExpr);
     Self.Emit(Format(#9'imulq $%d, %%rax',
       [TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
+    Self.Emit(#9'popq %rcx');
     Self.Emit(#9'addq %rcx, %rax');
     Self.EmitLoadVar('(%rax)',
       TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
@@ -4775,13 +4775,12 @@ begin
      (TStringSubscriptExpr(AExpr).StrExpr.ResolvedType.Kind = tyDynArray) then
   begin
     SAE := TStringSubscriptExpr(AExpr);
-    { Load data pointer. }
     Self.EmitExprToEax(SAE.StrExpr);
-    Self.Emit(#9'movq %rax, %rcx');
-    { Index * elem_size → element address. }
+    Self.Emit(#9'pushq %rax');
     Self.EmitExprToEax(SAE.IndexExpr);
     Self.Emit(Format(#9'imulq $%d, %%rax',
       [TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
+    Self.Emit(#9'popq %rcx');
     Self.Emit(#9'addq %rcx, %rax');
     Self.EmitLoadVar('(%rax)',
       TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
@@ -4795,17 +4794,16 @@ begin
      (TStringSubscriptExpr(AExpr).StrExpr.ResolvedType.Kind = tyStaticArray) then
   begin
     SAE := TStringSubscriptExpr(AExpr);
-    { Base address of array into %rcx. }
-    Self.EmitExprToEax(SAE.StrExpr);  { returns base address for tyStaticArray }
-    Self.Emit(#9'movq %rax, %rcx');
-    { Index into %rax, subtract LowBound, multiply by element size. }
+    Self.EmitExprToEax(SAE.StrExpr);
+    Self.Emit(#9'pushq %rax');
     Self.EmitExprToEax(SAE.IndexExpr);
     if TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound <> 0 then
       Self.Emit(Format(#9'subq $%d, %%rax',
         [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound]));
     Self.Emit(Format(#9'imulq $%d, %%rax',
       [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
-    Self.Emit(#9'addq %rcx, %rax');   { %rax = element address }
+    Self.Emit(#9'popq %rcx');
+    Self.Emit(#9'addq %rcx, %rax');
     Self.EmitLoadVar('(%rax)',
       TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
     Exit;
@@ -4819,8 +4817,9 @@ begin
   begin
     SAE := TStringSubscriptExpr(AExpr);
     Self.EmitExprToEax(SAE.StrExpr);
-    Self.Emit(#9'movq %rax, %rcx');
+    Self.Emit(#9'pushq %rax');
     Self.EmitExprToEax(SAE.IndexExpr);
+    Self.Emit(#9'popq %rcx');
     Self.Emit(#9'addq %rcx, %rax');
     Self.Emit(#9'movzbl (%rax), %eax');
     Exit;
@@ -5180,13 +5179,14 @@ begin
          (SAE.StrExpr.ResolvedType.Kind = tyStaticArray) then
       begin
         Self.EmitExprToEax(SAE.StrExpr);
-        Self.Emit(#9'movq %rax, %rcx');
+        Self.Emit(#9'pushq %rax');
         Self.EmitExprToEax(SAE.IndexExpr);
         if TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound <> 0 then
           Self.Emit(Format(#9'subq $%d, %%rax',
             [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).LowBound]));
         Self.Emit(Format(#9'imulq $%d, %%rax',
           [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
+        Self.Emit(#9'popq %rcx');
         Self.Emit(#9'addq %rcx, %rax');
         Exit;
       end;
@@ -5194,16 +5194,15 @@ begin
          (SAE.StrExpr.ResolvedType.Kind = tyOpenArray) then
       begin
         if (SAE.StrExpr is TIdentExpr) then
-          Self.Emit(Format(#9'movq %s, %%rcx',
+          Self.Emit(Format(#9'movq %s, %%rax',
             [Self.VarOperand(TIdentExpr(SAE.StrExpr).Name)]))
         else
-        begin
           Self.EmitExprToEax(SAE.StrExpr);
-          Self.Emit(#9'movq %rax, %rcx');
-        end;
+        Self.Emit(#9'pushq %rax');
         Self.EmitExprToEax(SAE.IndexExpr);
         Self.Emit(Format(#9'imulq $%d, %%rax',
           [TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
+        Self.Emit(#9'popq %rcx');
         Self.Emit(#9'addq %rcx, %rax');
         Exit;
       end;
@@ -5211,10 +5210,11 @@ begin
          (SAE.StrExpr.ResolvedType.Kind = tyDynArray) then
       begin
         Self.EmitExprToEax(SAE.StrExpr);
-        Self.Emit(#9'movq %rax, %rcx');
+        Self.Emit(#9'pushq %rax');
         Self.EmitExprToEax(SAE.IndexExpr);
         Self.Emit(Format(#9'imulq $%d, %%rax',
           [TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
+        Self.Emit(#9'popq %rcx');
         Self.Emit(#9'addq %rcx, %rax');
         Exit;
       end;

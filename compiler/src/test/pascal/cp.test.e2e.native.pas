@@ -348,6 +348,7 @@ type
     procedure TestRun_Native_RecReturn_Method_RcInt1;
     procedure TestRun_Native_RecReturn_ManagedStaysSret;
     procedure TestRun_Native_RecordSret_OutParam;
+    procedure TestRun_Native_StaticArray_ComputedIndex;
   end;
 
 implementation
@@ -5222,6 +5223,22 @@ begin
     end.
     ''',
     'linux-x86_64' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_StaticArray_ComputedIndex;
+const Src = '''
+    program P;
+    const
+      Names: array[0..3] of string = ('alpha', 'beta', 'gamma', 'delta');
+    var I: Integer;
+    begin
+      for I := 0 to 2 do
+        WriteLn(Names[I + 1])
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'beta' + LE + 'gamma' + LE + 'delta' + LE, 0)
 end;
 
 initialization
