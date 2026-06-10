@@ -1,0 +1,92 @@
+#!/bin/bash
+# Native fixpoint test for the Blaise self-hosting check.
+#
+# Verifies that the native backend (--backend native) is fully
+# self-hosting: a native-compiled compiler can recompile itself
+# with --backend native and produce identical assembly.
+#
+# Steps:
+#   1. Find the QBE-compiled compiler (compiler/target/blaise).
+#   2. stage-1: QBE-compiled compiler emits native assembly.
+#   3. Link stage-1 binary.
+#   4. stage-2: stage-1 native binary emits native assembly.
+#   5. Link stage-2 binary.
+#   6. stage-3: stage-2 native binary emits native assembly.
+#   7. diff stage-2.s stage-3.s  => empty = clean fixpoint.
+#
+# Requires: compiler/target/blaise and compiler/target/blaise_rtl.a
+# must already be built (run the QBE fixpoint or pasbuild compile first).
+
+set -e
+
+if [ ! -f "compiler/src/main/pascal/Blaise.pas" ]; then
+  echo "Run this script from the project root: ./scripts/fixpoint-native.sh" >&2
+  exit 1
+fi
+
+COMPILER="${1:-compiler/target/blaise}"
+if [ ! -x "$COMPILER" ]; then
+  echo "Compiler not found: $COMPILER" >&2
+  echo "Build it first: pasbuild compile -m blaise-compiler --compiler ..." >&2
+  exit 10
+fi
+
+if [ -f compiler/target/blaise_rtl.a ]; then
+  RTL_ARCHIVE=compiler/target/blaise_rtl.a
+elif [ -f runtime/target/blaise_rtl.a ]; then
+  RTL_ARCHIVE=runtime/target/blaise_rtl.a
+else
+  echo "blaise_rtl.a not found — build the runtime first" >&2
+  exit 11
+fi
+
+UNIT_ARGS="--unit-path compiler/src/main/pascal --unit-path runtime/src/main/pascal --unit-path stdlib/src/main/pascal"
+SRC="--source compiler/src/main/pascal/Blaise.pas"
+
+echo "stage-0: $COMPILER"
+
+echo "[1/6] stage-0 -> stage-1 assembly (native)"
+"$COMPILER" $SRC $UNIT_ARGS --backend native --emit-asm > /tmp/fpn_stage1.s 2>/tmp/fpn_stage1.err
+if [ ! -s /tmp/fpn_stage1.s ]; then
+  echo "STAGE1_ASM_FAIL"; head -3 /tmp/fpn_stage1.err; exit 1
+fi
+echo "      stage-1 asm: $(wc -l < /tmp/fpn_stage1.s) lines"
+
+echo "[2/6] link stage-1 binary"
+gcc -o /tmp/fpn_blaise1 /tmp/fpn_stage1.s "$RTL_ARCHIVE" -lm -lpthread 2>/tmp/fpn_gcc1.err || {
+  echo "GCC1_FAIL"; cat /tmp/fpn_gcc1.err; exit 2;
+}
+
+echo "[3/6] stage-1 -> stage-2 assembly (native, 5min timeout)"
+timeout 300 /tmp/fpn_blaise1 $SRC $UNIT_ARGS --backend native --emit-asm > /tmp/fpn_stage2.s 2>/tmp/fpn_stage2.err
+RC=$?
+if [ $RC -eq 124 ]; then echo "STAGE2_TIMEOUT"; exit 4
+elif [ $RC -eq 139 ]; then echo "STAGE2_SEGFAULT"; exit 4
+elif [ $RC -ne 0 ]; then echo "STAGE2_FAIL rc=$RC"; head -3 /tmp/fpn_stage2.err; exit 5
+fi
+echo "      stage-2 asm: $(wc -l < /tmp/fpn_stage2.s) lines"
+
+echo "[4/6] link stage-2 binary"
+gcc -o /tmp/fpn_blaise2 /tmp/fpn_stage2.s "$RTL_ARCHIVE" -lm -lpthread 2>/tmp/fpn_gcc2.err || {
+  echo "GCC2_FAIL"; cat /tmp/fpn_gcc2.err; exit 2;
+}
+
+echo "[5/6] stage-2 -> stage-3 assembly (native, 5min timeout)"
+timeout 300 /tmp/fpn_blaise2 $SRC $UNIT_ARGS --backend native --emit-asm > /tmp/fpn_stage3.s 2>/tmp/fpn_stage3.err
+RC=$?
+if [ $RC -eq 124 ]; then echo "STAGE3_TIMEOUT"; exit 4
+elif [ $RC -eq 139 ]; then echo "STAGE3_SEGFAULT"; exit 4
+elif [ $RC -ne 0 ]; then echo "STAGE3_FAIL rc=$RC"; head -3 /tmp/fpn_stage3.err; exit 5
+fi
+echo "      stage-3 asm: $(wc -l < /tmp/fpn_stage3.s) lines"
+
+echo "[6/6] compare stage-2 vs stage-3"
+DIFFLINES=$(diff /tmp/fpn_stage2.s /tmp/fpn_stage3.s | wc -l)
+if [ $DIFFLINES -eq 0 ]; then
+  echo "NATIVE_FIXPOINT_OK"
+  exit 0
+fi
+
+echo "stage-2 != stage-3 ($DIFFLINES diff lines)"
+diff /tmp/fpn_stage2.s /tmp/fpn_stage3.s | head -20
+exit 6
