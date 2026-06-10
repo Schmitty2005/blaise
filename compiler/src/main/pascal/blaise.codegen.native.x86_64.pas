@@ -1591,15 +1591,29 @@ begin
     Arg := TASTExpr(AArgs.Items[I]);
     if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
     begin
-      { Fabricate a synthetic param descriptor for the interface type. }
       if Arg is TIdentExpr then
       begin
-        Self.Emit(Format(#9'movq %s, %%rax',
-          [Self.IntfObjOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
-        Self.Emit(Format(#9'movq %s, %%rcx',
-          [Self.IntfItabOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
-        Self.Emit(#9'pushq %rax');   { obj }
-        Self.Emit(#9'pushq %rcx');   { itab }
+        if TIdentExpr(Arg).IsImplicitSelf and
+           (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
+            Self.Emit(Format(#9'addq $%d, %%rax',
+              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
+          Self.Emit(#9'movq (%rax), %rcx');
+          Self.Emit(#9'movq 8(%rax), %rdx');
+          Self.Emit(#9'pushq %rcx');
+          Self.Emit(#9'pushq %rdx');
+        end
+        else
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.IntfObjOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
+          Self.Emit(Format(#9'movq %s, %%rcx',
+            [Self.IntfItabOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
+          Self.Emit(#9'pushq %rax');
+          Self.Emit(#9'pushq %rcx');
+        end;
       end
       else
         raise ENativeCodeGenError.Create(
@@ -1619,9 +1633,6 @@ begin
     access, local/global record, var-param) are safe; reject the rest loudly. }
   if (AObjExpr <> nil) and (AObjExpr is TFieldAccessExpr) then
   begin
-    if TFieldAccessExpr(AObjExpr).Base <> nil then
-      raise ENativeCodeGenError.Create(
-        'native backend: nested interface-field receiver in dispatch not supported');
     Self.EmitInterfaceFieldAddr(TFieldAccessExpr(AObjExpr), '%r10');
     Self.Emit(#9'movq 8(%r10), %rax');   { itab }
     Self.Emit(#9'movq (%r10), %r10');    { obj }
@@ -1671,12 +1682,27 @@ begin
     begin
       if Arg is TIdentExpr then
       begin
-        Self.Emit(Format(#9'movq %s, %%rax',
-          [Self.IntfObjOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
-        Self.Emit(Format(#9'movq %s, %%rcx',
-          [Self.IntfItabOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
-        Self.Emit(#9'pushq %rax');   { obj }
-        Self.Emit(#9'pushq %rcx');   { itab }
+        if TIdentExpr(Arg).IsImplicitSelf and
+           (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
+            Self.Emit(Format(#9'addq $%d, %%rax',
+              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
+          Self.Emit(#9'movq (%rax), %rcx');
+          Self.Emit(#9'movq 8(%rax), %rdx');
+          Self.Emit(#9'pushq %rcx');
+          Self.Emit(#9'pushq %rdx');
+        end
+        else
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.IntfObjOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
+          Self.Emit(Format(#9'movq %s, %%rcx',
+            [Self.IntfItabOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
+          Self.Emit(#9'pushq %rax');
+          Self.Emit(#9'pushq %rcx');
+        end;
       end
       else
         raise ENativeCodeGenError.Create(
