@@ -350,6 +350,14 @@ type
     procedure TestRun_Native_RecReturn_ManagedStaysSret;
     procedure TestRun_Native_RecordSret_OutParam;
     procedure TestRun_Native_StaticArray_ComputedIndex;
+    { Metaclass (class-of) values: bare class name in expression position must
+      emit the typeinfo address; ClassCreate constructs through it. }
+    procedure TestRun_Native_Metaclass_BareClassRef;
+    procedure TestRun_Native_MultiUnit_Metaclass;
+    { Open-array literal that is NOT the first argument: the literal's stack
+      block must be hoisted before the argument pushes, or the popq sequence
+      pops from inside the block and the callee sees shifted registers. }
+    procedure TestRun_Native_OpenArrayLiteral_AfterOtherArgs;
   end;
 
 implementation
@@ -5347,6 +5355,163 @@ const Src = '''
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src, 'beta' + LE + 'gamma' + LE + 'delta' + LE, 0)
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Metaclass_BareClassRef;
+const Src = '''
+    program P;
+    type
+      TFoo = class
+      public
+        constructor Create;
+        procedure DoIt; virtual;
+      end;
+      TBar = class(TFoo)
+      public
+        procedure DoIt; override;
+      end;
+      TFooClass = class of TFoo;
+    var GCount: Integer;
+    { The ctor body must do real work: a trivial body leaves the allocated
+      instance untouched in %rax and masks a missing save/restore around
+      the ClassCreate ctor call. }
+    constructor TFoo.Create;
+    begin
+      GCount := GCount + Length(IntToStr(21))
+    end;
+    procedure TFoo.DoIt;
+    begin
+      WriteLn('foo')
+    end;
+    procedure TBar.DoIt;
+    begin
+      WriteLn('bar')
+    end;
+    procedure Run(AClass: TFooClass);
+    var F: TFoo;
+    begin
+      F := ClassCreate(AClass);
+      F.DoIt();
+      F.Free()
+    end;
+    var C: TFooClass;
+    begin
+      C := TFoo;
+      Run(C);
+      Run(TBar);
+      if C = TFoo then
+        WriteLn('same')
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'foo' + LE + 'bar' + LE + 'same' + LE, 0)
+end;
+
+procedure TE2ENativeTests.TestRun_Native_MultiUnit_Metaclass;
+var
+  UnitSrc, ProgSrc, NOut, QOut: string;
+  NCode, QCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  { Mirrors the RegisterTest pattern in blaise.testing: the unit holds a
+    registry of metaclass values; the program registers its class from the
+    _init path and the unit constructs it later via ClassCreate. }
+  UnitSrc := '''
+    unit mu_mc;
+    interface
+    type
+      TWidget = class
+      public
+        FName: string;
+        constructor Create(AName: string);
+        function Describe: string; virtual;
+      end;
+      TWidgetClass = class of TWidget;
+    procedure RegisterWidget(AClass: TWidgetClass);
+    function MakeRegistered(AName: string): TWidget;
+    implementation
+    var GClass: TWidgetClass;
+    constructor TWidget.Create(AName: string);
+    begin
+      FName := AName + '!'
+    end;
+    function TWidget.Describe: string;
+    begin
+      Result := 'widget:' + FName
+    end;
+    procedure RegisterWidget(AClass: TWidgetClass);
+    begin
+      GClass := AClass
+    end;
+    function MakeRegistered(AName: string): TWidget;
+    begin
+      Result := ClassCreate(GClass, AName)
+    end;
+    end.
+    ''';
+  ProgSrc := '''
+    program P;
+    uses mu_mc;
+    type
+      TGadget = class(TWidget)
+      public
+        function Describe: string; override;
+      end;
+    function TGadget.Describe: string;
+    begin
+      Result := 'gadget:' + FName
+    end;
+    var W: TWidget;
+    begin
+      RegisterWidget(TGadget);
+      W := MakeRegistered('g');
+      WriteLn(W.Describe());
+      W.Free();
+      RegisterWidget(TWidget);
+      W := MakeRegistered('w');
+      WriteLn(W.Describe());
+      W.Free();
+    end.
+    ''';
+  AssertTrue('native compile+run',
+    CompileAndRunWithUnitNative('mu_mc', UnitSrc, ProgSrc, NOut, NCode));
+  AssertTrue('qbe compile+run',
+    CompileAndRunWithUnit('mu_mc', UnitSrc, ProgSrc, QOut, QCode));
+  AssertEquals('stdout parity', QOut, NOut);
+  AssertEquals('exit parity', QCode, NCode);
+  AssertEquals('value', 'gadget:g!' + LE + 'widget:w!' + LE, NOut);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_OpenArrayLiteral_AfterOtherArgs;
+const Src = '''
+    program P;
+    procedure Inner(const AArgs: array of string);
+    var I: Integer;
+    begin
+      for I := 0 to High(AArgs) do
+        WriteLn('arg:', AArgs[I])
+    end;
+    procedure Outer(const AExe: string; const AArgs: array of string;
+                    ATail: Integer);
+    begin
+      WriteLn('exe:', AExe);
+      Inner(AArgs);
+      WriteLn('tail:', ATail)
+    end;
+    function MakeName(N: Integer): string;
+    begin
+      Result := 'file' + IntToStr(N)
+    end;
+    begin
+      Outer('gcc', ['-o', MakeName(1), MakeName(2)], 7)
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src,
+    'exe:gcc' + LE + 'arg:-o' + LE + 'arg:file1' + LE + 'arg:file2' + LE +
+    'tail:7' + LE, 0)
 end;
 
 initialization

@@ -30,6 +30,18 @@ uses
   blaise.codegen.native.backend, blaise.codegen.target;
 
 type
+  { Per-call bookkeeping for hoisted open-array literal arguments — see
+    HoistOALitArgs.  Frames nest: a call emitted while evaluating another
+    call's arguments pushes its own frame. }
+  TOALCallFrame = class
+  public
+    Depths: TList<Integer>;   { per-arg saved-pointer depth; -1 = not hoisted }
+    Total: Integer;           { bytes of blocks + saved pointers on the stack }
+    Pushed: Integer;          { bytes pushed since the hoist pre-pass }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
   TX86_64Backend = class(TNativeBackend)
   protected
     FLabelCount: Integer;       { monotonic source of unique local labels }
@@ -101,7 +113,9 @@ type
     FExcFrameNext: Integer;
     FFinallyStack: TList<TCompoundStmt>;
     FForEndNext: Integer;
-    FMethodArgExtraStack: Integer;
+    { Stack of open-array-literal call frames; top = innermost call currently
+      having its arguments pushed.  Owned (frames freed by EndCallArgs). }
+    FOALFrames: TList<TOALCallFrame>;
     { Number of exc frame global slots to emit for the program main body.
       Zero when no try stmts appear in the top-level program statements. }
     FProgExcFrameCount: Integer;
@@ -155,8 +169,9 @@ type
     { Emit string literal blobs in .rodata. Called from EmitDataSection. }
     procedure EmitStrLitSection;
     { Emit an immortal class-name string blob in the data section and return
-      the label+12 expression that points to the character data. }
-    function EmitClassNameString(const AClassName: string): string;
+      the label+12 expression that points to the character data.  ASymName
+      names the data symbol; AText is the runtime-visible string content. }
+    function EmitClassNameString(const ASymName, AText: string): string;
     { Emit the body of one $_FieldCleanup_<T> function.  Calls the
       destructor (if any), releases ARC-managed fields, then returns. }
     procedure EmitFieldCleanupFn(const AMangledName: string;
@@ -391,6 +406,34 @@ type
       var/out params push one value; interface params push two (itab first, then
       obj — reversed so the pop loop restores them in the correct register order). }
     procedure EmitMethodArgPush(APar: TMethodParam; AArg: TASTExpr);
+    { Pre-pass for open-array literal arguments (phase A of the two-phase call
+      protocol).  EmitOpenArrayLiteral moves %rsp, so a literal emitted between
+      two argument-slot pushes leaves its element block in the middle of the
+      pushed slots and the popq sequence that loads the argument registers pops
+      from inside the block.  HoistOALitArgs emits every literal block before
+      any slot push and pushes each block's data pointer right behind it.
+      ADepths gets one entry per argument: the stack depth of the saved data
+      pointer for hoisted literals, -1 otherwise.  Returns the total bytes
+      added (blocks + saved pointers); the call site reclaims them with addq
+      AFTER the call.  Element expressions of hoisted literals are evaluated
+      before all other arguments. }
+    function HoistOALitArgs(AParams: TObjectList; AArgs: TObjectList;
+                            ADepths: TList<Integer>): Integer;
+    { Phase B — push the slot(s) for one argument.  Hoisted literals reload
+      their data pointer from the phase-A region: the saved pointer sits
+      (AOALTotal - AOALDepth + APushed) bytes above the current %rsp, where
+      APushed counts every byte pushed since HoistOALitArgs returned. }
+    procedure EmitArgPush(APar: TMethodParam; AArg: TASTExpr;
+                          AOALTotal, AOALDepth: Integer; var APushed: Integer);
+    { Frame-stack wrappers around HoistOALitArgs/EmitArgPush for the standard
+      push-loop call sites.  BeginCallArgs runs the hoist pre-pass and pushes
+      a frame; PushCallArg pushes one argument's slot(s) (AIndex = position in
+      the original argument list); EndCallArgs emits the addq that reclaims
+      the hoisted blocks (place it where the post-call stack cleanup belongs)
+      and pops the frame. }
+    procedure BeginCallArgs(AParams: TObjectList; AArgs: TObjectList);
+    procedure PushCallArg(APar: TMethodParam; AArg: TASTExpr; AIndex: Integer);
+    procedure EndCallArgs;
     { Return the total number of integer register slots consumed by AParams.
       Most params = 1 slot; interface params = 2 slots (obj + itab); open-array
       params = 2 slots (ptr + high).  Used by pop loops so they count slots, not
@@ -426,6 +469,20 @@ const
     ('%dil', '%sil', '%dl', '%cl', '%r8b', '%r9b');
   SysVArgRegs16: array[0..5] of string =
     ('%di', '%si', '%dx', '%cx', '%r8w', '%r9w');
+
+constructor TOALCallFrame.Create;
+begin
+  inherited Create();
+  Depths := TList<Integer>.Create();
+  Total := 0;
+  Pushed := 0;
+end;
+
+destructor TOALCallFrame.Destroy;
+begin
+  Depths.Free();
+  inherited Destroy();
+end;
 
 { ------------------------------------------------------------------ }
 { Integer-family width / signedness helpers                            }
@@ -520,6 +577,7 @@ begin
   FBreakExcDepths     := TStack<Integer>.Create();
   FContinueExcDepths  := TStack<Integer>.Create();
   FFinallyStack       := TList<TCompoundStmt>.Create();
+  FOALFrames          := TList<TOALCallFrame>.Create();
   FFrame          := nil;
   FFrameTypes     := nil;
   FFrameSize      := 0;
@@ -538,6 +596,7 @@ destructor TX86_64Backend.Destroy;
 begin
   Self.ClearFrame();
   FUnitInitNames.Free();
+  FOALFrames.Free();
   FFinallyStack.Free();
   FContinueExcDepths.Free();
   FBreakExcDepths.Free();
@@ -1174,26 +1233,29 @@ begin
 end;
 
 { Emit an immortal class-name string blob and return the label+12 reference
-  (the pointer to the character data, past the 12-byte ARC/length header). }
-function TX86_64Backend.EmitClassNameString(const AClassName: string): string;
+  (the pointer to the character data, past the 12-byte ARC/length header).
+  ASymName names the data symbol (may be unit-prefixed to avoid link
+  collisions); AText is the string content — the bare class/method name
+  that ClassName/TestClassName must observe at runtime. }
+function TX86_64Backend.EmitClassNameString(const ASymName, AText: string): string;
 var
   Mangled: string;
   Len:     Integer;
 begin
-  Mangled := NativeMangle(AClassName);
+  Mangled := NativeMangle(ASymName);
   Result  := '__cn_' + Mangled + ' + 12';
   { Idempotent: skip if already emitted (MethodAddress and class section may
     both request the same name string). }
   if FClassNameEmitted.ContainsKey(Mangled) then
     Exit;
   FClassNameEmitted.Add(Mangled, True);
-  Len := Length(AClassName);
+  Len := Length(AText);
   Self.Emit('.balign 4');
   Self.Emit('__cn_' + Mangled + ':');
   Self.Emit(#9'.long -1');
   Self.Emit(Format(#9'.long %d', [Len]));
   Self.Emit(Format(#9'.long %d', [Len]));
-  Self.Emit(Format(#9'.ascii "%s"', [AClassName]));
+  Self.Emit(Format(#9'.ascii "%s"', [AText]));
   Self.Emit(#9'.byte 0');
 end;
 
@@ -1370,8 +1432,8 @@ begin
   Self.Emit('.data');
   if EmitSys then
   begin
-    Self.EmitClassNameString('TObject');
-    Self.EmitClassNameString('TCustomAttribute');
+    Self.EmitClassNameString('TObject', 'TObject');
+    Self.EmitClassNameString('TCustomAttribute', 'TCustomAttribute');
   end;
 
   { User class data: name strings, method tables, typeinfo, vtables. }
@@ -1385,9 +1447,10 @@ begin
     CD := TClassTypeDef(TD.Def);
     CSym := Self.ClassSymName(TD.Name);
 
-    { Class-name string blob — use the unit-prefixed name so __cn_ matches
-      the typeinfo class-name reference. }
-    Self.EmitClassNameString(CSym);
+    { Class-name string blob — the symbol uses the unit-prefixed name so
+      __cn_ matches the typeinfo class-name reference, but the content is
+      the bare class name (what ClassName must return at runtime). }
+    Self.EmitClassNameString(CSym, TD.Name);
 
     { Published-method table: count, then (nameref, codeptr) pairs }
     PubCount := 0;
@@ -1401,7 +1464,7 @@ begin
       begin
         MD := TMethodDecl(CD.Methods.Items[J]);
         if MD.IsPublished then
-          Self.EmitClassNameString(MD.Name);
+          Self.EmitClassNameString(MD.Name, MD.Name);
       end;
       Self.Emit('.balign 8');
       Self.Emit('.globl methods_' + CSym);
@@ -1424,7 +1487,7 @@ begin
   for I := 0 to AGenericInstances.Count - 1 do
   begin
     GI := TGenericInstance(AGenericInstances.Items[I]);
-    Self.EmitClassNameString(Self.ClassSymName(GI.TypeName));
+    Self.EmitClassNameString(Self.ClassSymName(GI.TypeName), GI.TypeName);
   end;
 
   { Typeinfo blocks — must come after all class-name strings are emitted.
@@ -3294,17 +3357,16 @@ begin
     if FC.IsImplicitSelfMethod and (FC.ResolvedDecl <> nil) then
     begin
       MD := TMethodDecl(FC.ResolvedDecl);
-      FMethodArgExtraStack := 0;
+      Self.BeginCallArgs(MD.Params, FC.Args);
       for I := 0 to FC.Args.Count - 1 do
-        Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
-          TASTExpr(FC.Args.Items[I]));
+        Self.PushCallArg(TMethodParam(MD.Params.Items[I]),
+          TASTExpr(FC.Args.Items[I]), I);
       Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
       for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
         Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
       Self.Emit(#9'movq %r10, %rdi');
       Self.Emit(#9'callq ' + FuncSymbolOf(FC));
-      if FMethodArgExtraStack > 0 then
-        Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+      Self.EndCallArgs();
       Self.EmitSretArgReleases(FC.Args);
       Exit;
     end;
@@ -3547,6 +3609,15 @@ begin
 
   if AExpr is TIdentExpr then
   begin
+    if TIdentExpr(AExpr).IsMetaclassRef then
+    begin
+      { Bare class type identifier used as a value — the metaclass value IS
+        the typeinfo address (same pointer vtable[0] holds at runtime),
+        mirroring the QBE backend's `copy $typeinfo_<T>`. }
+      Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rax',
+        [Self.ClassSymName(TIdentExpr(AExpr).Name)]));
+      Exit;
+    end;
     if TIdentExpr(AExpr).IsImplicitSelfMethod and
        (TIdentExpr(AExpr).ImplicitMethodDecl <> nil) then
     begin
@@ -4050,9 +4121,13 @@ begin
       Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
       Self.Emit(#9'movq %rax, %rdi');
       Self.Emit(#9'callq _ClassCreate');
+      { The constructor is a plain procedure (no Result) — it does NOT
+        return Self in %rax.  Keep the _ClassCreate result in callee-saved
+        %rbx across the ctor call, mirroring the direct constructor path. }
       if (FC.ResolvedDecl <> nil) and (FC.Args.Count > 1) then
       begin
-        Self.Emit(#9'pushq %rax');
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(#9'movq %rax, %rbx');
         for SetI := 1 to FC.Args.Count - 1 do
         begin
           Self.EmitExprToEax(TASTExpr(FC.Args.Items[SetI]));
@@ -4060,15 +4135,23 @@ begin
         end;
         for SetI := FC.Args.Count - 1 downto 1 do
           Self.Emit(Format(#9'popq %s', [SysVArgRegs64[SetI]]));
-        Self.Emit(#9'popq ' + SysVArgRegs64[0]);
+        Self.Emit(#9'movq %rbx, %rdi');
         Self.Emit(Format(#9'callq %s',
-          [NativeMangle(TMethodDecl(FC.ResolvedDecl).OwnerTypeName + '_Create')]));
+          [MethodEmitNameNative(TMethodDecl(FC.ResolvedDecl),
+            TMethodDecl(FC.ResolvedDecl).OwnerTypeName, 'Create')]));
+        Self.Emit(#9'movq %rbx, %rax');
+        Self.Emit(#9'popq %rbx');
       end
       else if FC.ResolvedDecl <> nil then
       begin
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(#9'movq %rax, %rbx');
         Self.Emit(#9'movq %rax, %rdi');
         Self.Emit(Format(#9'callq %s',
-          [NativeMangle(TMethodDecl(FC.ResolvedDecl).OwnerTypeName + '_Create')]));
+          [MethodEmitNameNative(TMethodDecl(FC.ResolvedDecl),
+            TMethodDecl(FC.ResolvedDecl).OwnerTypeName, 'Create')]));
+        Self.Emit(#9'movq %rbx, %rax');
+        Self.Emit(#9'popq %rbx');
       end;
       Exit;
     end;
@@ -4546,18 +4629,17 @@ begin
           [TRecordTypeDesc(MD.ResolvedReturnType).TotalSize()]));
         Self.Emit(#9'callq memset');
         Self.Emit(#9'leaq (%rsp), %r10');
-        FMethodArgExtraStack := 0;
+        Self.BeginCallArgs(MD.Params, FC.Args);
         for I := 0 to FC.Args.Count - 1 do
-          Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
-            TASTExpr(FC.Args.Items[I]));
+          Self.PushCallArg(TMethodParam(MD.Params.Items[I]),
+            TASTExpr(FC.Args.Items[I]), I);
         Self.Emit(Format(#9'movq %s, %%r11', [Self.VarOperand('Self')]));
         for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
           Self.Emit(#9'popq ' + SysVArgRegs64[I + 2]);
         Self.Emit(#9'movq %r11, %rsi');
         Self.Emit(#9'movq %r10, %rdi');
         Self.Emit(#9'callq ' + FuncSymbolOf(FC));
-        if FMethodArgExtraStack > 0 then
-          Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+        Self.EndCallArgs();
       end
       else
         Self.EmitSretCall(FuncSymbolOf(FC), MD, FC.Args, '(%rsp)', False);
@@ -4567,17 +4649,16 @@ begin
     if FC.IsImplicitSelfMethod then
     begin
       MD := TMethodDecl(FC.ResolvedDecl);
-      FMethodArgExtraStack := 0;
+      Self.BeginCallArgs(MD.Params, FC.Args);
       for I := 0 to FC.Args.Count - 1 do
-        Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
-          TASTExpr(FC.Args.Items[I]));
+        Self.PushCallArg(TMethodParam(MD.Params.Items[I]),
+          TASTExpr(FC.Args.Items[I]), I);
       Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
       for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
         Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
       Self.Emit(#9'movq %r10, %rdi');
       Self.Emit(#9'callq ' + FuncSymbolOf(FC));
-      if FMethodArgExtraStack > 0 then
-        Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+      Self.EndCallArgs();
       Self.EmitSretArgReleases(FC.Args);
       if FC.ResolvedType <> nil then
         Self.EmitNarrowToType(FC.ResolvedType);
@@ -5657,16 +5738,15 @@ begin
       begin
         Self.Emit(#9'pushq %rbx');
         Self.Emit(#9'movq %rax, %rbx');
-        FMethodArgExtraStack := 0;
+        Self.BeginCallArgs(MD.Params, ACall.Args);
         for I := 0 to ACall.Args.Count - 1 do
-          Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
-            TASTExpr(ACall.Args.Items[I]));
+          Self.PushCallArg(TMethodParam(MD.Params.Items[I]),
+            TASTExpr(ACall.Args.Items[I]), I);
         for I := UserSlots - 1 downto 0 do
           Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
         Self.Emit(#9'movq %rbx, %rdi');
         Self.Emit(#9'callq ' + Sym);
-        if FMethodArgExtraStack > 0 then
-          Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+        Self.EndCallArgs();
         Self.Emit(#9'movq %rbx, %rax');
         Self.Emit(#9'popq %rbx');
       end
@@ -5726,11 +5806,11 @@ begin
 
   if TotalSlots <= 6 then
   begin
-    FMethodArgExtraStack := 0;
+    Self.BeginCallArgs(MD.Params, ACall.Args);
     for I := 0 to ACall.Args.Count - 1 do
     begin
       Arg := TASTExpr(ACall.Args.Items[I]);
-      Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]), Arg);
+      Self.PushCallArg(TMethodParam(MD.Params.Items[I]), Arg, I);
     end;
 
     if ACall.ObjectName <> '' then
@@ -5776,8 +5856,7 @@ begin
     end
     else
       Self.Emit(#9'callq ' + Sym);
-    if FMethodArgExtraStack > 0 then
-      Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+    Self.EndCallArgs();
   end
   else
   begin
@@ -5964,13 +6043,13 @@ begin
   else if (APar <> nil) and APar.IsOpenArray then
   begin
     if AArg is TArrayLiteralExpr then
-    begin
-      FMethodArgExtraStack := FMethodArgExtraStack +
-        Self.EmitOpenArrayLiteral(TArrayLiteralExpr(AArg));
-      Self.Emit(#9'pushq %rax');
-      Self.Emit(Format(#9'pushq $%d',
-        [TArrayLiteralExpr(AArg).Elements.Count - 1]));
-    end
+      { An open-array literal emitted here would subq its element block in the
+        middle of the slot-push sequence and break the caller's popq order.
+        Call sites must hoist literals via HoistOALitArgs and push them with
+        EmitArgPush. }
+      raise ENativeCodeGenError.Create(
+        'native backend: open-array literal argument reached EmitMethodArgPush'
+        + ' — call site must hoist it via HoistOALitArgs')
     else if (AArg is TIdentExpr) and
             (TIdentExpr(AArg).ResolvedType <> nil) and
             (TIdentExpr(AArg).ResolvedType.Kind = tyStaticArray) then
@@ -6107,11 +6186,11 @@ begin
   if TotalSlots <= 6 then
   begin
     { ≤6 total slots: push/pop strategy (Self in %rdi, args in %rsi..%r9). }
-    FMethodArgExtraStack := 0;
+    Self.BeginCallArgs(MD.Params, ACall.Args);
     for I := 0 to ACall.Args.Count - 1 do
     begin
       Arg := TASTExpr(ACall.Args.Items[I]);
-      Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]), Arg);
+      Self.PushCallArg(TMethodParam(MD.Params.Items[I]), Arg, I);
     end;
 
     if ACall.IsImplicitSelf and (ACall.ImplicitBaseInfo <> nil) then
@@ -6241,9 +6320,9 @@ begin
     Self.Emit(#9'callq ' + Sym);
 
   if TotalSlots > 6 then
-    Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
-  if (TotalSlots <= 6) and (FMethodArgExtraStack > 0) then
-    Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+    Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]))
+  else
+    Self.EndCallArgs();
   Self.EmitSretArgReleases(ACall.Args);
 end;
 
@@ -6260,11 +6339,11 @@ begin
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
 
   { Evaluate args left-to-right and push them. }
-  FMethodArgExtraStack := 0;
+  Self.BeginCallArgs(MD.Params, ACall.Args);
   for I := 0 to ACall.Args.Count - 1 do
   begin
     Par := TMethodParam(MD.Params.Items[I]);
-    Self.EmitMethodArgPush(Par, TASTExpr(ACall.Args.Items[I]));
+    Self.PushCallArg(Par, TASTExpr(ACall.Args.Items[I]), I);
   end;
 
   { Self is the current method's Self slot. }
@@ -6275,8 +6354,7 @@ begin
     Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
   Self.Emit(#9'movq %r10, %rdi');
   Self.Emit(#9'callq ' + Sym);
-  if FMethodArgExtraStack > 0 then
-    Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+  Self.EndCallArgs();
 
   { A value-returning parent stores its result into the current Result slot,
     so `Result := ...` is unnecessary for `inherited F;` to set Result. }
@@ -8164,6 +8242,13 @@ begin
       Self.Emit(#9'callq _RemoveDir');
       Exit;
     end;
+    if SameText(PC.Name, 'ForceDirectories') and (PC.Args.Count = 1) then
+    begin
+      Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+      Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ForceDirectories');
+      Exit;
+    end;
     if SameText(PC.Name, 'WriteFile') and (PC.Args.Count = 2) then
     begin
       Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
@@ -8241,17 +8326,16 @@ begin
     if PC.IsImplicitSelfMethod and (PC.ResolvedDecl <> nil) then
     begin
       MD := TMethodDecl(PC.ResolvedDecl);
-      FMethodArgExtraStack := 0;
+      Self.BeginCallArgs(MD.Params, PC.Args);
       for I := 0 to PC.Args.Count - 1 do
-        Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
-          TASTExpr(PC.Args.Items[I]));
+        Self.PushCallArg(TMethodParam(MD.Params.Items[I]),
+          TASTExpr(PC.Args.Items[I]), I);
       Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
       for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
         Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
       Self.Emit(#9'movq %r10, %rdi');
       Self.Emit(#9'callq ' + FuncSymbolFromDecl(MD));
-      if FMethodArgExtraStack > 0 then
-        Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+      Self.EndCallArgs();
       Self.EmitSretArgReleases(PC.Args);
       Exit;
     end;
@@ -9166,6 +9250,90 @@ begin
   Exit(TotalSz);
 end;
 
+function TX86_64Backend.HoistOALitArgs(AParams: TObjectList;
+  AArgs: TObjectList; ADepths: TList<Integer>): Integer;
+var
+  I: Integer;
+  P: TMethodParam;
+  Arg: TASTExpr;
+begin
+  Result := 0;
+  if AArgs = nil then Exit;
+  for I := 0 to AArgs.Count - 1 do
+  begin
+    if (AParams = nil) or (I >= AParams.Count) or
+       not TMethodParam(AParams.Items[I]).IsOpenArray or
+       not (TASTExpr(AArgs.Items[I]) is TArrayLiteralExpr) then
+    begin
+      ADepths.Add(-1);
+      Continue;
+    end;
+    Arg := TASTExpr(AArgs.Items[I]);
+    Result := Result + Self.EmitOpenArrayLiteral(TArrayLiteralExpr(Arg));
+    Self.Emit(#9'pushq %rax');
+    Result := Result + 8;
+    ADepths.Add(Result);
+  end;
+end;
+
+procedure TX86_64Backend.EmitArgPush(APar: TMethodParam; AArg: TASTExpr;
+  AOALTotal, AOALDepth: Integer; var APushed: Integer);
+begin
+  if AOALDepth >= 0 then
+  begin
+    Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+      [AOALTotal - AOALDepth + APushed]));
+    Self.Emit(#9'pushq %rax');
+    Self.Emit(Format(#9'pushq $%d',
+      [TArrayLiteralExpr(AArg).Elements.Count - 1]));
+    APushed := APushed + 16;
+    Exit;
+  end;
+  Self.EmitMethodArgPush(APar, AArg);
+  if (APar <> nil) and (APar.IsOpenArray or
+     ((APar.ResolvedType <> nil) and (APar.ResolvedType.Kind = tyInterface))) then
+    APushed := APushed + 16
+  else
+    APushed := APushed + 8;
+end;
+
+procedure TX86_64Backend.BeginCallArgs(AParams: TObjectList; AArgs: TObjectList);
+var
+  F: TOALCallFrame;
+begin
+  F := TOALCallFrame.Create();
+  F.Total := Self.HoistOALitArgs(AParams, AArgs, F.Depths);
+  FOALFrames.Add(F);
+end;
+
+procedure TX86_64Backend.PushCallArg(APar: TMethodParam; AArg: TASTExpr;
+  AIndex: Integer);
+var
+  F: TOALCallFrame;
+  Depth: Integer;
+  Pushed: Integer;
+begin
+  F := FOALFrames.Get(FOALFrames.Count - 1);
+  if AIndex < F.Depths.Count then
+    Depth := F.Depths.Get(AIndex)
+  else
+    Depth := -1;
+  Pushed := F.Pushed;
+  Self.EmitArgPush(APar, AArg, F.Total, Depth, Pushed);
+  F.Pushed := Pushed;
+end;
+
+procedure TX86_64Backend.EndCallArgs;
+var
+  F: TOALCallFrame;
+begin
+  F := FOALFrames.Get(FOALFrames.Count - 1);
+  FOALFrames.Delete(FOALFrames.Count - 1);
+  if F.Total > 0 then
+    Self.Emit(Format(#9'addq $%d, %%rsp', [F.Total]));
+  F.Free();
+end;
+
 { Emit a direct call.  SysV AMD64: integer args in rdi/rsi/rdx/rcx/r8/r9;
   float args in xmm0..xmm5 (independent counters).  Stack args (args 7+ in
   total, after registers are exhausted) go right-to-left.  For M6 the common
@@ -9189,6 +9357,9 @@ var
   AllocSz, SlotOff: Integer;
   ExtraStackBytes: Integer;
   CleanUp:        Integer;
+  OALD:           TList<Integer>;
+  OALTotal:       Integer;
+  OALPushed:      Integer;
 begin
   { Detect whether any arg is float-typed.
     Also compute SlotCount: open-array args expand to 2 register slots each. }
@@ -9218,6 +9389,17 @@ begin
 
   ExtraStackBytes := 0;
 
+  { Hoist open-array literal blocks before any slot push / slot store (see
+    HoistOALitArgs).  The reclaim addq after the call comes from
+    ExtraStackBytes. }
+  OALD := TList<Integer>.Create();
+  if ADecl <> nil then
+    OALTotal := Self.HoistOALitArgs(ADecl.Params, AArgs, OALD)
+  else
+    OALTotal := Self.HoistOALitArgs(nil, AArgs, OALD);
+  ExtraStackBytes := ExtraStackBytes + OALTotal;
+  OALPushed := 0;
+
   if (not HasFloat) and (SlotCount <= 6) then
   begin
     { Pure integer call with ≤6 slots: push/pop strategy.
@@ -9244,6 +9426,7 @@ begin
             [ADecl.CapturedVars.Strings[I]]));
           Self.Emit(#9'pushq %rax');
         end;
+        OALPushed := OALPushed + 8;
       end;
 
     for I := 0 to AArgs.Count - 1 do
@@ -9257,8 +9440,9 @@ begin
       begin
         if Arg is TArrayLiteralExpr then
         begin
-          ExtraStackBytes := ExtraStackBytes +
-            Self.EmitOpenArrayLiteral(TArrayLiteralExpr(Arg));
+          { Hoisted in the pre-pass — reload the saved data pointer. }
+          Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+            [OALTotal - OALD.Get(I) + OALPushed]));
           Self.Emit(#9'pushq %rax');
           Self.Emit(Format(#9'pushq $%d',
             [TArrayLiteralExpr(Arg).Elements.Count - 1]));
@@ -9342,6 +9526,13 @@ begin
         Self.EmitExprToEax(Arg);
         Self.Emit(#9'pushq %rax');
       end;
+      { Track bytes pushed so far — hoisted-literal reloads above are
+        %rsp-relative.  Mirrors the slot widths of the branches. }
+      if IsOA or ((not IsVar) and (ParamType <> nil) and
+                  (ParamType.Kind = tyInterface)) then
+        OALPushed := OALPushed + 16
+      else
+        OALPushed := OALPushed + 8;
     end;
 
     for I := SlotCount - 1 downto 0 do
@@ -9396,8 +9587,10 @@ begin
       begin
         if Arg is TArrayLiteralExpr then
         begin
-          ExtraStackBytes := ExtraStackBytes +
-            Self.EmitOpenArrayLiteral(TArrayLiteralExpr(Arg));
+          { Hoisted in the pre-pass — the saved data pointer sits above the
+            slot block allocated by the subq just before this loop. }
+          Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+            [AllocSz + OALTotal - OALD.Get(I)]));
           Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
           Inc(SlotOff, 8);
           Self.Emit(Format(#9'movq $%d, %d(%%rsp)',
@@ -9632,6 +9825,7 @@ begin
   if ExtraStackBytes > 0 then
     Self.Emit(Format(#9'addq $%d, %%rsp', [ExtraStackBytes]));
   Self.EmitSretArgReleases(AArgs);
+  OALD.Free();
 end;
 
 procedure TX86_64Backend.EmitSretArgReleases(AArgs: TObjectList);
@@ -10092,11 +10286,11 @@ begin
     Self.Emit(Format(#9'movq $%d, %%rdx',
       [TRecordTypeDesc(MD.ResolvedReturnType).TotalSize()]));
     Self.Emit(#9'callq memset');
-    FMethodArgExtraStack := 0;
+    Self.BeginCallArgs(MD.Params, ACall.Args);
     for I := 0 to ACall.Args.Count - 1 do
     begin
       Arg := TASTExpr(ACall.Args.Items[I]);
-      Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]), Arg);
+      Self.PushCallArg(TMethodParam(MD.Params.Items[I]), Arg, I);
     end;
     if ACall.ObjectName <> '' then
     begin
@@ -10139,8 +10333,7 @@ begin
     end
     else
       Self.Emit(#9'callq ' + Sym);
-    if FMethodArgExtraStack > 0 then
-      Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+    Self.EndCallArgs();
     Self.EmitRecordRegReturnCapture(ASretAddr,
       TRecordTypeDesc(MD.ResolvedReturnType), RC, ASretIsIndirect);
     Exit;
@@ -10165,11 +10358,11 @@ begin
 
   if ACall.Args.Count <= 4 then
   begin
-    FMethodArgExtraStack := 0;
+    Self.BeginCallArgs(MD.Params, ACall.Args);
     for I := 0 to ACall.Args.Count - 1 do
     begin
       Arg := TASTExpr(ACall.Args.Items[I]);
-      Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]), Arg);
+      Self.PushCallArg(TMethodParam(MD.Params.Items[I]), Arg, I);
     end;
 
     if ACall.ObjectName <> '' then
@@ -10220,8 +10413,7 @@ begin
     end
     else
       Self.Emit(#9'callq ' + Sym);
-    if FMethodArgExtraStack > 0 then
-      Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+    Self.EndCallArgs();
   end
   else
   begin
@@ -10278,7 +10470,10 @@ begin
   Self.Emit(#9'movq $0, 8(%rsp)');
   if ACall.IsImplicitSelfMethod then
   begin
-    FMethodArgExtraStack := 0;
+    { No BeginCallArgs frame here: the sret buffer must sit exactly at %rsp
+      when the call is made, so hoisted literal blocks cannot be reclaimed
+      inside this routine.  Open-array literal args raise in
+      EmitMethodArgPush — unsupported for interface-sret calls. }
     for I := 0 to ArgCnt - 1 do
       Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
         TASTExpr(ACall.Args.Items[I]));
@@ -10288,8 +10483,6 @@ begin
     Self.Emit(#9'movq %r10, %rsi');
     Self.Emit(#9'movq %rsp, %rdi');
     Self.Emit(#9'callq ' + FSym);
-    if FMethodArgExtraStack > 0 then
-      Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
   end
   else if ArgCnt <= 5 then
   begin
@@ -10484,10 +10677,10 @@ begin
     if not IsIntFamily(P.ResolvedType) and not IsFloatFamily(P.ResolvedType) and
        ((P.ResolvedType = nil) or
         not (P.ResolvedType.Kind in [tyString, tyPChar, tyPointer,
-                                     tyClass, tyInterface,
+                                     tyClass, tyMetaClass, tyInterface,
                                      tyOpenArray, tyDynArray,
                                      tyRecord, tyStaticArray,
-                                     tyProcedural])) then
+                                     tyProcedural, tySet])) then
       raise ENativeCodeGenError.Create(
         'native backend: unsupported parameter type (param ' + P.ParamName + ')');
   end;
@@ -10495,8 +10688,8 @@ begin
      not IsIntFamily(ADecl.ResolvedReturnType) and
      not IsFloatFamily(ADecl.ResolvedReturnType) and
      not (ADecl.ResolvedReturnType.Kind in [tyRecord, tyString, tyPChar, tyPointer,
-                                          tyClass, tyDynArray, tyInterface,
-                                          tyProcedural]) then
+                                          tyClass, tyMetaClass, tyDynArray,
+                                          tyInterface, tyProcedural, tySet]) then
     raise ENativeCodeGenError.Create(
       'native backend: unsupported return type (function ' + ADecl.Name + ')');
 
@@ -10681,15 +10874,38 @@ begin
           Self.Emit(Format(#9'movq $%d, %%rdx',
             [TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.RawSize()]));
           Self.Emit(#9'callq memset');
+        end
+      else if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind = tyStaticArray then
+        { Static-array locals are memset to zero, mirroring the QBE backend's
+          EmitVarAllocs.  Element stores into arrays of managed types release
+          the old element first — without the memset that release reads stack
+          garbage. }
+        for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
+        begin
+          Self.Emit(Format(#9'leaq %s, %%rdi',
+            [Self.VarOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J])]));
+          Self.Emit(#9'xorl %esi, %esi');
+          Self.Emit(Format(#9'movq $%d, %%rdx',
+            [TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.RawSize()]));
+          Self.Emit(#9'callq memset');
         end;
     end;
   { ARC: retain string/class/interface value params on entry — balances the
-    release pass at the epilogue.  Skip var, out, open-array and const params. }
+    release pass at the epilogue.  Skip var, out, open-array and const params —
+    EXCEPT const strings, which are retained too.  Rationale: _StringConcat
+    returns an rc=0 transient; the QBE backend protects it caller-side
+    (EnsureConstStringRef pin around the call), but the native backend has no
+    caller pin, so without a callee retain the first balanced retain/release
+    cycle further down (e.g. TStringList.Find's value-param pair) frees the
+    transient while this frame still reads it — heap corruption.  The callee
+    entry-retain/exit-release pair keeps it >= 1 for the whole call and frees
+    an rc-0 transient exactly once at exit; on owned values it nets to zero. }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
-    if P.IsVarParam or P.IsOpenArray or P.IsConstParam then Continue;
+    if P.IsVarParam or P.IsOpenArray then Continue;
     if P.ResolvedType = nil then Continue;
+    if P.IsConstParam and (P.ResolvedType.Kind <> tyString) then Continue;
     if P.ResolvedType.Kind = tyString then
     begin
       Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(P.ParamName)]));
@@ -10801,12 +11017,14 @@ begin
     end;
   end;
   { ARC: release string/class/interface value params on exit — matches the
-    entry retain pass.  Skip var, out, open-array and const params. }
+    entry retain pass.  Skip var, out, open-array and const params — except
+    const strings, which mirror the entry-retain (see the comment there). }
   for I := 0 to ADecl.Params.Count - 1 do
   begin
     P := TMethodParam(ADecl.Params.Items[I]);
-    if P.IsVarParam or P.IsOpenArray or P.IsConstParam then Continue;
+    if P.IsVarParam or P.IsOpenArray then Continue;
     if P.ResolvedType = nil then Continue;
+    if P.IsConstParam and (P.ResolvedType.Kind <> tyString) then Continue;
     if P.ResolvedType.Kind = tyString then
     begin
       Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(P.ParamName)]));
