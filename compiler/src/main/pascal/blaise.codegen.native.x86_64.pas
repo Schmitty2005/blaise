@@ -4847,7 +4847,8 @@ begin
   end;
 
   raise ENativeCodeGenError.Create(
-    'native backend: unsupported expression form ' + AExpr.ClassName);
+    Format('native backend: unsupported expression form %s at line %d col %d',
+      [AExpr.ClassName, AExpr.Line, AExpr.Col]));
 end;
 
 { Emit a class method call: load Self into %rdi, then scalar args starting at
@@ -8259,13 +8260,22 @@ var
   Arg:       TASTExpr;
   IsIntArg:  Boolean;
   TotalSize: Integer;
+  ArrLit:    TArrayLiteralExpr;
+  UseArray:  Boolean;
 begin
-  FmtCount := AArgs.Count - 1;
-  { Evaluate the format string and save it on the stack first, so that
-    the args-array allocation lives below it and expression push/pop during
-    argument evaluation cannot corrupt the array area. }
+  UseArray := (AArgs.Count = 2) and (AArgs.Items[1] is TArrayLiteralExpr);
+  if UseArray then
+  begin
+    ArrLit := TArrayLiteralExpr(AArgs.Items[1]);
+    FmtCount := ArrLit.Elements.Count;
+  end
+  else
+  begin
+    ArrLit := nil;
+    FmtCount := AArgs.Count - 1;
+  end;
   Self.EmitExprToEax(TASTExpr(AArgs.Items[0]));
-  Self.Emit(#9'pushq %rax');     { [%rsp] = fmt ptr }
+  Self.Emit(#9'pushq %rax');
   if FmtCount > 0 then
   begin
     TotalSize := ((FmtCount * 16) + 15) and (-16);
@@ -8273,7 +8283,10 @@ begin
     Self.Emit(#9'movq %rsp, %r11');
     for I := 0 to FmtCount - 1 do
     begin
-      Arg := TASTExpr(AArgs.Items[I + 1]);
+      if UseArray then
+        Arg := TASTExpr(ArrLit.Elements.Items[I])
+      else
+        Arg := TASTExpr(AArgs.Items[I + 1]);
       IsIntArg := (Arg.ResolvedType = nil) or
         (Arg.ResolvedType.Kind in [tyInteger, tyBoolean, tyByte, tyUInt32,
                                     tyInt64, tyUInt64, tySmallInt, tyWord, tyEnum]);
@@ -8284,15 +8297,10 @@ begin
       Self.EmitExprToEax(Arg);
       Self.Emit(Format(#9'movq %%rax, %d(%%r11)', [I * 16 + 8]));
     end;
-    { Set up args for the call.  The array at %r11 must remain under %rsp
-      during the callq (so the call's return-addr push does not overwrite it).
-      Load fmt from its pushed location above the array:
-        fmt is at %rsp + TotalSize (the push happened before the subq). }
     Self.Emit(Format(#9'movq %d(%%rsp), %%rdi', [TotalSize]));
     Self.Emit(#9'movq %r11, %rsi');
     Self.Emit(Format(#9'movl $%d, %%edx', [FmtCount]));
     Self.Emit(#9'callq _StringFormatN');
-    { Now clean up: array + saved fmt ptr. }
     Self.Emit(Format(#9'addq $%d, %%rsp', [TotalSize + 8]));
   end
   else
