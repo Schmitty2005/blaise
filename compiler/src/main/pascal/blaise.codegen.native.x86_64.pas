@@ -172,6 +172,7 @@ type
       unit prefix when the type is defined in a non-system unit.  Mirrors the
       QBE backend's ClassSymName logic. }
     function ClassSymName(const AClassName: string): string;
+    function IntfTypeInfoName(const AIntfName: string): string;
     { True when AName is a captured outer-scope variable in the current
       nested function (accessed via an implicit pointer param). }
     function IsCaptured(const AName: string): Boolean;
@@ -849,6 +850,14 @@ begin
   Result := Result + NativeMangle(AClassName);
 end;
 
+function TX86_64Backend.IntfTypeInfoName(const AIntfName: string): string;
+begin
+  if Pos('<', AIntfName) >= 0 then
+    Result := NativeMangle(AIntfName)
+  else
+    Result := Self.ClassSymName(AIntfName);
+end;
+
 function FindMethodInClassDef(AClassDef: TClassTypeDef;
   const AName: string): TMethodDecl;
 var
@@ -1106,6 +1115,7 @@ var
   E:         TVTableEntry;
   GI:        TGenericInstance;
   MName:     string;
+  CSym:      string;
   ParentStr: string;
   ImplStr:   string;
   MethStr:   string;
@@ -1133,9 +1143,11 @@ begin
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     RT := TRecordTypeDesc(TDesc);
     CD := TClassTypeDef(TD.Def);
+    CSym := Self.ClassSymName(TD.Name);
 
-    { Class-name string blob }
-    Self.EmitClassNameString(TD.Name);
+    { Class-name string blob — use the unit-prefixed name so __cn_ matches
+      the typeinfo class-name reference. }
+    Self.EmitClassNameString(CSym);
 
     { Published-method table: count, then (nameref, codeptr) pairs }
     PubCount := 0;
@@ -1152,8 +1164,8 @@ begin
           Self.EmitClassNameString(MD.Name);
       end;
       Self.Emit('.balign 8');
-      Self.Emit('.globl methods_' + TD.Name);
-      Self.Emit('methods_' + TD.Name + ':');
+      Self.Emit('.globl methods_' + CSym);
+      Self.Emit('methods_' + CSym + ':');
       Self.Emit(Format(#9'.quad %d', [PubCount]));
       for J := 0 to CD.Methods.Count - 1 do
       begin
@@ -1162,7 +1174,7 @@ begin
         Self.Emit(Format(#9'.quad __cn_%s + 12', [NativeMangle(MD.Name)]));
         Self.Emit(Format(#9'.quad %s', [MethodEmitNameNative(MD, TD.Name, MD.Name)]));
       end;
-      MethStr := 'methods_' + TD.Name;
+      MethStr := 'methods_' + CSym;
     end
     else
       MethStr := '0';
@@ -1172,7 +1184,7 @@ begin
   for I := 0 to AGenericInstances.Count - 1 do
   begin
     GI := TGenericInstance(AGenericInstances.Items[I]);
-    Self.EmitClassNameString(GI.TypeName);
+    Self.EmitClassNameString(Self.ClassSymName(GI.TypeName));
   end;
 
   { Typeinfo blocks — must come after all class-name strings are emitted.
@@ -1209,13 +1221,14 @@ begin
     TDesc := ASymTable.FindType(TD.Name);
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     RT := TRecordTypeDesc(TDesc);
+    CSym := Self.ClassSymName(TD.Name);
 
     if RT.Parent <> nil then
-      ParentStr := 'typeinfo_' + RT.Parent.Name
+      ParentStr := 'typeinfo_' + Self.ClassSymName(RT.Parent.Name)
     else
       ParentStr := '0';
     if RT.ImplementsCount() > 0 then
-      ImplStr := 'impllist_' + TD.Name
+      ImplStr := 'impllist_' + CSym
     else
       ImplStr := '0';
 
@@ -1226,20 +1239,20 @@ begin
       if TMethodDecl(CD.Methods.Items[J]).IsPublished then
         Inc(PubCount);
     if PubCount > 0 then
-      MethStr := 'methods_' + TD.Name
+      MethStr := 'methods_' + CSym
     else
       MethStr := '0';
 
     Self.Emit('.balign 8');
-    Self.Emit('.globl typeinfo_' + TD.Name);
-    Self.Emit('typeinfo_' + TD.Name + ':');
+    Self.Emit('.globl typeinfo_' + CSym);
+    Self.Emit('typeinfo_' + CSym + ':');
     Self.Emit(#9'.quad ' + ParentStr);
     Self.Emit(#9'.quad ' + ImplStr);
-    Self.Emit(Format(#9'.quad __cn_%s + 12', [NativeMangle(TD.Name)]));
+    Self.Emit(Format(#9'.quad __cn_%s + 12', [NativeMangle(CSym)]));
     Self.Emit(#9'.quad ' + MethStr);
     Self.Emit(Format(#9'.quad %d', [RT.TotalSize()]));
-    Self.Emit(#9'.quad _FieldCleanup_' + TD.Name);
-    Self.Emit(#9'.quad vtable_' + TD.Name);
+    Self.Emit(#9'.quad _FieldCleanup_' + CSym);
+    Self.Emit(#9'.quad vtable_' + CSym);
     Self.Emit(#9'.quad 0');   { attrs }
   end;
 
@@ -1248,9 +1261,9 @@ begin
   begin
     GI := TGenericInstance(AGenericInstances.Items[I]);
     RT := TRecordTypeDesc(GI.TypeDesc);
-    MName := NativeMangle(GI.TypeName);
+    MName := Self.ClassSymName(GI.TypeName);
     if RT.Parent <> nil then
-      ParentStr := 'typeinfo_' + NativeMangle(RT.Parent.Name)
+      ParentStr := 'typeinfo_' + Self.ClassSymName(RT.Parent.Name)
     else
       ParentStr := '0';
     if RT.ImplementsCount() > 0 then
@@ -1284,14 +1297,14 @@ begin
     TDesc := ASymTable.FindType(TD.Name);
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     RT := TRecordTypeDesc(TDesc);
-    Self.EmitFieldCleanupFn(TD.Name, RT);
+    Self.EmitFieldCleanupFn(Self.ClassSymName(TD.Name), RT);
   end;
   { Field cleanup for generic class instances. }
   for I := 0 to AGenericInstances.Count - 1 do
   begin
     GI := TGenericInstance(AGenericInstances.Items[I]);
     RT := TRecordTypeDesc(GI.TypeDesc);
-    Self.EmitFieldCleanupFn(NativeMangle(GI.TypeName), RT);
+    Self.EmitFieldCleanupFn(Self.ClassSymName(GI.TypeName), RT);
   end;
 
   { Vtables — must be in .data (pointers to other data symbols). }
@@ -1319,11 +1332,12 @@ begin
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     RT := TRecordTypeDesc(TDesc);
     if not RT.HasVTable() then Continue;
+    CSym := Self.ClassSymName(TD.Name);
 
     Self.Emit('.balign 8');
-    Self.Emit('.globl vtable_' + TD.Name);
-    Self.Emit('vtable_' + TD.Name + ':');
-    Self.Emit(#9'.quad typeinfo_' + TD.Name);
+    Self.Emit('.globl vtable_' + CSym);
+    Self.Emit('vtable_' + CSym + ':');
+    Self.Emit(#9'.quad typeinfo_' + CSym);
     for S := 0 to RT.VTableCount() - 1 do
     begin
       E := RT.VTableEntryAt(S);
@@ -1348,7 +1362,7 @@ begin
     GI := TGenericInstance(AGenericInstances.Items[I]);
     RT := TRecordTypeDesc(GI.TypeDesc);
     if not RT.HasVTable() then Continue;
-    MName := NativeMangle(GI.TypeName);
+    MName := Self.ClassSymName(GI.TypeName);
     Self.Emit('.balign 8');
     Self.Emit('.globl vtable_' + MName);
     Self.Emit('vtable_' + MName + ':');
@@ -1565,6 +1579,7 @@ var
   ClassRT:    TRecordTypeDesc;
   GI:         TGenericInstance;
   GII:        TGenericInterfaceInstance;
+  CSym:       string;
   MName:      string;
   MethName:   string;
   MethRef:    string;
@@ -1575,9 +1590,10 @@ begin
   begin
     TD := TTypeDecl(ATypeDecls.Items[I]);
     if not (TD.Def is TInterfaceTypeDef) then Continue;
+    CSym := Self.ClassSymName(TD.Name);
     Self.Emit('.balign 8');
-    Self.Emit('.globl typeinfo_' + NativeMangle(TD.Name));
-    Self.Emit('typeinfo_' + NativeMangle(TD.Name) + ':');
+    Self.Emit('.globl typeinfo_' + CSym);
+    Self.Emit('typeinfo_' + CSym + ':');
     Self.Emit(#9'.quad 0');
   end;
 
@@ -1600,6 +1616,7 @@ begin
     if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
     ClassRT := TRecordTypeDesc(TDesc);
     if ClassRT.ImplementsCount() = 0 then Continue;
+    CSym := Self.ClassSymName(TD.Name);
 
     { One itab per implemented interface — a flat array of method-code ptrs in
       interface declaration order. }
@@ -1607,18 +1624,14 @@ begin
     begin
       IntfDesc := ClassRT.ImplementsIntfAt(J);
       Self.Emit('.balign 8');
-      Self.Emit('.globl itab_' + NativeMangle(TD.Name) + '_' + NativeMangle(IntfDesc.Name));
-      Self.Emit('itab_' + NativeMangle(TD.Name) + '_' + NativeMangle(IntfDesc.Name) + ':');
+      Self.Emit('.globl itab_' + CSym + '_' + Self.IntfTypeInfoName(IntfDesc.Name));
+      Self.Emit('itab_' + CSym + '_' + Self.IntfTypeInfoName(IntfDesc.Name) + ':');
       for K := 0 to IntfDesc.MethodCount() - 1 do
       begin
         MethName := IntfDesc.MethodName(K);
         if Self.IsAbstractClassMethod(ClassRT, MethName) then
           MethRef := '_AbstractMethodError'
         else
-          { Resolve the actual emitted method symbol: a class method declared in
-            a dependency unit carries a unit-prefixed ResolvedQbeName, whereas a
-            program-level class method is named TypeName_MethodName.
-            MethodEmitNameNative picks the right one. }
           MethRef := MethodEmitNameNative(
                        FindMethodInClassDef(TClassTypeDef(TD.Def), MethName),
                        TD.Name, MethName);
@@ -1628,13 +1641,13 @@ begin
 
     { One impllist per class: NULL-terminated (typeinfo, itab) pairs. }
     Self.Emit('.balign 8');
-    Self.Emit('.globl impllist_' + NativeMangle(TD.Name));
-    Self.Emit('impllist_' + NativeMangle(TD.Name) + ':');
+    Self.Emit('.globl impllist_' + CSym);
+    Self.Emit('impllist_' + CSym + ':');
     for J := 0 to ClassRT.ImplementsCount() - 1 do
     begin
       IntfDesc := ClassRT.ImplementsIntfAt(J);
-      Self.Emit(#9'.quad typeinfo_' + NativeMangle(IntfDesc.Name));
-      Self.Emit(#9'.quad itab_' + NativeMangle(TD.Name) + '_' + NativeMangle(IntfDesc.Name));
+      Self.Emit(#9'.quad typeinfo_' + Self.IntfTypeInfoName(IntfDesc.Name));
+      Self.Emit(#9'.quad itab_' + CSym + '_' + Self.IntfTypeInfoName(IntfDesc.Name));
     end;
     Self.Emit(#9'.quad 0');
   end;
@@ -1645,14 +1658,15 @@ begin
     GI := TGenericInstance(AGenericInstances.Items[I]);
     ClassRT := TRecordTypeDesc(GI.TypeDesc);
     if ClassRT.ImplementsCount() = 0 then Continue;
-    MName := NativeMangle(GI.TypeName);
+    MName := Self.ClassSymName(GI.TypeName);
 
     for J := 0 to ClassRT.ImplementsCount() - 1 do
     begin
       IntfDesc := ClassRT.ImplementsIntfAt(J);
+      CSym := Self.IntfTypeInfoName(IntfDesc.Name);
       Self.Emit('.balign 8');
-      Self.Emit('.globl itab_' + MName + '_' + NativeMangle(IntfDesc.Name));
-      Self.Emit('itab_' + MName + '_' + NativeMangle(IntfDesc.Name) + ':');
+      Self.Emit('.globl itab_' + MName + '_' + CSym);
+      Self.Emit('itab_' + MName + '_' + CSym + ':');
       for K := 0 to IntfDesc.MethodCount() - 1 do
       begin
         MethName := IntfDesc.MethodName(K);
@@ -1676,8 +1690,8 @@ begin
     for J := 0 to ClassRT.ImplementsCount() - 1 do
     begin
       IntfDesc := ClassRT.ImplementsIntfAt(J);
-      Self.Emit(#9'.quad typeinfo_' + NativeMangle(IntfDesc.Name));
-      Self.Emit(#9'.quad itab_' + MName + '_' + NativeMangle(IntfDesc.Name));
+      Self.Emit(#9'.quad typeinfo_' + Self.IntfTypeInfoName(IntfDesc.Name));
+      Self.Emit(#9'.quad itab_' + MName + '_' + Self.IntfTypeInfoName(IntfDesc.Name));
     end;
     Self.Emit(#9'.quad 0');
   end;
@@ -1716,7 +1730,7 @@ begin
     if AAsgn.Expr.ResolvedType.Kind = tyClass then
     begin
       ClassRT := TRecordTypeDesc(AAsgn.Expr.ResolvedType);
-      ItabSym := 'itab_' + NativeMangle(ClassRT.Name) + '_' + NativeMangle(Intf.Name);
+      ItabSym := 'itab_' + Self.ClassSymName(ClassRT.Name) + '_' + Self.IntfTypeInfoName(Intf.Name);
       Self.EmitExprToEax(AAsgn.Expr);
       Self.Emit(#9'pushq %rax');
       Self.Emit(#9'movq %rax, %rdi');
@@ -1782,7 +1796,7 @@ begin
     Self.EmitExprToEax(AE.Obj);          { obj -> %rax }
     Self.Emit(#9'pushq %rax');            { keep obj on the stack across calls }
     Self.Emit(#9'movq %rax, %rdi');
-    Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi', [Self.ClassSymName(AE.TypeName)]));
+    Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi', [Self.IntfTypeInfoName(AE.TypeName)]));
     Self.Emit(#9'callq _GetItab');         { itab -> %rax }
     Self.Emit(#9'pushq %rax');            { keep itab; stack now (itab, obj) }
     LFail := Self.NewLabel('as_fail');
@@ -1811,7 +1825,7 @@ begin
      (AAsgn.Expr.ResolvedType.Kind = tyClass) then
   begin
     ClassRT := TRecordTypeDesc(AAsgn.Expr.ResolvedType);
-    ItabSym := 'itab_' + NativeMangle(ClassRT.Name) + '_' + NativeMangle(Intf.Name);
+    ItabSym := 'itab_' + Self.ClassSymName(ClassRT.Name) + '_' + Self.IntfTypeInfoName(Intf.Name);
     Self.EmitExprToEax(AAsgn.Expr);       { new obj -> %rax }
     Self.Emit(#9'pushq %rax');
     Self.Emit(#9'movq %rax, %rdi');
@@ -1906,7 +1920,7 @@ begin
       destination interface) pair — the same symbol the direct class->interface
       assignment path uses. }
     ClassRT := TRecordTypeDesc(AExpr.ResolvedType);
-    ItabSym := 'itab_' + NativeMangle(ClassRT.Name) + '_' + NativeMangle(Intf.Name);
+    ItabSym := 'itab_' + Self.ClassSymName(ClassRT.Name) + '_' + Self.IntfTypeInfoName(Intf.Name);
     Self.EmitExprToEax(AExpr);
     Self.Emit(#9'pushq %rax');
     Self.Emit(#9'movq %rax, %rdi');
@@ -4830,13 +4844,13 @@ begin
     Self.Emit(Format(#9'movq $%d, %%rdi',
       [TRecordTypeDesc(FAE.ResolvedType).TotalSize()]));
     Self.Emit(Format(#9'leaq _FieldCleanup_%s(%%rip), %%rsi',
-      [NativeMangle(FAE.ResolvedType.Name)]));
+      [Self.ClassSymName(FAE.ResolvedType.Name)]));
     Self.Emit(#9'callq _ClassAlloc');
     { Store vtable pointer at offset 0 if the class has virtual methods. }
     if TRecordTypeDesc(FAE.ResolvedType).HasVTable() then
     begin
       Self.Emit(Format(#9'leaq vtable_%s(%%rip), %%rcx',
-        [NativeMangle(FAE.ResolvedType.Name)]));
+        [Self.ClassSymName(FAE.ResolvedType.Name)]));
       Self.Emit(#9'movq %rcx, (%rax)');
     end;
     { Call user-defined zero-arg Create body if present. }
@@ -4928,7 +4942,7 @@ begin
     Self.EmitExprToEax(TSupportsExpr(AExpr).Obj);
     Self.Emit(#9'movq %rax, %rdi');
     Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi',
-      [Self.ClassSymName(TSupportsExpr(AExpr).IntfTypeName)]));
+      [Self.IntfTypeInfoName(TSupportsExpr(AExpr).IntfTypeName)]));
     Self.Emit(#9'callq _ImplementsInterface');
     Exit;
   end;
@@ -4977,11 +4991,11 @@ begin
   begin
     RT := TRecordTypeDesc(ACall.ResolvedClassType);
     Self.Emit(Format(#9'movq $%d, %%rdi', [RT.TotalSize()]));
-    Self.Emit(Format(#9'leaq _FieldCleanup_%s(%%rip), %%rsi', [NativeMangle(RT.Name)]));
+    Self.Emit(Format(#9'leaq _FieldCleanup_%s(%%rip), %%rsi', [Self.ClassSymName(RT.Name)]));
     Self.Emit(#9'callq _ClassAlloc');
     if RT.HasVTable() then
     begin
-      Self.Emit(Format(#9'leaq vtable_%s(%%rip), %%rcx', [NativeMangle(RT.Name)]));
+      Self.Emit(Format(#9'leaq vtable_%s(%%rip), %%rcx', [Self.ClassSymName(RT.Name)]));
       Self.Emit(#9'movq %rcx, (%rax)');
     end;
     MD := TMethodDecl(ACall.ResolvedMethod);
@@ -5192,7 +5206,7 @@ begin
     begin
       { Class expression → interface: emit obj, look up static itab. }
       ClassRT := TRecordTypeDesc(AArg.ResolvedType);
-      ItabSym := 'itab_' + NativeMangle(ClassRT.Name) + '_' + NativeMangle(IntfDesc.Name);
+      ItabSym := 'itab_' + Self.ClassSymName(ClassRT.Name) + '_' + Self.IntfTypeInfoName(IntfDesc.Name);
       Self.EmitExprToEax(AArg);          { obj -> %rax }
       Self.Emit(#9'pushq %rax');         { push obj }
       Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [ItabSym]));
@@ -5205,7 +5219,7 @@ begin
       Self.Emit(#9'pushq %rax');         { save obj for push below }
       Self.Emit(#9'movq %rax, %rdi');
       Self.Emit(Format(#9'leaq typeinfo_%s(%%rip), %%rsi',
-        [Self.ClassSymName(TAsExpr(AArg).TypeName)]));
+        [Self.IntfTypeInfoName(TAsExpr(AArg).TypeName)]));
       Self.Emit(#9'callq _GetItab');
       Self.Emit(#9'pushq %rax');         { itab on top; obj below }
       { Stack top: itab, below: obj — but we need obj first (lower slot).
