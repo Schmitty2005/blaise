@@ -500,13 +500,13 @@ var
   IsNeg: Boolean;
   AbsN:  Int64;
   Pos:   Integer;
-  Tmp:   Pointer;
+  Tmp:   array[0..21] of Byte;   { stack scratch — this is the hottest
+                                   integer-to-text path; no heap traffic }
   TP:    PChar;
   I, J:  Integer;
   Digit: Integer;
 begin
-  Tmp := _BlaiseGetMem(22);
-  TP  := PChar(Tmp);
+  TP  := PChar(@Tmp[0]);
   IsNeg := N < 0;
   if IsNeg then
     AbsN := -N
@@ -541,7 +541,6 @@ begin
     Inc(I);
     Dec(J);
   end;
-  _BlaiseFreeMem(Tmp);
   Result := I;
 end;
 
@@ -551,17 +550,15 @@ end;
 
 function _IntToStr(N: Integer): Pointer;
 var
-  Buf:     Pointer;
+  Buf:     array[0..21] of Byte;
   BP:      PChar;
   Written: Integer;
 begin
-  Buf     := _BlaiseGetMem(22);
-  BP      := PChar(Buf);
+  BP      := PChar(@Buf[0]);
   Written := WriteDecimal(Int64(N), BP);
   Result  := StrAlloc(Written);
   if (Result <> nil) and (Written > 0) then
-    MemCopy(StrData(Result), Buf, Written);
-  _BlaiseFreeMem(Buf);
+    MemCopy(StrData(Result), Pointer(BP), Written);
 end;
 
 { ------------------------------------------------------------------ }
@@ -570,17 +567,15 @@ end;
 
 function _Int64ToStr(N: Int64): Pointer;
 var
-  Buf:     Pointer;
+  Buf:     array[0..21] of Byte;
   BP:      PChar;
   Written: Integer;
 begin
-  Buf     := _BlaiseGetMem(22);
-  BP      := PChar(Buf);
+  BP      := PChar(@Buf[0]);
   Written := WriteDecimal(N, BP);
   Result  := StrAlloc(Written);
   if (Result <> nil) and (Written > 0) then
-    MemCopy(StrData(Result), Buf, Written);
-  _BlaiseFreeMem(Buf);
+    MemCopy(StrData(Result), Pointer(BP), Written);
 end;
 
 { Write a UInt64 value (passed as Int64 bit pattern during bootstrap) as
@@ -590,13 +585,12 @@ end;
 function WriteDecimalU(N: UInt64; Buf: PChar): Integer;
 var
   Pos:   Integer;
-  Tmp:   Pointer;
+  Tmp:   array[0..21] of Byte;
   TP:    PChar;
   I, J:  Integer;
   Digit: Integer;
 begin
-  Tmp := _BlaiseGetMem(22);
-  TP  := PChar(Tmp);
+  TP  := PChar(@Tmp[0]);
   if N = UInt64(0) then
   begin
     TP[0] := 48;  { '0' }
@@ -621,23 +615,20 @@ begin
     Inc(I);
     Dec(J);
   end;
-  _BlaiseFreeMem(Tmp);
   Result := I;
 end;
 
 function _UInt64ToStr(N: UInt64): Pointer;
 var
-  Buf:     Pointer;
+  Buf:     array[0..21] of Byte;
   BP:      PChar;
   Written: Integer;
 begin
-  Buf     := _BlaiseGetMem(22);
-  BP      := PChar(Buf);
+  BP      := PChar(@Buf[0]);
   Written := WriteDecimalU(N, BP);
   Result  := StrAlloc(Written);
   if (Result <> nil) and (Written > 0) then
-    MemCopy(StrData(Result), Buf, Written);
-  _BlaiseFreeMem(Buf);
+    MemCopy(StrData(Result), Pointer(BP), Written);
 end;
 
 { ------------------------------------------------------------------ }
@@ -915,7 +906,7 @@ var
   Val: Int64;
   AP: Pointer;
   TagPtr, ValPtr: ^Int64;
-  IntBuf: Pointer;
+  IntBuf: array[0..21] of Byte;   { shared stack scratch for %d rendering }
   IBP: PChar;
 begin
   F := StrData(Fmt);
@@ -941,11 +932,9 @@ begin
           Val := ValPtr^;
           if Tag = 0 then
           begin
-            IntBuf := _BlaiseGetMem(22);
-            IBP := PChar(IntBuf);
+            IBP := PChar(@IntBuf[0]);
             Written := WriteDecimal(Val, IBP);
             OutLen := OutLen + Written;
-            _BlaiseFreeMem(IntBuf);
           end
           else
           begin
@@ -972,11 +961,9 @@ begin
           end
           else
           begin
-            IntBuf := _BlaiseGetMem(22);
-            IBP := PChar(IntBuf);
+            IBP := PChar(@IntBuf[0]);
             Written := WriteDecimal(Val, IBP);
             OutLen := OutLen + Written;
-            _BlaiseFreeMem(IntBuf);
           end;
         end;
         Inc(ArgIdx);
@@ -1023,12 +1010,10 @@ begin
           Val := ValPtr^;
           if Tag = 0 then
           begin
-            IntBuf := _BlaiseGetMem(22);
-            IBP := PChar(IntBuf);
+            IBP := PChar(@IntBuf[0]);
             Written := WriteDecimal(Val, IBP);
             MemCopy(Dst, IBP, Written);
             Dst := Dst + Written;
-            _BlaiseFreeMem(IntBuf);
           end
           else
           begin
@@ -1059,12 +1044,10 @@ begin
           end
           else
           begin
-            IntBuf := _BlaiseGetMem(22);
-            IBP := PChar(IntBuf);
+            IBP := PChar(@IntBuf[0]);
             Written := WriteDecimal(Val, IBP);
             MemCopy(Dst, IBP, Written);
             Dst := Dst + Written;
-            _BlaiseFreeMem(IntBuf);
           end;
         end;
         Inc(ArgIdx);
