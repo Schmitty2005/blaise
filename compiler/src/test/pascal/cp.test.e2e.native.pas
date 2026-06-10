@@ -333,6 +333,9 @@ type
     procedure TestRun_Native_IntfFieldFromFunc;
     { M8b — weak interface variable: _WeakAssign/_WeakClear instead of ARC. }
     procedure TestRun_Native_WeakInterfaceVar;
+    { M8b — sret temp record field release: managed fields of a record
+      returned by a function and passed directly as an arg are released. }
+    procedure TestRun_Native_SretTempFieldRelease;
   end;
 
 implementation
@@ -2984,6 +2987,26 @@ const
     end.
     ''';
 
+  SrcSretTempFieldRelease = '''
+    program P;
+    type
+      TRec = record
+        S: String;
+      end;
+    function MakeRec(V: String): TRec;
+    begin
+      Result.S := V
+    end;
+    procedure Consume(R: TRec);
+    begin
+      WriteLn(R.S)
+    end;
+    begin
+      Consume(MakeRec('hello'));
+      WriteLn('done')
+    end.
+    ''';
+
   { Dyn-array field inside a class: the field must be ARC-refcounted on store
     and released when the holder is destroyed (f74e5cc).  Observed by reading an
     element back after the field assignment — a dropped/garbled buffer would
@@ -4939,6 +4962,12 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcWeakInterfaceVar,
     '77' + LE + 'destroyed' + LE + 'done' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_SretTempFieldRelease;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcSretTempFieldRelease, 'hello' + LE + 'done' + LE, 0);
 end;
 
 initialization

@@ -300,6 +300,12 @@ type
       nil for type-cast calls. }
     procedure EmitCall(const AFuncSym: string; ADecl: TMethodDecl;
                        AArgs: TObjectList);
+    { After a call whose args may contain record-returning function calls
+      (sret temps), release each managed field of every sret temp buffer
+      and reclaim its stack space.  Iterates AArgs in reverse (last sret
+      buffer is nearest to %rsp).  Safe to call even when no sret args
+      exist — it simply does nothing. }
+    procedure EmitSretArgReleases(AArgs: TObjectList);
     { Emit a call to a record-returning function using the sret convention:
       ASretAddr is the AT&T operand for the destination buffer (already allocated
       by the caller), passed as the hidden first integer argument in %rdi.
@@ -1707,6 +1713,8 @@ begin
     Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
   Self.Emit(#9'movq %r10, %rdi');
   Self.Emit(#9'callq *%r11');
+  if AArgs <> nil then
+    Self.EmitSretArgReleases(AArgs);
 end;
 
 procedure TX86_64Backend.EmitInterfaceFieldCall(AFld: TFieldInfo;
@@ -1793,6 +1801,8 @@ begin
     Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
   Self.Emit(#9'movq %r10, %rdi');
   Self.Emit(#9'callq *%r11');
+  if AArgs <> nil then
+    Self.EmitSretArgReleases(AArgs);
 end;
 
 { An interface method maps to one of ARec's vtable slots.  When that slot is
@@ -3236,6 +3246,7 @@ begin
       Self.Emit(#9'callq ' + FuncSymbolOf(FC));
       if FMethodArgExtraStack > 0 then
         Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+      Self.EmitSretArgReleases(FC.Args);
       Exit;
     end;
     { User function call whose return type is float. }
@@ -4499,6 +4510,7 @@ begin
       Self.Emit(#9'callq ' + FuncSymbolOf(FC));
       if FMethodArgExtraStack > 0 then
         Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+      Self.EmitSretArgReleases(FC.Args);
       if FC.ResolvedType <> nil then
         Self.EmitNarrowToType(FC.ResolvedType);
       Exit;
@@ -5599,6 +5611,7 @@ begin
         Self.Emit(#9'movq %rbx, %rax');
         Self.Emit(#9'popq %rbx');
       end;
+      Self.EmitSretArgReleases(ACall.Args);
     end;
     Exit;
   end;
@@ -5743,6 +5756,7 @@ begin
       Self.Emit(#9'callq ' + Sym);
     Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
   end;
+  Self.EmitSretArgReleases(ACall.Args);
 end;
 
 procedure TX86_64Backend.EmitMethodArgPush(APar: TMethodParam; AArg: TASTExpr);
@@ -6131,6 +6145,7 @@ begin
     Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
   if (TotalSlots <= 6) and (FMethodArgExtraStack > 0) then
     Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+  Self.EmitSretArgReleases(ACall.Args);
 end;
 
 procedure TX86_64Backend.EmitInheritedCall(ACall: TInheritedCallStmt);
@@ -6173,6 +6188,7 @@ begin
     else
       Self.EmitStoreVar(Self.VarOperand('Result'), MD.ResolvedReturnType);
   end;
+  Self.EmitSretArgReleases(ACall.Args);
 end;
 
 procedure TX86_64Backend.EmitCondBranch(AExpr: TASTExpr;
@@ -8112,6 +8128,7 @@ begin
       Self.Emit(#9'callq ' + FuncSymbolFromDecl(MD));
       if FMethodArgExtraStack > 0 then
         Self.Emit(Format(#9'addq $%d, %%rsp', [FMethodArgExtraStack]));
+      Self.EmitSretArgReleases(PC.Args);
       Exit;
     end;
     { User procedure call (result, if any, ignored in statement position). }
@@ -9422,6 +9439,53 @@ begin
   Self.Emit(#9'callq ' + AFuncSym);
   if ExtraStackBytes > 0 then
     Self.Emit(Format(#9'addq $%d, %%rsp', [ExtraStackBytes]));
+  Self.EmitSretArgReleases(AArgs);
+end;
+
+procedure TX86_64Backend.EmitSretArgReleases(AArgs: TObjectList);
+var
+  I:        Integer;
+  Arg:      TASTExpr;
+  RT:       TRecordTypeDesc;
+  TotalSz:  Integer;
+  CurOff:   Integer;
+begin
+  TotalSz := 0;
+  for I := 0 to AArgs.Count - 1 do
+  begin
+    Arg := TASTExpr(AArgs.Items[I]);
+    if Arg.ResolvedType = nil then Continue;
+    if Arg.ResolvedType.Kind <> tyRecord then Continue;
+    if (Arg is TFuncCallExpr) and (TFuncCallExpr(Arg).ResolvedDecl <> nil) then
+      Inc(TotalSz, (TRecordTypeDesc(Arg.ResolvedType).TotalSize() + 15) and (-16))
+    else if (Arg is TMethodCallExpr) and
+            not TMethodCallExpr(Arg).IsConstructorCall then
+      Inc(TotalSz, (TRecordTypeDesc(Arg.ResolvedType).TotalSize() + 15) and (-16));
+  end;
+  if TotalSz = 0 then Exit;
+  Self.Emit(#9'pushq %rax');
+  Self.Emit(#9'pushq %rbx');
+  CurOff := 16;
+  for I := AArgs.Count - 1 downto 0 do
+  begin
+    Arg := TASTExpr(AArgs.Items[I]);
+    if Arg.ResolvedType = nil then Continue;
+    if Arg.ResolvedType.Kind <> tyRecord then Continue;
+    if (Arg is TFuncCallExpr) and (TFuncCallExpr(Arg).ResolvedDecl <> nil) then
+      { ok }
+    else if (Arg is TMethodCallExpr) and
+            not TMethodCallExpr(Arg).IsConstructorCall then
+      { ok }
+    else
+      Continue;
+    RT := TRecordTypeDesc(Arg.ResolvedType);
+    Self.Emit(Format(#9'leaq %d(%%rsp), %%rbx', [CurOff]));
+    Self.EmitRecordFieldReleases(RT, '%rbx');
+    Inc(CurOff, (RT.TotalSize() + 15) and (-16));
+  end;
+  Self.Emit(#9'popq %rbx');
+  Self.Emit(#9'popq %rax');
+  Self.Emit(Format(#9'addq $%d, %%rsp', [TotalSz]));
 end;
 
 { Spill the incoming argument register at index AIdx into the param slot
@@ -9528,6 +9592,7 @@ begin
     if CleanUp > 0 then
       Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
   end;
+  Self.EmitSretArgReleases(AArgs);
 end;
 
 { Emit a call to a record-returning function using the sret convention.
@@ -9848,6 +9913,7 @@ begin
     if CleanUp > 0 then
       Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
   end;
+  Self.EmitSretArgReleases(AArgs);
 end;
 
 { True when AType is an integer-family type the backend can place in a
