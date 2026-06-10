@@ -297,6 +297,9 @@ type
     { var/out string params: assignment must write through indirection pointer }
     procedure TestRun_Native_OutParam_String;
     procedure TestRun_Native_VarParam_String;
+
+    { Constructor with args that require function calls must not lose Self }
+    procedure TestRun_Native_Constructor_CallArg;
   end;
 
 implementation
@@ -4403,6 +4406,26 @@ begin
     + '  WriteLn(X) '
     + 'end.',
     'head_tail' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_Constructor_CallArg;
+begin
+  AssertRunsOnBoth(
+    'program T;'
+    + 'type '
+    + '  THolder = class '
+    + '    FVal: string; '
+    + '    constructor Create(S: string); '
+    + '  end; '
+    + 'constructor THolder.Create(S: string); begin FVal := S end; '
+    + 'function MakeStr: string; begin Result := ''hello'' end; '
+    + 'var H: THolder; '
+    + 'begin '
+    + '  H := THolder.Create(MakeStr()); '
+    + '  WriteLn(H.FVal); '
+    + '  H.Free() '
+    + 'end.',
+    'hello' + LE, 0);
 end;
 
 initialization

@@ -5198,15 +5198,17 @@ begin
 
       if TotalSlots <= 6 then
       begin
-        Self.Emit(#9'movq %rax, %r10');
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(#9'movq %rax, %rbx');
         for I := 0 to ACall.Args.Count - 1 do
           Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
             TASTExpr(ACall.Args.Items[I]));
         for I := UserSlots - 1 downto 0 do
           Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
-        Self.Emit(#9'movq %r10, %rdi');
+        Self.Emit(#9'movq %rbx, %rdi');
         Self.Emit(#9'callq ' + Sym);
-        Self.Emit(#9'movq %r10, %rax');
+        Self.Emit(#9'movq %rbx, %rax');
+        Self.Emit(#9'popq %rbx');
       end
       else
       begin
