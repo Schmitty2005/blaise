@@ -413,8 +413,8 @@ end;
 
 { SysV AMD64 XMM argument registers, in order. }
 const
-  SysVXmmArgRegs: array[0..5] of string =
-    ('%xmm0', '%xmm1', '%xmm2', '%xmm3', '%xmm4', '%xmm5');
+  SysVXmmArgRegs: array[0..7] of string =
+    ('%xmm0', '%xmm1', '%xmm2', '%xmm3', '%xmm4', '%xmm5', '%xmm6', '%xmm7');
 
 { True for unsigned integer-family types. Byte/Word/UInt32/UInt64 are
   unsigned; Boolean and Enum hold non-negative ordinals and so are read
@@ -7510,9 +7510,9 @@ begin
 
   ExtraStackBytes := 0;
 
-  if not HasFloat then
+  if (not HasFloat) and (SlotCount <= 6) then
   begin
-    { Pure integer (or var-param/open-array) call: push/pop strategy.
+    { Pure integer call with ≤6 slots: push/pop strategy.
       Open-array arg A pushes: data ptr first, then high index.
       SlotCount counts register slots after expansion. }
 
@@ -7547,14 +7547,10 @@ begin
                TMethodParam(ADecl.Params.Items[I]).IsOpenArray;
       if IsOA then
       begin
-        { Push data pointer. }
         if Arg is TArrayLiteralExpr then
         begin
-          { Inline literal [a, b, c]: allocate stack storage and fill.
-            ExtraStackBytes accumulates bytes to reclaim after the call. }
           ExtraStackBytes := ExtraStackBytes +
             Self.EmitOpenArrayLiteral(TArrayLiteralExpr(Arg));
-          { %rax = data ptr; high = Count-1. }
           Self.Emit(#9'pushq %rax');
           Self.Emit(Format(#9'pushq $%d',
             [TArrayLiteralExpr(Arg).Elements.Count - 1]));
@@ -7563,7 +7559,6 @@ begin
                 (TIdentExpr(Arg).ResolvedType <> nil) and
                 (TIdentExpr(Arg).ResolvedType.Kind = tyStaticArray) then
         begin
-          { Static array coerced to open array: push base ptr + compile-time high. }
           if Self.IsLocal(TIdentExpr(Arg).Name) then
             Self.Emit(Format(#9'leaq %s, %%rax',
               [Self.VarOperand(TIdentExpr(Arg).Name)]))
@@ -7577,8 +7572,6 @@ begin
         end
         else
         begin
-          { Open-array param forwarded to another open-array param:
-            push both data ptr and high from the caller's local slots. }
           Self.Emit(Format(#9'movq %s, %%rax',
             [Self.VarOperand(TIdentExpr(Arg).Name)]));
           Self.Emit(#9'pushq %rax');
@@ -7602,8 +7595,6 @@ begin
       end
       else if (ParamType <> nil) and (ParamType.Kind = tyInterface) then
       begin
-        { Interface param: push obj first (lower slot), then itab (higher slot).
-          Pop loop runs high-to-low, so itab is popped first into the higher reg. }
         if (ADecl <> nil) and (I < ADecl.Params.Count) then
           Self.EmitMethodArgPush(TMethodParam(ADecl.Params.Items[I]), Arg)
         else if Arg is TIdentExpr then
@@ -7626,69 +7617,104 @@ begin
       end;
     end;
 
-    { Note: for open-array args the pushes are ordered as (high, ptr) on the
-      stack (last pushed is high) but the pop order reverses back so register
-      I=0 gets ptr and I=1 gets high — the two pushes above are in order
-      (ptr first, then high) so they pop in reverse: high first (higher slot),
-      ptr second (lower slot). This yields %rdi=ptr, %rsi=high for the first
-      open-array arg, matching what the callee spills in its prologue. }
-    if SlotCount <= 6 then
-    begin
-      for I := SlotCount - 1 downto 0 do
-        Self.Emit(#9'popq ' + SysVArgRegs64[I]);
-    end
-    else
-    begin
-      if SlotCount > 8 then
-        raise ENativeCodeGenError.Create(
-          'native backend: more than 8 argument slots not yet supported');
-      for I := SlotCount - 1 downto 6 do
-      begin
-        if (I - 6) = 0 then Self.Emit(#9'popq %r10')
-        else               Self.Emit(#9'popq %r11');
-      end;
-      for I := 5 downto 0 do
-        Self.Emit(#9'popq ' + SysVArgRegs64[I]);
-      for I := SlotCount - 1 downto 6 do
-      begin
-        if (I - 6) = 0 then Self.Emit(#9'pushq %r10')
-        else               Self.Emit(#9'pushq %r11');
-      end;
-    end;
+    for I := SlotCount - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I]);
   end
   else
   begin
-    { Mixed or pure-float call.  Strategy:
-      1. Pre-allocate N×8 bytes on the stack (N = total args, 16-byte aligned).
-      2. Evaluate each arg left-to-right into its fixed slot I×8(%rsp).
-         Integer args use %rax → movq; float args use %xmm0 → movsd.
-      3. After all evaluations, load into the right registers, tracking
-         separate IntIdx / XmmIdx counters for the two register files.
-      4. Reclaim the pre-allocated block. }
-    AllocSz := ((AArgs.Count * 8 + 15) and (-16));
-    if AllocSz > 0 then
-      Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
+    { >6 integer slots or mixed int/float call.  Pre-allocate strategy:
+      1. Allocate SC×8 bytes on the stack (16-byte aligned).
+      2. Evaluate each arg left-to-right into slot[I] at I×8(%rsp).
+      3. Load the first 6 int args into SysV int regs, first 8 float args
+         into xmm regs; overflow int args stay on the stack.
+      4. Adjust %rsp so the overflow args sit at the top. }
 
-    { Pass 1: evaluate args left-to-right into fixed stack slots. }
+    AllocSz := ((SlotCount * 8 + 15) and (-16));
+    Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
+
+    { Evaluate captured-var addresses into the first slots. }
+    SlotOff := 0;
+    if (ADecl <> nil) and (ADecl.CapturedVars <> nil) and
+       (ADecl.CapturedVars.Count > 0) then
+      for I := 0 to ADecl.CapturedVars.Count - 1 do
+      begin
+        if Self.IsCaptured(ADecl.CapturedVars.Strings[I]) then
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.VarOperand('_cap_' + ADecl.CapturedVars.Strings[I])]))
+        else if Self.IsLocal(ADecl.CapturedVars.Strings[I]) then
+          Self.Emit(Format(#9'leaq %s, %%rax',
+            [Self.VarOperand(ADecl.CapturedVars.Strings[I])]))
+        else
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+            [ADecl.CapturedVars.Strings[I]]));
+        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+        Inc(SlotOff, 8);
+      end;
+
+    { Evaluate each arg left-to-right into its slot. }
     for I := 0 to AArgs.Count - 1 do
     begin
       Arg := TASTExpr(AArgs.Items[I]);
+      IsVar := (ADecl <> nil) and (I < ADecl.Params.Count) and
+               TMethodParam(ADecl.Params.Items[I]).IsVarParam;
+      IsOA  := (ADecl <> nil) and (I < ADecl.Params.Count) and
+               TMethodParam(ADecl.Params.Items[I]).IsOpenArray;
       ParamType := nil;
       if (ADecl <> nil) and (I < ADecl.Params.Count) then
         ParamType := TMethodParam(ADecl.Params.Items[I]).ResolvedType;
       if ParamType = nil then
         ParamType := Arg.ResolvedType;
-      IsVar := (ADecl <> nil) and (I < ADecl.Params.Count) and
-               TMethodParam(ADecl.Params.Items[I]).IsVarParam;
-      SlotOff := I * 8;
 
-      if IsFloatFamily(ParamType) then
+      if IsOA then
+      begin
+        if Arg is TArrayLiteralExpr then
+        begin
+          ExtraStackBytes := ExtraStackBytes +
+            Self.EmitOpenArrayLiteral(TArrayLiteralExpr(Arg));
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+          Inc(SlotOff, 8);
+          Self.Emit(Format(#9'movq $%d, %d(%%rsp)',
+            [TArrayLiteralExpr(Arg).Elements.Count - 1, SlotOff]));
+          Inc(SlotOff, 8);
+        end
+        else if (Arg is TIdentExpr) and
+                (TIdentExpr(Arg).ResolvedType <> nil) and
+                (TIdentExpr(Arg).ResolvedType.Kind = tyStaticArray) then
+        begin
+          if Self.IsLocal(TIdentExpr(Arg).Name) then
+            Self.Emit(Format(#9'leaq %s, %%rax',
+              [Self.VarOperand(TIdentExpr(Arg).Name)]))
+          else
+            Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+              [TIdentExpr(Arg).Name]));
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+          Inc(SlotOff, 8);
+          Self.Emit(Format(#9'movq $%d, %d(%%rsp)',
+            [TStaticArrayTypeDesc(TIdentExpr(Arg).ResolvedType).HighBound -
+             TStaticArrayTypeDesc(TIdentExpr(Arg).ResolvedType).LowBound,
+             SlotOff]));
+          Inc(SlotOff, 8);
+        end
+        else
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name)]));
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+          Inc(SlotOff, 8);
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name + '_high')]));
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+          Inc(SlotOff, 8);
+        end;
+      end
+      else if IsFloatFamily(ParamType) then
       begin
         Self.EmitExprToXmm0(Arg);
         if (ParamType <> nil) and (ParamType.Kind = tySingle) then
           Self.Emit(Format(#9'movss %%xmm0, %d(%%rsp)', [SlotOff]))
         else
           Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [SlotOff]));
+        Inc(SlotOff, 8);
       end
       else if IsVar then
       begin
@@ -7702,17 +7728,68 @@ begin
           Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
             [TIdentExpr(Arg).Name]));
         Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+        Inc(SlotOff, 8);
+      end
+      else if (ParamType <> nil) and (ParamType.Kind = tyInterface) then
+      begin
+        if (ADecl <> nil) and (I < ADecl.Params.Count) then
+        begin
+          Self.EmitExprToEax(Arg);
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+          Inc(SlotOff, 8);
+          { Interface itab — for a simple ident, load from itab slot. }
+          if Arg is TIdentExpr then
+            Self.Emit(Format(#9'movq %s, %%rax',
+              [Self.IntfItabOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]))
+          else
+            Self.Emit(#9'xorq %rax, %rax');
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+          Inc(SlotOff, 8);
+        end
+        else if Arg is TIdentExpr then
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.IntfObjOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+          Inc(SlotOff, 8);
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.IntfItabOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+          Inc(SlotOff, 8);
+        end
+        else
+          raise ENativeCodeGenError.Create(
+            'native backend: unsupported interface arg expression in EmitCall');
       end
       else
       begin
         Self.EmitExprToEax(Arg);
         Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+        Inc(SlotOff, 8);
       end;
     end;
 
-    { Pass 2: load from slots into registers using separate int/xmm counters. }
+    { Pass 2: load from slots into registers.  Integer args use separate
+      IntIdx (0..5 → registers, ≥6 → leave on stack), float args use
+      XmmIdx (0..7 → xmm registers).  We read slots in order and load
+      the register-bound ones; overflow int args must end up at (%rsp)
+      in forward order after we remove the register-bound region. }
+
+    { First, load the register-bound args.  Captured vars occupy the
+      first slots; normal args follow. }
     IntIdx := 0;
     XmmIdx := 0;
+    SlotOff := 0;
+    if (ADecl <> nil) and (ADecl.CapturedVars <> nil) then
+      for I := 0 to ADecl.CapturedVars.Count - 1 do
+      begin
+        if IntIdx < 6 then
+        begin
+          Self.Emit(Format(#9'movq %d(%%rsp), %s', [SlotOff, SysVArgRegs64[IntIdx]]));
+          Inc(IntIdx);
+        end;
+        Inc(SlotOff, 8);
+      end;
     for I := 0 to AArgs.Count - 1 do
     begin
       Arg := TASTExpr(AArgs.Items[I]);
@@ -7721,43 +7798,80 @@ begin
         ParamType := TMethodParam(ADecl.Params.Items[I]).ResolvedType;
       if ParamType = nil then
         ParamType := Arg.ResolvedType;
-      SlotOff := I * 8;
+      IsOA := (ADecl <> nil) and (I < ADecl.Params.Count) and
+              TMethodParam(ADecl.Params.Items[I]).IsOpenArray;
 
-      if IsFloatFamily(ParamType) then
+      if IsFloatFamily(ParamType) and not IsOA then
       begin
-        if XmmIdx >= 6 then
-          raise ENativeCodeGenError.Create('native backend: too many float args');
-        if (ParamType <> nil) and (ParamType.Kind = tySingle) then
-          Self.Emit(Format(#9'movss %d(%%rsp), %s', [SlotOff, SysVXmmArgRegs[XmmIdx]]))
-        else
-          Self.Emit(Format(#9'movsd %d(%%rsp), %s', [SlotOff, SysVXmmArgRegs[XmmIdx]]));
-        Inc(XmmIdx);
+        if XmmIdx < 8 then
+        begin
+          if (ParamType <> nil) and (ParamType.Kind = tySingle) then
+            Self.Emit(Format(#9'movss %d(%%rsp), %s', [SlotOff, SysVXmmArgRegs[XmmIdx]]))
+          else
+            Self.Emit(Format(#9'movsd %d(%%rsp), %s', [SlotOff, SysVXmmArgRegs[XmmIdx]]));
+          Inc(XmmIdx);
+        end;
+        Inc(SlotOff, 8);
       end
       else
       begin
-        if IntIdx >= 6 then
-          raise ENativeCodeGenError.Create('native backend: too many int args');
-        Self.Emit(Format(#9'movq %d(%%rsp), %s', [SlotOff, SysVArgRegs64[IntIdx]]));
-        Inc(IntIdx);
+        if IsOA then
+        begin
+          if IntIdx < 6 then
+          begin
+            Self.Emit(Format(#9'movq %d(%%rsp), %s', [SlotOff, SysVArgRegs64[IntIdx]]));
+            Inc(IntIdx);
+          end;
+          Inc(SlotOff, 8);
+          if IntIdx < 6 then
+          begin
+            Self.Emit(Format(#9'movq %d(%%rsp), %s', [SlotOff, SysVArgRegs64[IntIdx]]));
+            Inc(IntIdx);
+          end;
+          Inc(SlotOff, 8);
+        end
+        else if (ParamType <> nil) and (ParamType.Kind = tyInterface) then
+        begin
+          if IntIdx < 6 then
+          begin
+            Self.Emit(Format(#9'movq %d(%%rsp), %s', [SlotOff, SysVArgRegs64[IntIdx]]));
+            Inc(IntIdx);
+          end;
+          Inc(SlotOff, 8);
+          if IntIdx < 6 then
+          begin
+            Self.Emit(Format(#9'movq %d(%%rsp), %s', [SlotOff, SysVArgRegs64[IntIdx]]));
+            Inc(IntIdx);
+          end;
+          Inc(SlotOff, 8);
+        end
+        else
+        begin
+          if IntIdx < 6 then
+          begin
+            Self.Emit(Format(#9'movq %d(%%rsp), %s', [SlotOff, SysVArgRegs64[IntIdx]]));
+            Inc(IntIdx);
+          end;
+          Inc(SlotOff, 8);
+        end;
       end;
     end;
 
-    { Reclaim pre-allocated area before the call. }
-    if AllocSz > 0 then
-      Self.Emit(Format(#9'addq $%d, %%rsp', [AllocSz]));
+    { If all slots fit in registers, reclaim the entire pre-allocated area.
+      Otherwise shift %rsp past the register-bound slots so the overflow
+      args sit at 0(%rsp) in SysV order for the call. }
+    if IntIdx + XmmIdx >= SlotCount then
+      Self.Emit(Format(#9'addq $%d, %%rsp', [AllocSz]))
+    else
+    begin
+      Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
+      ExtraStackBytes := ExtraStackBytes + (AllocSz - 6 * 8);
+    end;
   end;
 
   Self.Emit(#9'callq ' + AFuncSym);
-  { Caller cleans up stack args (SysV caller-cleans-up convention) and any
-    extra bytes allocated by EmitOpenArrayLiteral for inline array literals. }
-  if (not HasFloat) then
-  begin
-    CleanUp := ExtraStackBytes;
-    if SlotCount > 6 then
-      Inc(CleanUp, (SlotCount - 6) * 8);
-    if CleanUp > 0 then
-      Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
-  end;
+  if ExtraStackBytes > 0 then
+    Self.Emit(Format(#9'addq $%d, %%rsp', [ExtraStackBytes]));
 end;
 
 { Spill the incoming argument register at index AIdx into the param slot
@@ -7783,47 +7897,81 @@ procedure TX86_64Backend.EmitCallIndirect(const APtrOperand: string;
                                           AProcType: TProceduralTypeDesc;
                                           AArgs: TObjectList);
 var
-  I:     Integer;
-  Arg:   TASTExpr;
-  IsVar: Boolean;
+  I:        Integer;
+  Arg:      TASTExpr;
+  IsVar:    Boolean;
+  AllocSz:  Integer;
+  SlotOff:  Integer;
+  CleanUp:  Integer;
 begin
-  { Load the function pointer before pushing args — %r10 is caller-saved and
-    not touched by EmitExprToEax, so it survives the arg-evaluation loop. }
   Self.Emit(Format(#9'movq %s, %%r10', [APtrOperand]));
 
-  for I := 0 to AArgs.Count - 1 do
+  if AArgs.Count <= 6 then
   begin
-    Arg := TASTExpr(AArgs.Items[I]);
-    IsVar := (AProcType <> nil) and (I < AProcType.Params.Count) and
-             TProcParamInfo(AProcType.Params.Items[I]).IsVarParam;
-    if IsVar then
+    for I := 0 to AArgs.Count - 1 do
     begin
-      if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
-        Self.Emit(Format(#9'movq %s, %%rax',
-          [Self.VarOperand(TIdentExpr(Arg).Name)]))
-      else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
-        Self.Emit(Format(#9'leaq %s, %%rax',
-          [Self.VarOperand(TIdentExpr(Arg).Name)]))
-      else if Arg is TIdentExpr then
-        Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
-          [TIdentExpr(Arg).Name]));
-      Self.Emit(#9'pushq %rax');
-    end
-    else
-    begin
-      Self.EmitExprToEax(Arg);
-      Self.Emit(#9'pushq %rax');
+      Arg := TASTExpr(AArgs.Items[I]);
+      IsVar := (AProcType <> nil) and (I < AProcType.Params.Count) and
+               TProcParamInfo(AProcType.Params.Items[I]).IsVarParam;
+      if IsVar then
+      begin
+        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
+          Self.Emit(Format(#9'leaq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if Arg is TIdentExpr then
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+            [TIdentExpr(Arg).Name]));
+        Self.Emit(#9'pushq %rax');
+      end
+      else
+      begin
+        Self.EmitExprToEax(Arg);
+        Self.Emit(#9'pushq %rax');
+      end;
     end;
+    for I := AArgs.Count - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I]);
+    Self.Emit(#9'callq *%r10');
+  end
+  else
+  begin
+    { >6 args: pre-allocate strategy with %r10 holding the function ptr. }
+    AllocSz := ((AArgs.Count * 8 + 15) and (-16));
+    Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
+    SlotOff := 0;
+    for I := 0 to AArgs.Count - 1 do
+    begin
+      Arg := TASTExpr(AArgs.Items[I]);
+      IsVar := (AProcType <> nil) and (I < AProcType.Params.Count) and
+               TProcParamInfo(AProcType.Params.Items[I]).IsVarParam;
+      if IsVar then
+      begin
+        if (Arg is TIdentExpr) and (TIdentExpr(Arg).ParamMode <> pmNone) then
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
+          Self.Emit(Format(#9'leaq %s, %%rax',
+            [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if Arg is TIdentExpr then
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+            [TIdentExpr(Arg).Name]));
+      end
+      else
+        Self.EmitExprToEax(Arg);
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+      Inc(SlotOff, 8);
+    end;
+    for I := 0 to 5 do
+      Self.Emit(Format(#9'movq %d(%%rsp), %s', [I * 8, SysVArgRegs64[I]]));
+    Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
+    CleanUp := AllocSz - 6 * 8;
+    Self.Emit(#9'callq *%r10');
+    if CleanUp > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
   end;
-
-  { Pop args into registers (same as EmitCall; ≤6 args assumed for now). }
-  if AArgs.Count > 6 then
-    raise ENativeCodeGenError.Create(
-      'native backend: indirect call with more than 6 arguments not yet supported');
-  for I := AArgs.Count - 1 downto 0 do
-    Self.Emit(#9'popq ' + SysVArgRegs64[I]);
-
-  Self.Emit(#9'callq *%r10');
 end;
 
 { Emit a call to a record-returning function using the sret convention.
@@ -7838,8 +7986,10 @@ end;
 procedure TX86_64Backend.EmitSretCall(const AFuncSym: string; ADecl: TMethodDecl;
                                       AArgs: TObjectList; const ASretAddr: string);
 var
-  I:   Integer;
-  Arg: TASTExpr;
+  I:        Integer;
+  Arg:      TASTExpr;
+  AllocSz:  Integer;
+  CleanUp:  Integer;
 begin
   { Save the destination address in %r10 (caller-saved scratch that survives
     arg evaluation and the memset call). }
@@ -7856,22 +8006,43 @@ begin
     { Reload %r10 after the call (memset may have clobbered caller-saves). }
     Self.Emit(Format(#9'leaq %s, %%r10', [ASretAddr]));
   end;
-  { Evaluate normal args left-to-right and push onto the stack. }
-  for I := 0 to AArgs.Count - 1 do
+  if AArgs.Count <= 5 then
   begin
-    Arg := TASTExpr(AArgs.Items[I]);
-    Self.EmitExprToEax(Arg);
-    Self.Emit(#9'pushq %rax');
+    for I := 0 to AArgs.Count - 1 do
+    begin
+      Arg := TASTExpr(AArgs.Items[I]);
+      Self.EmitExprToEax(Arg);
+      Self.Emit(#9'pushq %rax');
+    end;
+    for I := AArgs.Count - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+    Self.Emit(#9'movq %r10, %rdi');
+    Self.Emit(#9'callq ' + AFuncSym);
+  end
+  else
+  begin
+    { >5 explicit args + sret: pre-allocate (Count+1) slots (sret = slot 0,
+      explicit args = slots 1..Count).  Evaluate, load regs, leave overflow. }
+    AllocSz := (((AArgs.Count + 1) * 8 + 15) and (-16));
+    Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
+    Self.Emit(Format(#9'movq %%r10, 0(%%rsp)', []));
+    for I := 0 to AArgs.Count - 1 do
+    begin
+      Arg := TASTExpr(AArgs.Items[I]);
+      Self.EmitExprToEax(Arg);
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [(I + 1) * 8]));
+    end;
+    { Load sret ptr into %rdi, first 5 explicit args into %rsi..%r9. }
+    Self.Emit(#9'movq 0(%rsp), %rdi');
+    for I := 0 to 4 do
+      Self.Emit(Format(#9'movq %d(%%rsp), %s', [(I + 1) * 8, SysVArgRegs64[I + 1]]));
+    { Shift %rsp past the 6 register-bound slots (sret + 5 args). }
+    Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
+    Self.Emit(#9'callq ' + AFuncSym);
+    CleanUp := AllocSz - 6 * 8;
+    if CleanUp > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
   end;
-  { Pop into arg registers starting at index 1 (index 0 = %rdi is the sret ptr). }
-  if AArgs.Count > 5 then
-    raise ENativeCodeGenError.Create(
-      'native backend: sret call with more than 5 explicit args not yet supported');
-  for I := AArgs.Count - 1 downto 0 do
-    Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
-  { Place the sret pointer as the first integer arg. }
-  Self.Emit(#9'movq %r10, %rdi');
-  Self.Emit(#9'callq ' + AFuncSym);
 end;
 
 { Emit a method-pointer (of-object) call through a TMethod block.
@@ -7881,33 +8052,49 @@ procedure TX86_64Backend.EmitMethodPtrCall(const APtrOperand: string;
                                            AProcType: TProceduralTypeDesc;
                                            AArgs: TObjectList);
 var
-  I:     Integer;
-  Arg:   TASTExpr;
+  I:       Integer;
+  Arg:     TASTExpr;
+  AllocSz: Integer;
+  CleanUp: Integer;
 begin
-  { Get the base address of the TMethod block into %rcx. }
   Self.Emit(Format(#9'leaq %s, %%rcx', [APtrOperand]));
-  { Load Code (offset 0) into %r10 for later dispatch. }
   Self.Emit(#9'movq (%rcx), %r10');
-  { Load Data (offset 8) into %r11 to survive arg evaluation. }
   Self.Emit(#9'movq 8(%rcx), %r11');
 
-  { Evaluate normal args left-to-right and push them. }
-  for I := 0 to AArgs.Count - 1 do
+  if AArgs.Count <= 5 then
   begin
-    Arg := TASTExpr(AArgs.Items[I]);
-    Self.EmitExprToEax(Arg);
-    Self.Emit(#9'pushq %rax');
+    for I := 0 to AArgs.Count - 1 do
+    begin
+      Arg := TASTExpr(AArgs.Items[I]);
+      Self.EmitExprToEax(Arg);
+      Self.Emit(#9'pushq %rax');
+    end;
+    for I := AArgs.Count - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+    Self.Emit(#9'movq %r11, %rdi');
+    Self.Emit(#9'callq *%r10');
+  end
+  else
+  begin
+    { >5 explicit args: pre-allocate (Count+1) slots (Data=slot 0, args=1..N). }
+    AllocSz := (((AArgs.Count + 1) * 8 + 15) and (-16));
+    Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
+    Self.Emit(#9'movq %r11, 0(%rsp)');
+    for I := 0 to AArgs.Count - 1 do
+    begin
+      Arg := TASTExpr(AArgs.Items[I]);
+      Self.EmitExprToEax(Arg);
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [(I + 1) * 8]));
+    end;
+    Self.Emit(#9'movq 0(%rsp), %rdi');
+    for I := 0 to 4 do
+      Self.Emit(Format(#9'movq %d(%%rsp), %s', [(I + 1) * 8, SysVArgRegs64[I + 1]]));
+    Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
+    CleanUp := AllocSz - 6 * 8;
+    Self.Emit(#9'callq *%r10');
+    if CleanUp > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
   end;
-  { Pop args into %rsi/%rdx/... (index 1+; index 0 = %rdi = Self = Data). }
-  if AArgs.Count > 5 then
-    raise ENativeCodeGenError.Create(
-      'native backend: method-ptr call with more than 5 explicit args');
-  for I := AArgs.Count - 1 downto 0 do
-    Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
-  { Place Data (Self) as first arg. }
-  Self.Emit(#9'movq %r11, %rdi');
-  { Dispatch through Code pointer. }
-  Self.Emit(#9'callq *%r10');
 end;
 
 { True when AType is an integer-family type the backend can place in a

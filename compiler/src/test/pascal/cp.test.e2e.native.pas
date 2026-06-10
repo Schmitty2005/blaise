@@ -77,6 +77,7 @@ type
     procedure TestRun_Native_ExitValueShorthand;
     procedure TestRun_Native_SevenArgs;
     procedure TestRun_Native_EightArgs;
+    procedure TestRun_Native_TenArgs;
     procedure TestRun_Native_IndirectCall_BareProc;
     procedure TestRun_Native_IndirectCall_BareFunc;
     procedure TestRun_Native_Record_GlobalReadWrite;
@@ -720,6 +721,18 @@ const
     end.
     ''';
 
+  { 10 integer args: first 6 in registers, 7th–10th on the stack. }
+  SrcTenArgs = '''
+    program P;
+    function Sum10(A, B, C, D, E, F, G, H, I, J: Integer): Integer;
+    begin
+      Result := A + B + C + D + E + F + G + H + I + J
+    end;
+    begin
+      WriteLn(Sum10(1, 2, 3, 4, 5, 6, 7, 8, 9, 10))
+    end.
+    ''';
+
   { Bare procedural-type (no 'of object'): assign a procedure to a variable
     and call through it.  WriteLn is not callable via a proc var in the test
     harness, so we use a user-defined Print procedure. }
@@ -1289,6 +1302,13 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   { 1+2+3+4+5+6+7+8 = 36; 100-1-2-3-4-5-6-7 = 72 }
   AssertRunsOnBoth(SrcEightArgs, '36' + LE + '72' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_TenArgs;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  { 1+2+3+4+5+6+7+8+9+10 = 55 }
+  AssertRunsOnBoth(SrcTenArgs, '55' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IndirectCall_BareProc;
