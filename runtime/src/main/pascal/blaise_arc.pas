@@ -56,7 +56,6 @@ procedure _ClassRelease(UserPtr: Pointer);
 function  _ClassAlloc(Size: Int64; Cleanup: Pointer): Pointer;
 procedure _ClassFree(UserPtr: Pointer);
 function  _HasClassAttribute(AClassTI, AAttrTI: Pointer): Boolean;
-procedure _StringReleaseCheck(DataPtr: Pointer; RefCount, Length, Capacity: Integer);
 procedure _AbstractMethodError;
 procedure _LeakTrackerEnable;
 procedure _LeakTrackerRegister(UserPtr: Pointer; ClassName: Pointer;
@@ -113,16 +112,6 @@ begin
   NL := 10;
   _libc_write(STDERR_FD, @NL, 1);
   _libc_abort;
-end;
-
-procedure _StringReleaseCheck(DataPtr: Pointer; RefCount, Length, Capacity: Integer);
-begin
-  if RefCount < -1 then
-    DiagAbort('blaise: _StringRelease double-free (refcount < -1)', 51);
-  if (Length < 0) or (Length > MAX_1GIB) then
-    DiagAbort('blaise: _StringRelease corrupted header (bad length)', 55);
-  if (Capacity < Length) or (Capacity > MAX_1GIB) then
-    DiagAbort('blaise: _StringRelease corrupted header (bad capacity)', 57);
 end;
 
 procedure _AbstractMethodError;
@@ -454,7 +443,16 @@ begin
   if RC^ = IMMORTAL then Exit;
   LN := Base + 4;
   CP := Base + 8;
-  _StringReleaseCheck(Ptr, RC^, LN^, CP^);
+  { Header sanity checks inlined — this is the hottest runtime function
+    (one call per string release, ~350M per compiler self-compile) and the
+    out-of-line _StringReleaseCheck call doubled its cost.  DiagAbort is
+    the cold path. }
+  if RC^ < -1 then
+    DiagAbort('blaise: _StringRelease double-free (refcount < -1)', 51);
+  if (LN^ < 0) or (LN^ > MAX_1GIB) then
+    DiagAbort('blaise: _StringRelease corrupted header (bad length)', 55);
+  if (CP^ < LN^) or (CP^ > MAX_1GIB) then
+    DiagAbort('blaise: _StringRelease corrupted header (bad capacity)', 57);
   OldRC := _AtomicSubInt32(RC, 1);
   if OldRC = 1 then
   begin
