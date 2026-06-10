@@ -320,13 +320,15 @@ end;
 
 const
   SrcThreadVarMain =
-    'program P;' + LE +
-    'threadvar' + LE +
-    '  Counter: Integer;' + LE +
-    'begin' + LE +
-    '  Counter := 42;' + LE +
-    '  WriteLn(Counter)' + LE +
-    'end.';
+    '''
+    program P;
+    threadvar
+      Counter: Integer;
+    begin
+      Counter := 42;
+      WriteLn(Counter)
+    end.
+    ''';
 
 procedure TE2EThreadingTests.TestRun_ThreadVar_MainThread_ReadWrite;
 var
@@ -341,16 +343,18 @@ end;
 
 const
   SrcThreadVarMixed =
-    'program P;' + LE +
-    'var' + LE +
-    '  G: Integer;' + LE +
-    'threadvar' + LE +
-    '  T: Integer;' + LE +
-    'begin' + LE +
-    '  G := 10;' + LE +
-    '  T := 20;' + LE +
-    '  WriteLn(G + T)' + LE +
-    'end.';
+    '''
+    program P;
+    var
+      G: Integer;
+    threadvar
+      T: Integer;
+    begin
+      G := 10;
+      T := 20;
+      WriteLn(G + T)
+    end.
+    ''';
 
 procedure TE2EThreadingTests.TestRun_ThreadVar_MixedWithGlobalVar;
 var

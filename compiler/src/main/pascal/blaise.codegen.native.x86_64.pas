@@ -3629,13 +3629,19 @@ begin
       { Arg0: class instance → class pointer in %rdi }
       Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
       Self.Emit(#9'movq %rax, %rdi');
-      { Arg1: pointer to method name string data (offset +12 past ARC header). }
+      Self.Emit(#9'pushq %rdi');
+      { Arg1: string data pointer for method name.  Literals reference the
+        __cn_ blob directly; variable/call expressions evaluate to a managed
+        string whose value is already the data pointer. }
       if TASTExpr(FC.Args.Items[1]) is TStringLiteral then
         Self.Emit(Format(#9'leaq __cn_%s + 12(%%rip), %%rsi',
           [NativeMangle(TStringLiteral(TASTExpr(FC.Args.Items[1])).Value)]))
       else
-        raise ENativeCodeGenError.Create(
-          'native backend: MethodAddress second arg must be a string literal');
+      begin
+        Self.EmitExprToEax(TASTExpr(FC.Args.Items[1]));
+        Self.Emit(#9'movq %rax, %rsi');
+      end;
+      Self.Emit(#9'popq %rdi');
       Self.Emit(#9'callq _MethodAddress');
       { Result = method code pointer in %rax. }
       Exit;

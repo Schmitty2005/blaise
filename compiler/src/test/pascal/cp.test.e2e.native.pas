@@ -88,6 +88,7 @@ type
     procedure TestRun_Native_StaticArray_NonZeroLow;
     { TODO M7: method-pointer calls require class support }
     procedure TestRun_Native_IndirectCall_MethodPtr;
+    procedure TestRun_Native_MethodAddress_VarString;
     { TODO M7: record-returning function — deferred until sret/aggregate support }
     procedure TestRun_Native_RecordReturnFunction;
     procedure TestRun_Native_Record_NestedFieldAssign;
@@ -903,6 +904,42 @@ const
     end.
     ''';
 
+  { MethodAddress with a variable (non-literal) string argument. }
+  SrcMethodAddrVarString = '''
+    program P;
+    type
+      TCounter = class
+        FVal: Integer;
+      published
+        procedure Add(N: Integer);
+        function  Get: Integer;
+      end;
+      TAddProc = procedure(N: Integer) of object;
+    procedure TCounter.Add(N: Integer);
+    begin
+      Self.FVal := Self.FVal + N
+    end;
+    function TCounter.Get: Integer;
+    begin
+      Result := Self.FVal
+    end;
+    var
+      C: TCounter;
+      M: TMethod;
+      P: TAddProc;
+      Name: string;
+    begin
+      C := TCounter.Create();
+      Name := 'Add';
+      M.Code := MethodAddress(C, Name);
+      M.Data := C;
+      P := TAddProc(M);
+      P(10);
+      P(32);
+      WriteLn(C.Get())
+    end.
+    ''';
+
   { Record global: declare a record type, write fields from main, read back. }
   SrcRecordGlobal = '''
     program P;
@@ -1458,6 +1495,12 @@ procedure TE2ENativeTests.TestRun_Native_IndirectCall_MethodPtr;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcIndirectMethodPtr, '15' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_MethodAddress_VarString;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcMethodAddrVarString, '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_RecordReturnFunction;
@@ -3735,18 +3778,20 @@ var
   NCode, QCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  UnitSrc :=
-    'unit mu_pf;' + LE +
-    'interface' + LE +
-    'function Doubled(X: Integer): Integer;' + LE +
-    'implementation' + LE +
-    'function Doubled(X: Integer): Integer;' + LE +
-    'begin Result := X * 2; end;' + LE +
-    'end.' + LE;
-  ProgSrc :=
-    'program P;' + LE +
-    'uses mu_pf;' + LE +
-    'begin WriteLn(Doubled(21)); end.' + LE;
+  UnitSrc := '''
+    unit mu_pf;
+    interface
+    function Doubled(X: Integer): Integer;
+    implementation
+    function Doubled(X: Integer): Integer;
+    begin Result := X * 2; end;
+    end.
+    ''';
+  ProgSrc := '''
+    program P;
+    uses mu_pf;
+    begin WriteLn(Doubled(21)); end.
+    ''';
   AssertTrue('native compile+run',
     CompileAndRunWithUnitNative('mu_pf', UnitSrc, ProgSrc, NOut, NCode));
   AssertTrue('qbe compile+run',
@@ -3762,18 +3807,20 @@ var
   NCode, QCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  UnitSrc :=
-    'unit mu_sf;' + LE +
-    'interface' + LE +
-    'function Greeting(const AName: string): string;' + LE +
-    'implementation' + LE +
-    'function Greeting(const AName: string): string;' + LE +
-    'begin Result := ''Hello, '' + AName + ''!''; end;' + LE +
-    'end.' + LE;
-  ProgSrc :=
-    'program P;' + LE +
-    'uses mu_sf;' + LE +
-    'begin WriteLn(Greeting(''World'')); end.' + LE;
+  UnitSrc := '''
+    unit mu_sf;
+    interface
+    function Greeting(const AName: string): string;
+    implementation
+    function Greeting(const AName: string): string;
+    begin Result := 'Hello, ' + AName + '!'; end;
+    end.
+    ''';
+  ProgSrc := '''
+    program P;
+    uses mu_sf;
+    begin WriteLn(Greeting('World')); end.
+    ''';
   AssertTrue('native compile+run',
     CompileAndRunWithUnitNative('mu_sf', UnitSrc, ProgSrc, NOut, NCode));
   AssertTrue('qbe compile+run',
@@ -3789,34 +3836,36 @@ var
   NCode, QCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  UnitSrc :=
-    'unit mu_cl;' + LE +
-    'interface' + LE +
-    'type' + LE +
-    '  TCounter = class' + LE +
-    '  private FValue: Integer;' + LE +
-    '  public' + LE +
-    '    constructor Create(AStart: Integer);' + LE +
-    '    procedure Bump;' + LE +
-    '    function Value: Integer;' + LE +
-    '    function Describe: string; virtual;' + LE +
-    '  end;' + LE +
-    'implementation' + LE +
-    'constructor TCounter.Create(AStart: Integer); begin FValue := AStart; end;' + LE +
-    'procedure TCounter.Bump; begin FValue := FValue + 1; end;' + LE +
-    'function TCounter.Value: Integer; begin Result := FValue; end;' + LE +
-    'function TCounter.Describe: string; begin Result := ''Counter''; end;' + LE +
-    'end.' + LE;
-  ProgSrc :=
-    'program P;' + LE +
-    'uses mu_cl;' + LE +
-    'var C: TCounter;' + LE +
-    'begin' + LE +
-    '  C := TCounter.Create(10);' + LE +
-    '  C.Bump(); C.Bump();' + LE +
-    '  WriteLn(C.Describe(), '' = '', C.Value());' + LE +
-    '  C.Free();' + LE +
-    'end.' + LE;
+  UnitSrc := '''
+    unit mu_cl;
+    interface
+    type
+      TCounter = class
+      private FValue: Integer;
+      public
+        constructor Create(AStart: Integer);
+        procedure Bump;
+        function Value: Integer;
+        function Describe: string; virtual;
+      end;
+    implementation
+    constructor TCounter.Create(AStart: Integer); begin FValue := AStart; end;
+    procedure TCounter.Bump; begin FValue := FValue + 1; end;
+    function TCounter.Value: Integer; begin Result := FValue; end;
+    function TCounter.Describe: string; begin Result := 'Counter'; end;
+    end.
+    ''';
+  ProgSrc := '''
+    program P;
+    uses mu_cl;
+    var C: TCounter;
+    begin
+      C := TCounter.Create(10);
+      C.Bump(); C.Bump();
+      WriteLn(C.Describe(), ' = ', C.Value());
+      C.Free();
+    end.
+    ''';
   AssertTrue('native compile+run',
     CompileAndRunWithUnitNative('mu_cl', UnitSrc, ProgSrc, NOut, NCode));
   AssertTrue('qbe compile+run',
@@ -3832,27 +3881,29 @@ var
   NCode, QCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  UnitSrc :=
-    'unit mu_if;' + LE +
-    'interface' + LE +
-    'type' + LE +
-    '  ISpeaker = interface' + LE +
-    '    function Speak: string;' + LE +
-    '  end;' + LE +
-    '  TDog = class(TObject, ISpeaker) public function Speak: string; end;' + LE +
-    '  TCat = class(TObject, ISpeaker) public function Speak: string; end;' + LE +
-    'implementation' + LE +
-    'function TDog.Speak: string; begin Result := ''Woof''; end;' + LE +
-    'function TCat.Speak: string; begin Result := ''Meow''; end;' + LE +
-    'end.' + LE;
-  ProgSrc :=
-    'program P;' + LE +
-    'uses mu_if;' + LE +
-    'var S: ISpeaker;' + LE +
-    'begin' + LE +
-    '  S := TDog.Create(); WriteLn(S.Speak());' + LE +
-    '  S := TCat.Create(); WriteLn(S.Speak());' + LE +
-    'end.' + LE;
+  UnitSrc := '''
+    unit mu_if;
+    interface
+    type
+      ISpeaker = interface
+        function Speak: string;
+      end;
+      TDog = class(TObject, ISpeaker) public function Speak: string; end;
+      TCat = class(TObject, ISpeaker) public function Speak: string; end;
+    implementation
+    function TDog.Speak: string; begin Result := 'Woof'; end;
+    function TCat.Speak: string; begin Result := 'Meow'; end;
+    end.
+    ''';
+  ProgSrc := '''
+    program P;
+    uses mu_if;
+    var S: ISpeaker;
+    begin
+      S := TDog.Create(); WriteLn(S.Speak());
+      S := TCat.Create(); WriteLn(S.Speak());
+    end.
+    ''';
   AssertTrue('native compile+run',
     CompileAndRunWithUnitNative('mu_if', UnitSrc, ProgSrc, NOut, NCode));
   AssertTrue('qbe compile+run',
@@ -3868,25 +3919,27 @@ var
   NCode, QCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  UnitSrc :=
-    'unit mu_gi;' + LE +
-    'interface' + LE +
-    'var GCounter: Integer; GLabel: string;' + LE +
-    'procedure Increment;' + LE +
-    'implementation' + LE +
-    'procedure Increment; begin GCounter := GCounter + 1; end;' + LE +
-    'initialization' + LE +
-    '  GCounter := 100;' + LE +
-    '  GLabel := ''configured'';' + LE +
-    'end.' + LE;
-  ProgSrc :=
-    'program P;' + LE +
-    'uses mu_gi;' + LE +
-    'begin' + LE +
-    '  WriteLn(GLabel, '' '', GCounter);' + LE +
-    '  Increment(); Increment();' + LE +
-    '  WriteLn(GCounter);' + LE +
-    'end.' + LE;
+  UnitSrc := '''
+    unit mu_gi;
+    interface
+    var GCounter: Integer; GLabel: string;
+    procedure Increment;
+    implementation
+    procedure Increment; begin GCounter := GCounter + 1; end;
+    initialization
+      GCounter := 100;
+      GLabel := 'configured';
+    end.
+    ''';
+  ProgSrc := '''
+    program P;
+    uses mu_gi;
+    begin
+      WriteLn(GLabel, ' ', GCounter);
+      Increment(); Increment();
+      WriteLn(GCounter);
+    end.
+    ''';
   AssertTrue('native compile+run',
     CompileAndRunWithUnitNative('mu_gi', UnitSrc, ProgSrc, NOut, NCode));
   AssertTrue('qbe compile+run',
@@ -3901,1041 +3954,1096 @@ end;
 procedure TE2ENativeTests.TestRun_Native_RecordParam_ReadOnly;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TRec = record S: string; end;'
-    + 'procedure Show(R: TRec);'
-    + 'begin WriteLn(''in: '', R.S) end;'
-    + 'var W: TRec;'
-    + 'begin'
-    + '  W.S := ''heap-'' + ''allocated'';'
-    + '  Show(W);'
-    + '  WriteLn(''out: '', W.S)'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TRec = record S: string; end;
+    procedure Show(R: TRec);
+    begin WriteLn('in: ', R.S) end;
+    var W: TRec;
+    begin
+      W.S := 'heap-' + 'allocated';
+      Show(W);
+      WriteLn('out: ', W.S)
+    end.
+    ''',
     'in: heap-allocated' + LE + 'out: heap-allocated' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_RecordParam_Mutate;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TR = record S: string; end;'
-    + 'procedure Mutate(R: TR); begin R.S := ''new'' end;'
-    + 'var W: TR;'
-    + 'begin'
-    + '  W.S := ''heap-'' + ''allocated'';'
-    + '  Mutate(W);'
-    + '  WriteLn(W.S)'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TR = record S: string; end;
+    procedure Mutate(R: TR); begin R.S := 'new' end;
+    var W: TR;
+    begin
+      W.S := 'heap-' + 'allocated';
+      Mutate(W);
+      WriteLn(W.S)
+    end.
+    ''',
     'heap-allocated' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_RecordParam_ThreeStrings;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TR = record A: string; B: string; C: string; end;'
-    + 'procedure Mutate(R: TR); begin R.A := ''changed'' end;'
-    + 'var W: TR;'
-    + 'begin'
-    + '  W.A := ''heap-'' + ''one'';'
-    + '  W.B := ''heap-'' + ''two'';'
-    + '  W.C := ''heap-'' + ''three'';'
-    + '  Mutate(W);'
-    + '  WriteLn(W.A)'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TR = record A: string; B: string; C: string; end;
+    procedure Mutate(R: TR); begin R.A := 'changed' end;
+    var W: TR;
+    begin
+      W.A := 'heap-' + 'one';
+      W.B := 'heap-' + 'two';
+      W.C := 'heap-' + 'three';
+      Mutate(W);
+      WriteLn(W.A)
+    end.
+    ''',
     'heap-one' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_RecordParam_IntOnly;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TR = record A: Integer; B: Integer; end;'
-    + 'procedure Show(R: TR); begin WriteLn(R.A + R.B) end;'
-    + 'var W: TR;'
-    + 'begin W.A := 40; W.B := 2; Show(W) end.',
+  AssertRunsOnAll('''
+    program P;
+    type TR = record A: Integer; B: Integer; end;
+    procedure Show(R: TR); begin WriteLn(R.A + R.B) end;
+    var W: TR;
+    begin W.A := 40; W.B := 2; Show(W) end.
+    ''',
     '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_RecordParam_InlineSretArg;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TInner = record N: string; end;'
-    + '     TOuter = record S: string; Inner: TInner; end;'
-    + 'function MakeOuter: TOuter;'
-    + 'begin Result.S := ''outer-'' + ''heap''; Result.Inner.N := ''inner-'' + ''heap'' end;'
-    + 'procedure Consume(R: TOuter);'
-    + 'begin WriteLn(R.S, ''|'', R.Inner.N) end;'
-    + 'begin'
-    + '  Consume(MakeOuter())'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TInner = record N: string; end;
+         TOuter = record S: string; Inner: TInner; end;
+    function MakeOuter: TOuter;
+    begin Result.S := 'outer-' + 'heap'; Result.Inner.N := 'inner-' + 'heap' end;
+    procedure Consume(R: TOuter);
+    begin WriteLn(R.S, '|', R.Inner.N) end;
+    begin
+      Consume(MakeOuter())
+    end.
+    ''',
     'outer-heap|inner-heap' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_RecordParam_ConstSkipsArc;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TR = record S: string; end;'
-    + 'procedure Show(const R: TR);'
-    + 'begin WriteLn(R.S) end;'
-    + 'var W: TR;'
-    + 'begin'
-    + '  W.S := ''heap-'' + ''text'';'
-    + '  Show(W);'
-    + '  WriteLn(W.S)'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TR = record S: string; end;
+    procedure Show(const R: TR);
+    begin WriteLn(R.S) end;
+    var W: TR;
+    begin
+      W.S := 'heap-' + 'text';
+      Show(W);
+      WriteLn(W.S)
+    end.
+    ''',
     'heap-text' + LE + 'heap-text' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ShortCircuit_AndSkipsRhs;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'var X: Integer;'
-    + 'begin'
-    + '  X := 5;'
-    + '  if (X > 3) and (X < 10) then'
-    + '    WriteLn(''both'')'
-    + '  else'
-    + '    WriteLn(''nope'');'
-    + '  if (X > 100) and (X < 200) then'
-    + '    WriteLn(''bad'')'
-    + '  else'
-    + '    WriteLn(''skipped'')'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    var X: Integer;
+    begin
+      X := 5;
+      if (X > 3) and (X < 10) then
+        WriteLn('both')
+      else
+        WriteLn('nope');
+      if (X > 100) and (X < 200) then
+        WriteLn('bad')
+      else
+        WriteLn('skipped')
+    end.
+    ''',
     'both' + LE + 'skipped' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ShortCircuit_OrSkipsRhs;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'var X: Integer;'
-    + 'begin'
-    + '  X := 5;'
-    + '  if (X = 5) or (X = 99) then'
-    + '    WriteLn(''first-true'')'
-    + '  else'
-    + '    WriteLn(''nope'');'
-    + '  if (X = 99) or (X = 5) then'
-    + '    WriteLn(''second-true'')'
-    + '  else'
-    + '    WriteLn(''nope'')'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    var X: Integer;
+    begin
+      X := 5;
+      if (X = 5) or (X = 99) then
+        WriteLn('first-true')
+      else
+        WriteLn('nope');
+      if (X = 99) or (X = 5) then
+        WriteLn('second-true')
+      else
+        WriteLn('nope')
+    end.
+    ''',
     'first-true' + LE + 'second-true' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ShortCircuit_AndNilGuard;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TFoo = class'
-    + '  public'
-    + '    N: Integer;'
-    + '    constructor Create(AVal: Integer);'
-    + '  end;'
-    + 'constructor TFoo.Create(AVal: Integer);'
-    + 'begin N := AVal end;'
-    + 'var Obj: TFoo;'
-    + 'begin'
-    + '  Obj := nil;'
-    + '  if (Obj <> nil) and (Obj.N = 42) then'
-    + '    WriteLn(''bad'')'
-    + '  else'
-    + '    WriteLn(''nil-guarded'');'
-    + '  Obj := TFoo.Create(42);'
-    + '  if (Obj <> nil) and (Obj.N = 42) then'
-    + '    WriteLn(''found'')'
-    + '  else'
-    + '    WriteLn(''bad'')'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TFoo = class
+      public
+        N: Integer;
+        constructor Create(AVal: Integer);
+      end;
+    constructor TFoo.Create(AVal: Integer);
+    begin N := AVal end;
+    var Obj: TFoo;
+    begin
+      Obj := nil;
+      if (Obj <> nil) and (Obj.N = 42) then
+        WriteLn('bad')
+      else
+        WriteLn('nil-guarded');
+      Obj := TFoo.Create(42);
+      if (Obj <> nil) and (Obj.N = 42) then
+        WriteLn('found')
+      else
+        WriteLn('bad')
+    end.
+    ''',
     'nil-guarded' + LE + 'found' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ProceduralParam;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TIntFunc = function(X: Integer): Integer;'
-    + 'function Twice(X: Integer): Integer;'
-    + 'begin Result := X * 2 end;'
-    + 'function Apply(F: TIntFunc; V: Integer): Integer;'
-    + 'begin Result := F(V) end;'
-    + 'begin'
-    + '  WriteLn(Apply(@Twice, 21))'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TIntFunc = function(X: Integer): Integer;
+    function Twice(X: Integer): Integer;
+    begin Result := X * 2 end;
+    function Apply(F: TIntFunc; V: Integer): Integer;
+    begin Result := F(V) end;
+    begin
+      WriteLn(Apply(@Twice, 21))
+    end.
+    ''',
     '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IsExpr_Class;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type'
-    + '  TBase = class public N: Integer; end;'
-    + '  TChild = class(TBase) public S: string; end;'
-    + 'var Obj: TBase;'
-    + 'begin'
-    + '  Obj := TChild.Create();'
-    + '  if Obj is TChild then WriteLn(''child-yes'') else WriteLn(''child-no'');'
-    + '  if Obj is TBase then WriteLn(''base-yes'') else WriteLn(''base-no'');'
-    + '  Obj := TBase.Create();'
-    + '  if Obj is TChild then WriteLn(''child-yes'') else WriteLn(''child-no'')'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type
+      TBase = class public N: Integer; end;
+      TChild = class(TBase) public S: string; end;
+    var Obj: TBase;
+    begin
+      Obj := TChild.Create();
+      if Obj is TChild then WriteLn('child-yes') else WriteLn('child-no');
+      if Obj is TBase then WriteLn('base-yes') else WriteLn('base-no');
+      Obj := TBase.Create();
+      if Obj is TChild then WriteLn('child-yes') else WriteLn('child-no')
+    end.
+    ''',
     'child-yes' + LE + 'base-yes' + LE + 'child-no' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_AsExpr_Class;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type'
-    + '  TBase = class public N: Integer; end;'
-    + '  TChild = class(TBase) public S: string; end;'
-    + 'var B: TBase; C: TChild;'
-    + 'begin'
-    + '  B := TChild.Create();'
-    + '  TChild(B).S := ''hello'';'
-    + '  C := TChild(B as TChild);'
-    + '  WriteLn(C.S)'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type
+      TBase = class public N: Integer; end;
+      TChild = class(TBase) public S: string; end;
+    var B: TBase; C: TChild;
+    begin
+      B := TChild.Create();
+      TChild(B).S := 'hello';
+      C := TChild(B as TChild);
+      WriteLn(C.S)
+    end.
+    ''',
     'hello' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_SupportsExpr;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type'
-    + '  IGreet = interface procedure Greet; end;'
-    + '  TFoo = class(IGreet) public procedure Greet; end;'
-    + 'procedure TFoo.Greet; begin WriteLn(''hi'') end;'
-    + 'var Obj: TFoo;'
-    + 'begin'
-    + '  Obj := TFoo.Create();'
-    + '  if Supports(Obj, IGreet) then WriteLn(''supports'') else WriteLn(''no'')'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type
+      IGreet = interface procedure Greet; end;
+      TFoo = class(IGreet) public procedure Greet; end;
+    procedure TFoo.Greet; begin WriteLn('hi') end;
+    var Obj: TFoo;
+    begin
+      Obj := TFoo.Create();
+      if Supports(Obj, IGreet) then WriteLn('supports') else WriteLn('no')
+    end.
+    ''',
     'supports' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IndirectFuncCallExpr;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TMapper = function(X: Integer): Integer;'
-    + 'function Triple(X: Integer): Integer;'
-    + 'begin Result := X * 3 end;'
-    + 'var Fns: array[0..0] of TMapper;'
-    + 'begin'
-    + '  Fns[0] := @Triple;'
-    + '  WriteLn(Fns[0](7))'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TMapper = function(X: Integer): Integer;
+    function Triple(X: Integer): Integer;
+    begin Result := X * 3 end;
+    var Fns: array[0..0] of TMapper;
+    begin
+      Fns[0] := @Triple;
+      WriteLn(Fns[0](7))
+    end.
+    ''',
     '21' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Builtin_Ord;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TColor = (Red, Green, Blue);'
-    + 'var C: TColor;'
-    + 'begin'
-    + '  C := Blue;'
-    + '  WriteLn(Ord(C));'
-    + '  WriteLn(Ord(''A''))'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TColor = (Red, Green, Blue);
+    var C: TColor;
+    begin
+      C := Blue;
+      WriteLn(Ord(C));
+      WriteLn(Ord('A'))
+    end.
+    ''',
     '2' + LE + '65' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Builtin_Assigned;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TObj = class end;'
-    + 'var O: TObj;'
-    + 'begin'
-    + '  O := nil;'
-    + '  if Assigned(O) then WriteLn(''yes'') else WriteLn(''no'');'
-    + '  O := TObj.Create();'
-    + '  if Assigned(O) then WriteLn(''yes'') else WriteLn(''no'')'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TObj = class end;
+    var O: TObj;
+    begin
+      O := nil;
+      if Assigned(O) then WriteLn('yes') else WriteLn('no');
+      O := TObj.Create();
+      if Assigned(O) then WriteLn('yes') else WriteLn('no')
+    end.
+    ''',
     'no' + LE + 'yes' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Builtin_Abs;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'begin'
-    + '  WriteLn(Abs(-42));'
-    + '  WriteLn(Abs(7));'
-    + '  WriteLn(Abs(0))'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    begin
+      WriteLn(Abs(-42));
+      WriteLn(Abs(7));
+      WriteLn(Abs(0))
+    end.
+    ''',
     '42' + LE + '7' + LE + '0' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Builtin_Halt;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'begin'
-    + '  WriteLn(''before'');'
-    + '  Halt(42);'
-    + '  WriteLn(''after'')'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    begin
+      WriteLn('before');
+      Halt(42);
+      WriteLn('after')
+    end.
+    ''',
     'before' + LE, 42);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Builtin_RoundTrunc;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'var D: Double;'
-    + 'begin'
-    + '  D := 3.7;'
-    + '  WriteLn(Round(D));'
-    + '  WriteLn(Trunc(D))'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    var D: Double;
+    begin
+      D := 3.7;
+      WriteLn(Round(D));
+      WriteLn(Trunc(D))
+    end.
+    ''',
     '4' + LE + '3' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Builtin_CompareStr;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'begin'
-    + '  if CompareStr(''abc'', ''abc'') = 0 then WriteLn(''eq'') else WriteLn(''ne'');'
-    + '  if CompareStr(''abc'', ''abd'') < 0 then WriteLn(''lt'') else WriteLn(''ge'')'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    begin
+      if CompareStr('abc', 'abc') = 0 then WriteLn('eq') else WriteLn('ne');
+      if CompareStr('abc', 'abd') < 0 then WriteLn('lt') else WriteLn('ge')
+    end.
+    ''',
     'eq' + LE + 'lt' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Builtin_UpCase;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'begin'
-    + '  WriteLn(UpCase(97));'
-    + '  WriteLn(UpCase(90))'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    begin
+      WriteLn(UpCase(97));
+      WriteLn(UpCase(90))
+    end.
+    ''',
     'A' + LE + 'Z' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Builtin_Int64ToStr;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'var N: Int64;'
-    + 'begin'
-    + '  N := 9876543210;'
-    + '  WriteLn(Int64ToStr(N))'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    var N: Int64;
+    begin
+      N := 9876543210;
+      WriteLn(Int64ToStr(N))
+    end.
+    ''',
     '9876543210' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_NestedProc_ReadCapture;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'procedure Outer;'
-    + 'var X: Integer;'
-    + '  procedure Inner;'
-    + '  begin WriteLn(X) end;'
-    + 'begin'
-    + '  X := 42;'
-    + '  Inner()'
-    + 'end;'
-    + 'begin'
-    + '  Outer()'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    procedure Outer;
+    var X: Integer;
+      procedure Inner;
+      begin WriteLn(X) end;
+    begin
+      X := 42;
+      Inner()
+    end;
+    begin
+      Outer()
+    end.
+    ''',
     '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_NestedProc_WriteCapture;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'procedure Outer;'
-    + 'var X: Integer;'
-    + '  procedure Inner;'
-    + '  begin X := 99 end;'
-    + 'begin'
-    + '  X := 0;'
-    + '  Inner();'
-    + '  WriteLn(X)'
-    + 'end;'
-    + 'begin'
-    + '  Outer()'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    procedure Outer;
+    var X: Integer;
+      procedure Inner;
+      begin X := 99 end;
+    begin
+      X := 0;
+      Inner();
+      WriteLn(X)
+    end;
+    begin
+      Outer()
+    end.
+    ''',
     '99' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Builtin_SinCos;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'var R: Integer;'
-    + 'begin'
-    + '  R := Round(Sin(0.0));'
-    + '  WriteLn(IntToStr(R));'
-    + '  R := Round(Cos(0.0));'
-    + '  WriteLn(IntToStr(R))'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    var R: Integer;
+    begin
+      R := Round(Sin(0.0));
+      WriteLn(IntToStr(R));
+      R := Round(Cos(0.0));
+      WriteLn(IntToStr(R))
+    end.
+    ''',
     '0' + LE + '1' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Builtin_SqrtDouble;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'var R: Integer;'
-    + 'begin'
-    + '  R := Round(Sqrt(4.0));'
-    + '  WriteLn(IntToStr(R))'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    var R: Integer;
+    begin
+      R := Round(Sqrt(4.0));
+      WriteLn(IntToStr(R))
+    end.
+    ''',
     '2' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_DoublePtrWrite;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'var D: Double; PD: ^Double;'
-    + 'begin'
-    + '  D := 0.0;'
-    + '  PD := @D;'
-    + '  PD^ := 3.14;'
-    + '  WriteLn(D)'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    var D: Double; PD: ^Double;
+    begin
+      D := 0.0;
+      PD := @D;
+      PD^ := 3.14;
+      WriteLn(D)
+    end.
+    ''',
     '3.14' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_SinglePtrWrite_NoAdjacentClobber;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'var A: Single; B: Single; PA: ^Single;'
-    + 'begin'
-    + '  A := 0.0;'
-    + '  B := 9.5;'
-    + '  PA := @A;'
-    + '  PA^ := 1.25;'
-    + '  WriteLn(B)'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    var A: Single; B: Single; PA: ^Single;
+    begin
+      A := 0.0;
+      B := 9.5;
+      PA := @A;
+      PA^ := 1.25;
+      WriteLn(B)
+    end.
+    ''',
     '9.5' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IncDec_RecordField;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TRec = record X: Integer; Y: Integer; end;'
-    + 'var R: TRec;'
-    + 'begin'
-    + '  R.X := 10;'
-    + '  R.Y := 100;'
-    + '  Inc(R.X);'
-    + '  Inc(R.Y, 5);'
-    + '  Dec(R.X, 3);'
-    + '  WriteLn(R.X);'
-    + '  WriteLn(R.Y)'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TRec = record X: Integer; Y: Integer; end;
+    var R: TRec;
+    begin
+      R.X := 10;
+      R.Y := 100;
+      Inc(R.X);
+      Inc(R.Y, 5);
+      Dec(R.X, 3);
+      WriteLn(R.X);
+      WriteLn(R.Y)
+    end.
+    ''',
     '8' + LE + '105' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_IncDec_PtrDeref;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'var N: Integer;'
-    + 'var P: ^Integer;'
-    + 'begin'
-    + '  N := 20;'
-    + '  P := @N;'
-    + '  Inc(P^);'
-    + '  Inc(P^, 4);'
-    + '  WriteLn(N)'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    var N: Integer;
+    var P: ^Integer;
+    begin
+      N := 20;
+      P := @N;
+      Inc(P^);
+      Inc(P^, 4);
+      WriteLn(N)
+    end.
+    ''',
     '25' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_TypeCast_PointerClass;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'var N: Integer; P: Pointer;'
-    + 'begin'
-    + '  N := 42;'
-    + '  P := Pointer(N);'
-    + '  WriteLn(Integer(P))'
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    var N: Integer; P: Pointer;
+    begin
+      N := 42;
+      P := Pointer(N);
+      WriteLn(Integer(P))
+    end.
+    ''',
     '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_PropertyRead_Simple;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TBox = class'
-    + ' FVal: Integer;'
-    + ' constructor Create(V: Integer);'
-    + ' function GetVal: Integer;'
-    + ' property Val: Integer read GetVal;'
-    + 'end;'
-    + 'constructor TBox.Create(V: Integer);'
-    + 'begin FVal := V end;'
-    + 'function TBox.GetVal: Integer;'
-    + 'begin Result := FVal end;'
-    + 'var B: TBox;'
-    + 'begin'
-    + '  B := TBox.Create(99);'
-    + '  WriteLn(B.Val);'
-    + '  B.Free '
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TBox = class
+      FVal: Integer;
+      constructor Create(V: Integer);
+      function GetVal: Integer;
+      property Val: Integer read GetVal;
+    end;
+    constructor TBox.Create(V: Integer);
+    begin FVal := V end;
+    function TBox.GetVal: Integer;
+    begin Result := FVal end;
+    var B: TBox;
+    begin
+      B := TBox.Create(99);
+      WriteLn(B.Val);
+      B.Free
+    end.
+    ''',
     '99' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_PropertyRead_Indexed;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TArr = class'
-    + ' FA: Integer; FB: Integer;'
-    + ' constructor Create;'
-    + ' function GetItem(I: Integer): Integer;'
-    + ' property Items[I: Integer]: Integer read GetItem;'
-    + 'end;'
-    + 'constructor TArr.Create;'
-    + 'begin FA := 10; FB := 30 end;'
-    + 'function TArr.GetItem(I: Integer): Integer;'
-    + 'begin if I = 0 then Result := FA else Result := FB end;'
-    + 'var A: TArr;'
-    + 'begin'
-    + '  A := TArr.Create;'
-    + '  WriteLn(A.Items[0]);'
-    + '  WriteLn(A.Items[1]);'
-    + '  A.Free '
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TArr = class
+      FA: Integer; FB: Integer;
+      constructor Create;
+      function GetItem(I: Integer): Integer;
+      property Items[I: Integer]: Integer read GetItem;
+    end;
+    constructor TArr.Create;
+    begin FA := 10; FB := 30 end;
+    function TArr.GetItem(I: Integer): Integer;
+    begin if I = 0 then Result := FA else Result := FB end;
+    var A: TArr;
+    begin
+      A := TArr.Create;
+      WriteLn(A.Items[0]);
+      WriteLn(A.Items[1]);
+      A.Free
+    end.
+    ''',
     '10' + LE + '30' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_PropertyWrite_Simple;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TBox = class'
-    + ' FVal: Integer;'
-    + ' procedure SetVal(V: Integer);'
-    + ' function GetVal: Integer;'
-    + ' property Val: Integer read GetVal write SetVal;'
-    + 'end;'
-    + 'procedure TBox.SetVal(V: Integer);'
-    + 'begin FVal := V end;'
-    + 'function TBox.GetVal: Integer;'
-    + 'begin Result := FVal end;'
-    + 'var B: TBox;'
-    + 'begin'
-    + '  B := TBox.Create;'
-    + '  B.Val := 42;'
-    + '  WriteLn(B.Val);'
-    + '  B.Free '
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TBox = class
+      FVal: Integer;
+      procedure SetVal(V: Integer);
+      function GetVal: Integer;
+      property Val: Integer read GetVal write SetVal;
+    end;
+    procedure TBox.SetVal(V: Integer);
+    begin FVal := V end;
+    function TBox.GetVal: Integer;
+    begin Result := FVal end;
+    var B: TBox;
+    begin
+      B := TBox.Create;
+      B.Val := 42;
+      WriteLn(B.Val);
+      B.Free
+    end.
+    ''',
     '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_PropertyWrite_Indexed;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TArr = class'
-    + ' FA: Integer; FB: Integer;'
-    + ' procedure SetItem(I: Integer; V: Integer);'
-    + ' function GetItem(I: Integer): Integer;'
-    + ' property Items[I: Integer]: Integer read GetItem write SetItem;'
-    + 'end;'
-    + 'procedure TArr.SetItem(I: Integer; V: Integer);'
-    + 'begin if I = 0 then FA := V else FB := V end;'
-    + 'function TArr.GetItem(I: Integer): Integer;'
-    + 'begin if I = 0 then Result := FA else Result := FB end;'
-    + 'var A: TArr;'
-    + 'begin'
-    + '  A := TArr.Create;'
-    + '  A.Items[0] := 10;'
-    + '  A.Items[1] := 30;'
-    + '  WriteLn(A.Items[0]);'
-    + '  WriteLn(A.Items[1]);'
-    + '  A.Free '
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TArr = class
+      FA: Integer; FB: Integer;
+      procedure SetItem(I: Integer; V: Integer);
+      function GetItem(I: Integer): Integer;
+      property Items[I: Integer]: Integer read GetItem write SetItem;
+    end;
+    procedure TArr.SetItem(I: Integer; V: Integer);
+    begin if I = 0 then FA := V else FB := V end;
+    function TArr.GetItem(I: Integer): Integer;
+    begin if I = 0 then Result := FA else Result := FB end;
+    var A: TArr;
+    begin
+      A := TArr.Create;
+      A.Items[0] := 10;
+      A.Items[1] := 30;
+      WriteLn(A.Items[0]);
+      WriteLn(A.Items[1]);
+      A.Free
+    end.
+    ''',
     '10' + LE + '30' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ClassName;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TFoo = class end;'
-    + 'var F: TFoo;'
-    + 'begin'
-    + '  F := TFoo.Create;'
-    + '  WriteLn(F.ClassName);'
-    + '  F.Free '
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TFoo = class end;
+    var F: TFoo;
+    begin
+      F := TFoo.Create;
+      WriteLn(F.ClassName);
+      F.Free
+    end.
+    ''',
     'TFoo' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_MethodCall_ManyArgs;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program P;'
-    + 'type TCalc = class'
-    + ' function Sum6(A: Integer; B: Integer; C: Integer;'
-    + ' D: Integer; E: Integer; F: Integer): Integer;'
-    + 'end;'
-    + 'function TCalc.Sum6(A: Integer; B: Integer; C: Integer;'
-    + ' D: Integer; E: Integer; F: Integer): Integer;'
-    + 'begin Result := A + B + C + D + E + F end;'
-    + 'var Obj: TCalc;'
-    + 'begin'
-    + '  Obj := TCalc.Create;'
-    + '  WriteLn(Obj.Sum6(1, 2, 3, 4, 5, 6));'
-    + '  Obj.Free '
-    + 'end.',
+  AssertRunsOnAll('''
+    program P;
+    type TCalc = class
+      function Sum6(A: Integer; B: Integer; C: Integer;
+        D: Integer; E: Integer; F: Integer): Integer;
+    end;
+    function TCalc.Sum6(A: Integer; B: Integer; C: Integer;
+      D: Integer; E: Integer; F: Integer): Integer;
+    begin Result := A + B + C + D + E + F end;
+    var Obj: TCalc;
+    begin
+      Obj := TCalc.Create;
+      WriteLn(Obj.Sum6(1, 2, 3, 4, 5, 6));
+      Obj.Free
+    end.
+    ''',
     '21' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ImplicitSelf_ClassField;
 begin
-  AssertRunsOnAll(
-    'program T;'
-    + 'type '
-    + '  TInner = class FVal: Integer; end; '
-    + '  TOuter = class '
-    + '    FInner: TInner; '
-    + '    function GetVal(): Integer; '
-    + '  end; '
-    + 'function TOuter.GetVal(): Integer; '
-    + 'begin Result := FInner.FVal end; '
-    + 'var I: TInner; O: TOuter; '
-    + 'begin '
-    + '  I := TInner.Create; '
-    + '  I.FVal := 42; '
-    + '  O := TOuter.Create; '
-    + '  O.FInner := I; '
-    + '  WriteLn(O.GetVal()); '
-    + '  O.Free; '
-    + '  I.Free '
-    + 'end.',
+  AssertRunsOnAll('''
+    program T;
+    type
+      TInner = class FVal: Integer; end;
+      TOuter = class
+        FInner: TInner;
+        function GetVal(): Integer;
+      end;
+    function TOuter.GetVal(): Integer;
+    begin Result := FInner.FVal end;
+    var I: TInner; O: TOuter;
+    begin
+      I := TInner.Create;
+      I.FVal := 42;
+      O := TOuter.Create;
+      O.FInner := I;
+      WriteLn(O.GetVal());
+      O.Free;
+      I.Free
+    end.
+    ''',
     '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ImplicitSelf_PropertyGetter;
 begin
-  AssertRunsOnAll(
-    'program T;'
-    + 'type '
-    + '  TMyObj = class '
-    + '  private '
-    + '    FVal: Integer; '
-    + '    function GetVal: Integer; '
-    + '  public '
-    + '    property Val: Integer read GetVal; '
-    + '    procedure Show; '
-    + '  end; '
-    + 'function TMyObj.GetVal: Integer; '
-    + 'begin Result := FVal end; '
-    + 'procedure TMyObj.Show; '
-    + 'begin WriteLn(Val) end; '
-    + 'var O: TMyObj; '
-    + 'begin '
-    + '  O := TMyObj.Create; '
-    + '  O.FVal := 99; '
-    + '  O.Show; '
-    + '  O.Free '
-    + 'end.',
+  AssertRunsOnAll('''
+    program T;
+    type
+      TMyObj = class
+      private
+        FVal: Integer;
+        function GetVal: Integer;
+      public
+        property Val: Integer read GetVal;
+        procedure Show;
+      end;
+    function TMyObj.GetVal: Integer;
+    begin Result := FVal end;
+    procedure TMyObj.Show;
+    begin WriteLn(Val) end;
+    var O: TMyObj;
+    begin
+      O := TMyObj.Create;
+      O.FVal := 99;
+      O.Show;
+      O.Free
+    end.
+    ''',
     '99' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ConstArray_StringElements;
 begin
-  AssertRunsOnAll(
-    'program T;'
-    + 'const '
-    + '  Regs: array[0..2] of string = (''ax'', ''bx'', ''cx''); '
-    + 'var I: Integer; '
-    + 'begin '
-    + '  for I := 0 to 2 do '
-    + '    WriteLn(Regs[I]) '
-    + 'end.',
+  AssertRunsOnAll('''
+    program T;
+    const
+      Regs: array[0..2] of string = ('ax', 'bx', 'cx');
+    var I: Integer;
+    begin
+      for I := 0 to 2 do
+        WriteLn(Regs[I])
+    end.
+    ''',
     'ax' + LE + 'bx' + LE + 'cx' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_VirtualDispatch_Expr;
 begin
-  AssertRunsOnAll(
-    'program T;'
-    + 'type '
-    + '  TBase = class '
-    + '    function GetVal(): Integer; virtual; abstract; '
-    + '  end; '
-    + '  TChild = class(TBase) '
-    + '    function GetVal(): Integer; override; '
-    + '  end; '
-    + 'function TChild.GetVal(): Integer; '
-    + 'begin Result := 42 end; '
-    + 'var B: TBase; '
-    + 'begin '
-    + '  B := TChild.Create; '
-    + '  WriteLn(B.GetVal()); '
-    + '  B.Free '
-    + 'end.',
+  AssertRunsOnAll('''
+    program T;
+    type
+      TBase = class
+        function GetVal(): Integer; virtual; abstract;
+      end;
+      TChild = class(TBase)
+        function GetVal(): Integer; override;
+      end;
+    function TChild.GetVal(): Integer;
+    begin Result := 42 end;
+    var B: TBase;
+    begin
+      B := TChild.Create;
+      WriteLn(B.GetVal());
+      B.Free
+    end.
+    ''',
     '42' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_StringEquality;
 begin
-  AssertRunsOnAll(
-    'program T;'
-    + 'function MakeStr(const S: string): string; begin Result := S end; '
-    + 'var A, B: string; '
-    + 'begin '
-    + '  A := MakeStr(''hello''); '
-    + '  B := ''hello''; '
-    + '  if A = B then WriteLn(''eq'') else WriteLn(''ne''); '
-    + '  if A <> ''world'' then WriteLn(''diff'') else WriteLn(''same'') '
-    + 'end.',
+  AssertRunsOnAll('''
+    program T;
+    function MakeStr(const S: string): string; begin Result := S end;
+    var A, B: string;
+    begin
+      A := MakeStr('hello');
+      B := 'hello';
+      if A = B then WriteLn('eq') else WriteLn('ne');
+      if A <> 'world' then WriteLn('diff') else WriteLn('same')
+    end.
+    ''',
     'eq' + LE + 'diff' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_OutParam_String;
 begin
-  AssertRunsOnAll(
-    'program T;'
-    + 'procedure Fill(out S: string); begin S := ''filled'' end; '
-    + 'var X: string; '
-    + 'begin '
-    + '  X := ''old''; '
-    + '  Fill(X); '
-    + '  WriteLn(X) '
-    + 'end.',
+  AssertRunsOnAll('''
+    program T;
+    procedure Fill(out S: string); begin S := 'filled' end;
+    var X: string;
+    begin
+      X := 'old';
+      Fill(X);
+      WriteLn(X)
+    end.
+    ''',
     'filled' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_VarParam_String;
 begin
-  AssertRunsOnAll(
-    'program T;'
-    + 'procedure Append(var S: string); begin S := S + ''_tail'' end; '
-    + 'var X: string; '
-    + 'begin '
-    + '  X := ''head''; '
-    + '  Append(X); '
-    + '  WriteLn(X) '
-    + 'end.',
+  AssertRunsOnAll('''
+    program T;
+    procedure Append(var S: string); begin S := S + '_tail' end;
+    var X: string;
+    begin
+      X := 'head';
+      Append(X);
+      WriteLn(X)
+    end.
+    ''',
     'head_tail' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_Constructor_CallArg;
 begin
-  AssertRunsOnAll(
-    'program T;'
-    + 'type '
-    + '  THolder = class '
-    + '    FVal: string; '
-    + '    constructor Create(S: string); '
-    + '  end; '
-    + 'constructor THolder.Create(S: string); begin FVal := S end; '
-    + 'function MakeStr: string; begin Result := ''hello'' end; '
-    + 'var H: THolder; '
-    + 'begin '
-    + '  H := THolder.Create(MakeStr()); '
-    + '  WriteLn(H.FVal); '
-    + '  H.Free() '
-    + 'end.',
+  AssertRunsOnAll('''
+    program T;
+    type
+      THolder = class
+        FVal: string;
+        constructor Create(S: string);
+      end;
+    constructor THolder.Create(S: string); begin FVal := S end;
+    function MakeStr: string; begin Result := 'hello' end;
+    var H: THolder;
+    begin
+      H := THolder.Create(MakeStr());
+      WriteLn(H.FVal);
+      H.Free()
+    end.
+    ''',
     'hello' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_MethodSretReturn;
 begin
-  AssertRunsOnAll(
-    'program T;'
-    + 'type '
-    + '  TPoint = record X: Integer; Y: Integer; Z: Integer; end; '
-    + '  TMaker = class '
-    + '    function Make(AX, AY, AZ: Integer): TPoint; '
-    + '  end; '
-    + 'function TMaker.Make(AX, AY, AZ: Integer): TPoint; '
-    + 'begin Result.X := AX; Result.Y := AY; Result.Z := AZ end; '
-    + 'var M: TMaker; P: TPoint; '
-    + 'begin '
-    + '  M := TMaker.Create(); '
-    + '  P := M.Make(10, 20, 30); '
-    + '  WriteLn(P.X); '
-    + '  WriteLn(P.Y); '
-    + '  WriteLn(P.Z); '
-    + '  M.Free() '
-    + 'end.',
+  AssertRunsOnAll('''
+    program T;
+    type
+      TPoint = record X: Integer; Y: Integer; Z: Integer; end;
+      TMaker = class
+        function Make(AX, AY, AZ: Integer): TPoint;
+      end;
+    function TMaker.Make(AX, AY, AZ: Integer): TPoint;
+    begin Result.X := AX; Result.Y := AY; Result.Z := AZ end;
+    var M: TMaker; P: TPoint;
+    begin
+      M := TMaker.Create();
+      P := M.Make(10, 20, 30);
+      WriteLn(P.X);
+      WriteLn(P.Y);
+      WriteLn(P.Z);
+      M.Free()
+    end.
+    ''',
     '10' + LE + '20' + LE + '30' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_FieldSretReturn;
 begin
-  AssertRunsOnAll(
-    'program T;'
-    + 'type '
-    + '  TRec = record A: Integer; S: string; B: Integer; end; '
-    + '  TGen = class '
-    + '    function Make(V: Integer; N: string): TRec; '
-    + '  end; '
-    + '  THold = class '
-    + '    FR: TRec; '
-    + '    FG: TGen; '
-    + '    constructor Create(AG: TGen); '
-    + '  end; '
-    + 'function TGen.Make(V: Integer; N: string): TRec; '
-    + 'begin Result.A := V; Result.S := N; Result.B := V * 2 end; '
-    + 'constructor THold.Create(AG: TGen); '
-    + 'begin inherited Create(); FG := AG; FR := FG.Make(5, ''hi'') end; '
-    + 'var G: TGen; H: THold; '
-    + 'begin '
-    + '  G := TGen.Create(); '
-    + '  H := THold.Create(G); '
-    + '  WriteLn(H.FR.A); '
-    + '  WriteLn(H.FR.S); '
-    + '  WriteLn(H.FR.B); '
-    + '  H.Free(); G.Free() '
-    + 'end.',
+  AssertRunsOnAll('''
+    program T;
+    type
+      TRec = record A: Integer; S: string; B: Integer; end;
+      TGen = class
+        function Make(V: Integer; N: string): TRec;
+      end;
+      THold = class
+        FR: TRec;
+        FG: TGen;
+        constructor Create(AG: TGen);
+      end;
+    function TGen.Make(V: Integer; N: string): TRec;
+    begin Result.A := V; Result.S := N; Result.B := V * 2 end;
+    constructor THold.Create(AG: TGen);
+    begin inherited Create(); FG := AG; FR := FG.Make(5, 'hi') end;
+    var G: TGen; H: THold;
+    begin
+      G := TGen.Create();
+      H := THold.Create(G);
+      WriteLn(H.FR.A);
+      WriteLn(H.FR.S);
+      WriteLn(H.FR.B);
+      H.Free(); G.Free()
+    end.
+    ''',
     '5' + LE + 'hi' + LE + '10' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ImplicitSelfMethodCall;
 begin
-  AssertRunsOnAll(
-    'program T;'
-    + 'type '
-    + '  TCalc = class '
-    + '    FVal: Integer; '
-    + '    procedure Step; '
-    + '    function Double: Integer; '
-    + '    procedure Run; '
-    + '  end; '
-    + 'procedure TCalc.Step; '
-    + 'begin FVal := FVal + 10 end; '
-    + 'function TCalc.Double: Integer; '
-    + 'begin Result := FVal * 2 end; '
-    + 'procedure TCalc.Run; '
-    + 'begin '
-    + '  FVal := 5; '
-    + '  Step; '
-    + '  WriteLn(FVal); '
-    + '  WriteLn(Double()) '
-    + 'end; '
-    + 'var C: TCalc; '
-    + 'begin '
-    + '  C := TCalc.Create(); '
-    + '  C.Run(); '
-    + '  C.Free() '
-    + 'end.',
+  AssertRunsOnAll('''
+    program T;
+    type
+      TCalc = class
+        FVal: Integer;
+        procedure Step;
+        function Double: Integer;
+        procedure Run;
+      end;
+    procedure TCalc.Step;
+    begin FVal := FVal + 10 end;
+    function TCalc.Double: Integer;
+    begin Result := FVal * 2 end;
+    procedure TCalc.Run;
+    begin
+      FVal := 5;
+      Step;
+      WriteLn(FVal);
+      WriteLn(Double())
+    end;
+    var C: TCalc;
+    begin
+      C := TCalc.Create();
+      C.Run();
+      C.Free()
+    end.
+    ''',
     '15' + LE + '30' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_RecordFieldCopy;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program test_rec_field_copy; '
-    + 'type '
-    + '  TToken = record Kind: Integer; Value: string; Line: Integer; Col: Integer; end; '
-    + '  TParser = class '
-    + '  private FA: TToken; FB: TToken; FC: TToken; '
-    + '  public '
-    + '    procedure Setup; '
-    + '    procedure Advance; '
-    + '  end; '
-    + 'procedure TParser.Setup; '
-    + 'begin '
-    + '  FA.Kind := 1; FA.Value := ''first''; FA.Line := 10; FA.Col := 20; '
-    + '  FB.Kind := 2; FB.Value := ''second''; FB.Line := 30; FB.Col := 40; '
-    + '  FC.Kind := 3; FC.Value := ''third''; FC.Line := 50; FC.Col := 60 '
-    + 'end; '
-    + 'procedure TParser.Advance; '
-    + 'begin FA := FB; FB := FC end; '
-    + 'var P: TParser; '
-    + 'begin '
-    + '  P := TParser.Create(); '
-    + '  P.Setup; '
-    + '  P.Advance; '
-    + '  WriteLn(P.FA.Kind, '':'', P.FA.Value, '':'', P.FA.Line, '':'', P.FA.Col); '
-    + '  WriteLn(P.FB.Kind, '':'', P.FB.Value, '':'', P.FB.Line, '':'', P.FB.Col); '
-    + '  P.Free() '
-    + 'end.',
+  AssertRunsOnAll('''
+    program test_rec_field_copy;
+    type
+      TToken = record Kind: Integer; Value: string; Line: Integer; Col: Integer; end;
+      TParser = class
+      private FA: TToken; FB: TToken; FC: TToken;
+      public
+        procedure Setup;
+        procedure Advance;
+      end;
+    procedure TParser.Setup;
+    begin
+      FA.Kind := 1; FA.Value := 'first'; FA.Line := 10; FA.Col := 20;
+      FB.Kind := 2; FB.Value := 'second'; FB.Line := 30; FB.Col := 40;
+      FC.Kind := 3; FC.Value := 'third'; FC.Line := 50; FC.Col := 60
+    end;
+    procedure TParser.Advance;
+    begin FA := FB; FB := FC end;
+    var P: TParser;
+    begin
+      P := TParser.Create();
+      P.Setup;
+      P.Advance;
+      WriteLn(P.FA.Kind, ':', P.FA.Value, ':', P.FA.Line, ':', P.FA.Col);
+      WriteLn(P.FB.Kind, ':', P.FB.Value, ':', P.FB.Line, ':', P.FB.Col);
+      P.Free()
+    end.
+    ''',
     '2:second:30:40' + LE + '3:third:50:60' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_SretFieldARC;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertRunsOnAll(
-    'program test_sret_field_arc; '
-    + 'type '
-    + '  TRec = record Kind: Integer; Value: string; end; '
-    + '  TFactory = class '
-    + '  public '
-    + '    function Make(AKind: Integer; const AVal: string): TRec; '
-    + '  end; '
-    + 'function TFactory.Make(AKind: Integer; const AVal: string): TRec; '
-    + 'begin Result.Kind := AKind; Result.Value := AVal end; '
-    + 'var '
-    + '  F: TFactory; '
-    + '  R: TRec; '
-    + 'begin '
-    + '  F := TFactory.Create(); '
-    + '  R := F.Make(42, ''hello''); '
-    + '  WriteLn(R.Kind, '':'', R.Value); '
-    + '  R := F.Make(99, ''world''); '
-    + '  WriteLn(R.Kind, '':'', R.Value); '
-    + '  F.Free() '
-    + 'end.',
+  AssertRunsOnAll('''
+    program test_sret_field_arc;
+    type
+      TRec = record Kind: Integer; Value: string; end;
+      TFactory = class
+      public
+        function Make(AKind: Integer; const AVal: string): TRec;
+      end;
+    function TFactory.Make(AKind: Integer; const AVal: string): TRec;
+    begin Result.Kind := AKind; Result.Value := AVal end;
+    var
+      F: TFactory;
+      R: TRec;
+    begin
+      F := TFactory.Create();
+      R := F.Make(42, 'hello');
+      WriteLn(R.Kind, ':', R.Value);
+      R := F.Make(99, 'world');
+      WriteLn(R.Kind, ':', R.Value);
+      F.Free()
+    end.
+    ''',
     '42:hello' + LE + '99:world' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_VarParam_MethodCall;
 begin
-  Self.AssertRunsOnAll(
-    'program TestVarParamMethodCall; '
-    + 'type '
-    + '  TBox = class '
-    + '  public '
-    + '    FValue: Integer; '
-    + '    procedure SetVal(AV: Integer); '
-    + '    function GetVal(): Integer; '
-    + '  end; '
-    + 'procedure TBox.SetVal(AV: Integer); '
-    + 'begin FValue := AV end; '
-    + 'function TBox.GetVal(): Integer; '
-    + 'begin Result := FValue end; '
-    + 'procedure Bump(var B: TBox); '
-    + 'begin B.SetVal(B.GetVal() + 10) end; '
-    + 'var '
-    + '  X: TBox; '
-    + 'begin '
-    + '  X := TBox.Create(); '
-    + '  X.SetVal(5); '
-    + '  Bump(X); '
-    + '  WriteLn(X.GetVal()); '
-    + '  X.Free() '
-    + 'end.',
+  Self.AssertRunsOnAll('''
+    program TestVarParamMethodCall;
+    type
+      TBox = class
+      public
+        FValue: Integer;
+        procedure SetVal(AV: Integer);
+        function GetVal(): Integer;
+      end;
+    procedure TBox.SetVal(AV: Integer);
+    begin FValue := AV end;
+    function TBox.GetVal(): Integer;
+    begin Result := FValue end;
+    procedure Bump(var B: TBox);
+    begin B.SetVal(B.GetVal() + 10) end;
+    var
+      X: TBox;
+    begin
+      X := TBox.Create();
+      X.SetVal(5);
+      Bump(X);
+      WriteLn(X.GetVal());
+      X.Free()
+    end.
+    ''',
     '15' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_StringConst;
 begin
-  Self.AssertRunsOnAll(
-    'program TestStringConst; '
-    + 'const '
-    + '  NL = #10; '
-    + '  GREETING = ''hello''; '
-    + 'var '
-    + '  S: string; '
-    + 'begin '
-    + '  S := GREETING; '
-    + '  Write(S); '
-    + '  Write(NL); '
-    + '  WriteLn(''done'') '
-    + 'end.',
+  Self.AssertRunsOnAll('''
+    program TestStringConst;
+    const
+      NL = #10;
+      GREETING = 'hello';
+    var
+      S: string;
+    begin
+      S := GREETING;
+      Write(S);
+      Write(NL);
+      WriteLn('done')
+    end.
+    ''',
     'hello' + LE + 'done' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_SretForward;
 begin
-  Self.AssertRunsOnAll(
-    'program TestSretFwd; '
-    + 'type '
-    + '  TPair = record A: Integer; B: Integer; end; '
-    + 'function MakePair(X, Y: Integer): TPair; '
-    + 'begin Result.A := X; Result.B := Y; end; '
-    + 'function DoubledPair(X, Y: Integer): TPair; '
-    + 'begin Result := MakePair(X * 2, Y * 2); end; '
-    + 'var '
-    + '  P: TPair; '
-    + 'begin '
-    + '  P := DoubledPair(5, 7); '
-    + '  WriteLn(P.A); '
-    + '  WriteLn(P.B); '
-    + 'end.',
+  Self.AssertRunsOnAll('''
+    program TestSretFwd;
+    type
+      TPair = record A: Integer; B: Integer; end;
+    function MakePair(X, Y: Integer): TPair;
+    begin Result.A := X; Result.B := Y; end;
+    function DoubledPair(X, Y: Integer): TPair;
+    begin Result := MakePair(X * 2, Y * 2); end;
+    var
+      P: TPair;
+    begin
+      P := DoubledPair(5, 7);
+      WriteLn(P.A);
+      WriteLn(P.B);
+    end.
+    ''',
     '10' + LE + '14' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_ForLoop_RecursiveBody;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  Self.AssertRunsOnAll(
-    'program TestForRec; '
-    + 'procedure Walk(Depth: Integer); '
-    + 'var I: Integer; '
-    + 'begin '
-    + '  if Depth <= 0 then begin WriteLn(''leaf''); Exit; end; '
-    + '  for I := 0 to Depth - 1 do '
-    + '    Walk(I); '
-    + 'end; '
-    + 'begin '
-    + '  Walk(3); '
-    + 'end.',
+  Self.AssertRunsOnAll('''
+    program TestForRec;
+    procedure Walk(Depth: Integer);
+    var I: Integer;
+    begin
+      if Depth <= 0 then begin WriteLn('leaf'); Exit; end;
+      for I := 0 to Depth - 1 do
+        Walk(I);
+    end;
+    begin
+      Walk(3);
+    end.
+    ''',
     'leaf' + LE + 'leaf' + LE + 'leaf' + LE + 'leaf' + LE, 0);
 end;
 
 procedure TE2ENativeTests.TestRun_Native_MethodCall_OpenArray;
 begin
-  Self.AssertRunsOnAll(
-    'program TestOpenArray; '
-    + 'function Sum(const A: array of Integer): Integer; '
-    + 'var I: Integer; '
-    + 'begin '
-    + '  Result := 0; '
-    + '  for I := 0 to High(A) do '
-    + '    Result := Result + A[I]; '
-    + 'end; '
-    + 'begin '
-    + '  WriteLn(Sum([10, 20, 30])); '
-    + 'end.',
+  Self.AssertRunsOnAll('''
+    program TestOpenArray;
+    function Sum(const A: array of Integer): Integer;
+    var I: Integer;
+    begin
+      Result := 0;
+      for I := 0 to High(A) do
+        Result := Result + A[I];
+    end;
+    begin
+      WriteLn(Sum([10, 20, 30]));
+    end.
+    ''',
     '60' + LE, 0);
 end;
 
