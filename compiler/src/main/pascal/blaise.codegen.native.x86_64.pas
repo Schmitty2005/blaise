@@ -1615,6 +1615,14 @@ begin
           Self.Emit(#9'pushq %rcx');
         end;
       end
+      else if Arg is TFieldAccessExpr then
+      begin
+        Self.EmitInterfaceFieldAddr(TFieldAccessExpr(Arg), '%rax');
+        Self.Emit(#9'movq (%rax), %rcx');
+        Self.Emit(#9'movq 8(%rax), %rdx');
+        Self.Emit(#9'pushq %rcx');
+        Self.Emit(#9'pushq %rdx');
+      end
       else
         raise ENativeCodeGenError.Create(
           'native backend: unsupported interface arg expression in interface dispatch');
@@ -1703,6 +1711,14 @@ begin
           Self.Emit(#9'pushq %rax');
           Self.Emit(#9'pushq %rcx');
         end;
+      end
+      else if Arg is TFieldAccessExpr then
+      begin
+        Self.EmitInterfaceFieldAddr(TFieldAccessExpr(Arg), '%rax');
+        Self.Emit(#9'movq (%rax), %rcx');
+        Self.Emit(#9'movq 8(%rax), %rdx');
+        Self.Emit(#9'pushq %rcx');
+        Self.Emit(#9'pushq %rdx');
       end
       else
         raise ENativeCodeGenError.Create(
@@ -5617,6 +5633,14 @@ begin
       Self.Emit(#9'pushq %rcx');         { push obj }
       Self.Emit(#9'pushq %rdx');         { push itab }
     end
+    else if AArg is TFieldAccessExpr then
+    begin
+      Self.EmitInterfaceFieldAddr(TFieldAccessExpr(AArg), '%rax');
+      Self.Emit(#9'movq (%rax), %rcx');
+      Self.Emit(#9'movq 8(%rax), %rdx');
+      Self.Emit(#9'pushq %rcx');
+      Self.Emit(#9'pushq %rdx');
+    end
     else if AArg is TIdentExpr then
     begin
       { Interface variable: load both halves. }
@@ -8865,6 +8889,14 @@ begin
       begin
         if (ADecl <> nil) and (I < ADecl.Params.Count) then
           Self.EmitMethodArgPush(TMethodParam(ADecl.Params.Items[I]), Arg)
+        else if Arg is TFieldAccessExpr then
+        begin
+          Self.EmitInterfaceFieldAddr(TFieldAccessExpr(Arg), '%rax');
+          Self.Emit(#9'movq (%rax), %rcx');
+          Self.Emit(#9'movq 8(%rax), %rdx');
+          Self.Emit(#9'pushq %rcx');
+          Self.Emit(#9'pushq %rdx');
+        end
         else if Arg is TIdentExpr then
         begin
           Self.Emit(Format(#9'movq %s, %%rax',
@@ -9026,6 +9058,16 @@ begin
           else
             Self.Emit(#9'xorq %rax, %rax');
           Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [SlotOff]));
+          Inc(SlotOff, 8);
+        end
+        else if Arg is TFieldAccessExpr then
+        begin
+          Self.EmitInterfaceFieldAddr(TFieldAccessExpr(Arg), '%rax');
+          Self.Emit(#9'movq (%rax), %rcx');
+          Self.Emit(Format(#9'movq %%rcx, %d(%%rsp)', [SlotOff]));
+          Inc(SlotOff, 8);
+          Self.Emit(#9'movq 8(%rax), %rcx');
+          Self.Emit(Format(#9'movq %%rcx, %d(%%rsp)', [SlotOff]));
           Inc(SlotOff, 8);
         end
         else if Arg is TIdentExpr then

@@ -321,6 +321,8 @@ type
     procedure TestRun_Native_ForLoop_RecursiveBody;
     { M8b — open-array literal as method argument. }
     procedure TestRun_Native_MethodCall_OpenArray;
+    { M8b — passing an interface-typed field as argument to a function. }
+    procedure TestRun_Native_IntfFieldAsArg;
   end;
 
 implementation
@@ -2797,6 +2799,34 @@ const
     end.
     ''';
 
+  SrcIntfFieldAsArg = '''
+    program P;
+    type
+      IVal = interface
+        function Get: Integer;
+      end;
+      TVal = class(TObject, IVal)
+        V: Integer;
+        function Get: Integer;
+      end;
+      THolder = class
+        F: IVal;
+      end;
+    function TVal.Get: Integer; begin Result := V end;
+    function ReadIntf(X: IVal): Integer;
+    begin
+      Result := X.Get()
+    end;
+    var H: THolder; T: TVal;
+    begin
+      T := TVal.Create();
+      T.V := 77;
+      H := THolder.Create();
+      H.F := T;
+      WriteLn(ReadIntf(H.F))
+    end.
+    ''';
+
   { Dyn-array field inside a class: the field must be ARC-refcounted on store
     and released when the holder is destroyed (f74e5cc).  Observed by reading an
     element back after the field assignment — a dropped/garbled buffer would
@@ -4714,6 +4744,12 @@ begin
     + '  WriteLn(Sum([10, 20, 30])); '
     + 'end.',
     '60' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IntfFieldAsArg;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIntfFieldAsArg, '77' + LE, 0);
 end;
 
 initialization
