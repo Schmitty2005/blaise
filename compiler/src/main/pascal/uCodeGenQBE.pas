@@ -774,6 +774,7 @@ begin
     tyInt64, tyUInt64, tyString:            Result := 'l';
     tyRecord:                               Result := 'l';  { pointer to aggregate }
     tyClass:                                Result := 'l';  { heap pointer }
+    tyInterface:                            Result := 'l';  { obj pointer (fat-pointer first slot) }
     tyPointer:                              Result := 'l';  { pointer (typed or untyped) }
     tyOpenArray:                            Result := 'l';  { data pointer (high idx is separate) }
     tyStaticArray:                          Result := 'l';  { base pointer to stack buffer }
@@ -10796,6 +10797,16 @@ var
   ClassRT:  TRecordTypeDesc;
   NewObj, NewItab, OldObj, ItabName: string;
 begin
+  if AExpr is TNilLiteral then
+  begin
+    OldObj := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [OldObj, AObjSlotPtr]));
+    EmitLine(Format('  call $_ClassRelease(l %s)', [OldObj]));
+    EmitLine(Format('  storel 0, %s', [AObjSlotPtr]));
+    EmitLine(Format('  storel 0, %s', [AItabSlotPtr]));
+    Exit;
+  end;
+
   if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyInterface) then
   begin
     { Interface source: load obj/itab from the source's fat-pointer slots }

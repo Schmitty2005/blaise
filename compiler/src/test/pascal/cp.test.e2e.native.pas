@@ -323,6 +323,8 @@ type
     procedure TestRun_Native_MethodCall_OpenArray;
     { M8b — passing an interface-typed field as argument to a function. }
     procedure TestRun_Native_IntfFieldAsArg;
+    { M8b — nil assignment to interface-typed fields (implicit-Self and non-Self). }
+    procedure TestRun_Native_IntfFieldNilAssign;
   end;
 
 implementation
@@ -2827,6 +2829,38 @@ const
     end.
     ''';
 
+  SrcIntfFieldNilAssign = '''
+    program P;
+    type
+      IVal = interface
+        function Get: Integer;
+      end;
+      TVal = class(TObject, IVal)
+        V: Integer;
+        function Get: Integer;
+      end;
+      THolder = class
+        F: IVal;
+        procedure ClearField;
+      end;
+    function TVal.Get: Integer; begin Result := V end;
+    procedure THolder.ClearField;
+    begin
+      F := nil
+    end;
+    var H: THolder; T: TVal;
+    begin
+      T := TVal.Create();
+      T.V := 99;
+      H := THolder.Create();
+      H.F := T;
+      WriteLn(H.F.Get());
+      H.ClearField();
+      if not Assigned(H.F) then
+        WriteLn('cleared')
+    end.
+    ''';
+
   { Dyn-array field inside a class: the field must be ARC-refcounted on store
     and released when the holder is destroyed (f74e5cc).  Observed by reading an
     element back after the field assignment — a dropped/garbled buffer would
@@ -4750,6 +4784,12 @@ procedure TE2ENativeTests.TestRun_Native_IntfFieldAsArg;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnBoth(SrcIntfFieldAsArg, '77' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_IntfFieldNilAssign;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(SrcIntfFieldNilAssign, '99' + LE + 'cleared' + LE, 0);
 end;
 
 initialization

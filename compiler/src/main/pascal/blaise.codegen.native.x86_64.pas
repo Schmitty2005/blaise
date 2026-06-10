@@ -1957,9 +1957,15 @@ begin
       Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [ItabSym]));
       Self.Emit(#9'movq %rax, 8(%r15)');
     end
+    else if AAsgn.Expr is TNilLiteral then
+    begin
+      Self.Emit(#9'movq (%r15), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'movq $0, (%r15)');
+      Self.Emit(#9'movq $0, 8(%r15)');
+    end
     else if (AAsgn.Expr.ResolvedType.Kind = tyInterface) and (AAsgn.Expr is TIdentExpr) then
     begin
-      { Interface-to-interface: copy from source fat pointer slots. }
       Self.Emit(Format(#9'movq %s, %%rax',
         [Self.IntfItabOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
       Self.Emit(#9'pushq %rax');
@@ -1967,6 +1973,22 @@ begin
         [Self.IntfObjOperand(TIdentExpr(AAsgn.Expr).Name, TIdentExpr(AAsgn.Expr).IsGlobal)]));
       Self.Emit(#9'pushq %rax');
       Self.Emit(#9'movq %rax, %rdi');
+      Self.Emit(#9'callq _ClassAddRef');
+      Self.Emit(#9'movq (%r15), %rdi');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rax');
+      Self.Emit(#9'movq %rax, (%r15)');
+      Self.Emit(#9'popq %rax');
+      Self.Emit(#9'movq %rax, 8(%r15)');
+    end
+    else if (AAsgn.Expr.ResolvedType.Kind = tyInterface) and (AAsgn.Expr is TFieldAccessExpr) then
+    begin
+      Self.EmitInterfaceFieldAddr(TFieldAccessExpr(AAsgn.Expr), '%rax');
+      Self.Emit(#9'movq 8(%rax), %rcx');
+      Self.Emit(#9'pushq %rcx');
+      Self.Emit(#9'movq (%rax), %rcx');
+      Self.Emit(#9'pushq %rcx');
+      Self.Emit(#9'movq %rcx, %rdi');
       Self.Emit(#9'callq _ClassAddRef');
       Self.Emit(#9'movq (%r15), %rdi');
       Self.Emit(#9'callq _ClassRelease');
@@ -2129,11 +2151,15 @@ begin
     Self.Emit(Format(#9'addq $%d, %%r15', [AOffset]));
   { Now (%r15) = obj slot, 8(%r15) = itab slot. }
 
-  if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyClass) then
+  if AExpr is TNilLiteral then
   begin
-    { Class source: emit obj, reference the static itab for the (concrete class,
-      destination interface) pair — the same symbol the direct class->interface
-      assignment path uses. }
+    Self.Emit(#9'movq (%r15), %rdi');
+    Self.Emit(#9'callq _ClassRelease');
+    Self.Emit(#9'movq $0, (%r15)');
+    Self.Emit(#9'movq $0, 8(%r15)');
+  end
+  else if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyClass) then
+  begin
     ClassRT := TRecordTypeDesc(AExpr.ResolvedType);
     ItabSym := 'itab_' + Self.ClassSymName(ClassRT.Name) + '_' + Self.IntfTypeInfoName(Intf.Name);
     Self.EmitExprToEax(AExpr);
