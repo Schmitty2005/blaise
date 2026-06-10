@@ -4239,6 +4239,39 @@ begin
     Exit;
   end;
 
+  { Built-in: Obj.ClassName — instance → vtable[0] → typeinfo[0] → name at +16 }
+  if (AExpr is TFieldAccessExpr) and
+     TFieldAccessExpr(AExpr).IsClassNameAccess then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    if FAE.Base <> nil then
+      Self.EmitExprToEax(FAE.Base)
+    else if Self.IsLocal(FAE.RecordName) then
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(FAE.RecordName)]))
+    else
+      Self.Emit(Format(#9'movq %s(%%rip), %%rax', [FAE.RecordName]));
+    Self.Emit(#9'movq (%rax), %rax');
+    Self.Emit(#9'movq (%rax), %rax');
+    Self.Emit(#9'movq 16(%rax), %rax');
+    Exit;
+  end;
+
+  { Built-in: Obj.ClassType — instance → vtable[0] → typeinfo[0] }
+  if (AExpr is TFieldAccessExpr) and
+     TFieldAccessExpr(AExpr).IsClassTypeAccess then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    if FAE.Base <> nil then
+      Self.EmitExprToEax(FAE.Base)
+    else if Self.IsLocal(FAE.RecordName) then
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(FAE.RecordName)]))
+    else
+      Self.Emit(Format(#9'movq %s(%%rip), %%rax', [FAE.RecordName]));
+    Self.Emit(#9'movq (%rax), %rax');
+    Self.Emit(#9'movq (%rax), %rax');
+    Exit;
+  end;
+
   { Method-backed property read: Obj.Prop or Obj.Prop[I].
     Load the receiver (Self pointer) into %rdi, optional index into %rsi,
     then call the getter method.  Covers chained (Base <> nil), implicit-Self,
@@ -4909,11 +4942,18 @@ end;
   %rsi/%rdx/etc.  The method symbol is OwnerTypeName_MethodName. }
 procedure TX86_64Backend.EmitMethodCallExpr(ACall: TMethodCallExpr);
 var
-  I:    Integer;
-  MD:   TMethodDecl;
-  Sym:  string;
-  Arg:  TASTExpr;
-  RT:   TRecordTypeDesc;
+  I:          Integer;
+  MD:         TMethodDecl;
+  Sym:        string;
+  Arg:        TASTExpr;
+  RT:         TRecordTypeDesc;
+  UserSlots:     Integer;
+  TotalSlots:    Integer;
+  AllocSz:       Integer;
+  SlotOff:       Integer;
+  CleanUp:       Integer;
+  OverflowSlots: Integer;
+  Dest:          Integer;
 begin
   { Interface method dispatch: receiver is an interface fat pointer; route
     through the itab rather than a static method symbol. }
@@ -4947,15 +4987,59 @@ begin
     MD := TMethodDecl(ACall.ResolvedMethod);
     if MD <> nil then
     begin
-      Self.Emit(#9'movq %rax, %r10');
-      for I := 0 to ACall.Args.Count - 1 do
-        Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
-          TASTExpr(ACall.Args.Items[I]));
-      for I := CountArgSlots(MD.Params) - 1 downto 0 do
-        Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
-      Self.Emit(#9'movq %r10, %rdi');
-      Self.Emit(#9'callq ' + MethodEmitNameNative(MD, RT.Name, ACall.Name));
-      Self.Emit(#9'movq %r10, %rax');
+      UserSlots  := Self.CountArgSlots(MD.Params);
+      TotalSlots := UserSlots + 1;
+      Sym := MethodEmitNameNative(MD, RT.Name, ACall.Name);
+
+      if TotalSlots <= 6 then
+      begin
+        Self.Emit(#9'movq %rax, %r10');
+        for I := 0 to ACall.Args.Count - 1 do
+          Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]),
+            TASTExpr(ACall.Args.Items[I]));
+        for I := UserSlots - 1 downto 0 do
+          Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+        Self.Emit(#9'movq %r10, %rdi');
+        Self.Emit(#9'callq ' + Sym);
+        Self.Emit(#9'movq %r10, %rax');
+      end
+      else
+      begin
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(#9'movq %rax, %rbx');
+        OverflowSlots := TotalSlots - 6;
+        AllocSz := (((6 * 8 + OverflowSlots * 8) + 15) and (-16)) + 8;
+        CleanUp := AllocSz - 6 * 8;
+        Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
+        for I := 0 to ACall.Args.Count - 1 do
+        begin
+          Arg := TASTExpr(ACall.Args.Items[I]);
+          if I + 1 < 6 then
+            Dest := I * 8 + 8
+          else
+            Dest := 6 * 8 + (I + 1 - 6) * 8;
+          if TMethodParam(MD.Params.Items[I]).IsVarParam then
+          begin
+            if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
+              Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
+            else if Arg is TIdentExpr then
+              Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [TIdentExpr(Arg).Name]))
+            else
+              Self.EmitExprToEax(Arg);
+          end
+          else
+            Self.EmitExprToEax(Arg);
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
+        end;
+        Self.Emit(Format(#9'movq %%rbx, 0(%%rsp)', []));
+        for I := 0 to 5 do
+          Self.Emit(Format(#9'movq %d(%%rsp), %s', [I * 8, SysVArgRegs64[I]]));
+        Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
+        Self.Emit(#9'callq ' + Sym);
+        Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
+        Self.Emit(#9'movq %rbx, %rax');
+        Self.Emit(#9'popq %rbx');
+      end;
     end;
     Exit;
   end;
@@ -4966,50 +5050,106 @@ begin
       'native backend: TMethodCallExpr has no ResolvedMethod (' + ACall.Name + ')');
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
 
-  { Evaluate args left-to-right and push them (var/out args by address). }
-  for I := 0 to ACall.Args.Count - 1 do
-  begin
-    Arg := TASTExpr(ACall.Args.Items[I]);
-    Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]), Arg);
-  end;
+  UserSlots  := Self.CountArgSlots(MD.Params);
+  TotalSlots := UserSlots + 1;
 
-  { Load Self (the receiver) into %r10 to survive the pop loop. }
-  if ACall.ObjectName <> '' then
+  if TotalSlots <= 6 then
   begin
-    if MD.IsRecordMethod then
+    for I := 0 to ACall.Args.Count - 1 do
     begin
-      if Self.IsLocal(ACall.ObjectName) then
-        Self.Emit(Format(#9'leaq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
+      Arg := TASTExpr(ACall.Args.Items[I]);
+      Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]), Arg);
+    end;
+
+    if ACall.ObjectName <> '' then
+    begin
+      if MD.IsRecordMethod then
+      begin
+        if Self.IsLocal(ACall.ObjectName) then
+          Self.Emit(Format(#9'leaq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
+        else
+          Self.Emit(Format(#9'leaq %s(%%rip), %%r10', [ACall.ObjectName]));
+      end
       else
-        Self.Emit(Format(#9'leaq %s(%%rip), %%r10', [ACall.ObjectName]));
+      begin
+        if Self.IsLocal(ACall.ObjectName) then
+          Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%r10', [ACall.ObjectName]));
+      end;
+    end
+    else if ACall.ObjExpr <> nil then
+    begin
+      Self.EmitExprToEax(ACall.ObjExpr);
+      Self.Emit(#9'movq %rax, %r10');
     end
     else
-    begin
-      if Self.IsLocal(ACall.ObjectName) then
-        Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
-      else
-        Self.Emit(Format(#9'movq %s(%%rip), %%r10', [ACall.ObjectName]));
-    end;
-  end
-  else if ACall.ObjExpr <> nil then
-  begin
-    Self.EmitExprToEax(ACall.ObjExpr);
-    Self.Emit(#9'movq %rax, %r10');
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+
+    for I := UserSlots - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+    Self.Emit(#9'movq %r10, %rdi');
+    Self.Emit(#9'callq ' + Sym);
   end
   else
   begin
-    { Implicit self: load from Self slot. }
-    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
-  end;
+    OverflowSlots := TotalSlots - 6;
+    CleanUp := ((OverflowSlots * 8 + 15) and (-16));
+    AllocSz := 6 * 8 + CleanUp;
+    Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
 
-  { Pop args into %rsi/%rdx/... (shift by 1 for %rdi = Self).
-    Use slot count so interface args (2 slots each) get two pops. }
-  for I := CountArgSlots(MD.Params) - 1 downto 0 do
-    Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
-  { Place Self as first arg. }
-  Self.Emit(#9'movq %r10, %rdi');
-  Self.Emit(#9'callq ' + Sym);
-  { Result in %rax (int) or %xmm0 (float). }
+    SlotOff := 8;
+    for I := 0 to ACall.Args.Count - 1 do
+    begin
+      Arg := TASTExpr(ACall.Args.Items[I]);
+      if I + 1 < 6 then
+        Dest := I * 8 + 8
+      else
+        Dest := 6 * 8 + (I + 1 - 6) * 8;
+      if TMethodParam(MD.Params.Items[I]).IsVarParam then
+      begin
+        if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
+          Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if Arg is TIdentExpr then
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [TIdentExpr(Arg).Name]))
+        else
+          Self.EmitExprToEax(Arg);
+      end
+      else
+        Self.EmitExprToEax(Arg);
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
+    end;
+
+    if ACall.ObjectName <> '' then
+    begin
+      if MD.IsRecordMethod then
+      begin
+        if Self.IsLocal(ACall.ObjectName) then
+          Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
+        else
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [ACall.ObjectName]));
+      end
+      else
+      begin
+        if Self.IsLocal(ACall.ObjectName) then
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rax', [ACall.ObjectName]));
+      end;
+    end
+    else if ACall.ObjExpr <> nil then
+      Self.EmitExprToEax(ACall.ObjExpr)
+    else
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+    Self.Emit(Format(#9'movq %%rax, 0(%%rsp)', []));
+
+    for I := 0 to 5 do
+      Self.Emit(Format(#9'movq %d(%%rsp), %s', [I * 8, SysVArgRegs64[I]]));
+
+    Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
+    Self.Emit(#9'callq ' + Sym);
+    Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
+  end;
 end;
 
 procedure TX86_64Backend.EmitMethodArgPush(APar: TMethodParam; AArg: TASTExpr);
@@ -5131,10 +5271,12 @@ end;
   Same as EmitMethodCallExpr but for statement nodes. }
 procedure TX86_64Backend.EmitMethodCallStmt(ACall: TMethodCallStmt);
 var
-  I:   Integer;
-  MD:  TMethodDecl;
-  Sym: string;
-  Arg: TASTExpr;
+  I:        Integer;
+  MD:       TMethodDecl;
+  Sym:      string;
+  Arg:      TASTExpr;
+  UserSlots, TotalSlots, AllocSz, SlotOff, CleanUp: Integer;
+  OverflowSlots, Dest: Integer;
 begin
   { Interface method dispatch (statement position): route through the itab. }
   if (ACall.ResolvedClassType <> nil) and
@@ -5189,56 +5331,133 @@ begin
       'native backend: TMethodCallStmt has no ResolvedMethod (' + ACall.Name + ')');
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
 
-  { Evaluate args left-to-right and push them (var/out args by address). }
-  for I := 0 to ACall.Args.Count - 1 do
-  begin
-    Arg := TASTExpr(ACall.Args.Items[I]);
-    Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]), Arg);
-  end;
+  UserSlots  := Self.CountArgSlots(MD.Params);
+  TotalSlots := UserSlots + 1;
 
-  { Load Self (the receiver) into %r10. }
-  if ACall.IsImplicitSelf and (ACall.ImplicitBaseInfo <> nil) then
+  if TotalSlots <= 6 then
   begin
-    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
-    if ACall.ImplicitBaseInfo.Offset > 0 then
-      Self.Emit(Format(#9'addq $%d, %%r10', [ACall.ImplicitBaseInfo.Offset]));
-    if ACall.ImplicitBaseInfo.TypeDesc.Kind <> tyRecord then
-      Self.Emit(#9'movq (%r10), %r10');
-  end
-  else if MD.IsRecordMethod and ACall.IsVarParam then
-  begin
-    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]));
-  end
-  else if MD.IsRecordMethod then
-  begin
-    if FSretFunc and SameText(ACall.ObjectName, 'Result') then
-      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Result')]))
-    else if Self.IsLocal(ACall.ObjectName) then
-      Self.Emit(Format(#9'leaq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
-    else
-      Self.Emit(Format(#9'leaq %s(%%rip), %%r10', [ACall.ObjectName]));
-  end
-  else if ACall.ObjectName <> '' then
-  begin
-    if Self.IsLocal(ACall.ObjectName) then
+    { ≤6 total slots: push/pop strategy (Self in %rdi, args in %rsi..%r9). }
+    for I := 0 to ACall.Args.Count - 1 do
+    begin
+      Arg := TASTExpr(ACall.Args.Items[I]);
+      Self.EmitMethodArgPush(TMethodParam(MD.Params.Items[I]), Arg);
+    end;
+
+    if ACall.IsImplicitSelf and (ACall.ImplicitBaseInfo <> nil) then
+    begin
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+      if ACall.ImplicitBaseInfo.Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%r10', [ACall.ImplicitBaseInfo.Offset]));
+      if ACall.ImplicitBaseInfo.TypeDesc.Kind <> tyRecord then
+        Self.Emit(#9'movq (%r10), %r10');
+    end
+    else if MD.IsRecordMethod and ACall.IsVarParam then
       Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
+    else if MD.IsRecordMethod then
+    begin
+      if FSretFunc and SameText(ACall.ObjectName, 'Result') then
+        Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Result')]))
+      else if Self.IsLocal(ACall.ObjectName) then
+        Self.Emit(Format(#9'leaq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
+      else
+        Self.Emit(Format(#9'leaq %s(%%rip), %%r10', [ACall.ObjectName]));
+    end
+    else if ACall.ObjectName <> '' then
+    begin
+      if Self.IsLocal(ACall.ObjectName) then
+        Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%r10', [ACall.ObjectName]));
+    end
+    else if ACall.ObjExpr <> nil then
+    begin
+      Self.EmitExprToEax(ACall.ObjExpr);
+      Self.Emit(#9'movq %rax, %r10');
+    end
     else
-      Self.Emit(Format(#9'movq %s(%%rip), %%r10', [ACall.ObjectName]));
-  end
-  else if ACall.ObjExpr <> nil then
-  begin
-    Self.EmitExprToEax(ACall.ObjExpr);
-    Self.Emit(#9'movq %rax, %r10');
+      Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+
+    for I := UserSlots - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
+    Self.Emit(#9'movq %r10, %rdi');
   end
   else
-    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+  begin
+    OverflowSlots := TotalSlots - 6;
+    CleanUp := ((OverflowSlots * 8 + 15) and (-16));
+    AllocSz := 6 * 8 + CleanUp;
+    Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
 
-  { Pop args into %rsi/%rdx/... (shift by 1 for %rdi = Self).
-    Use slot count so interface args (2 slots each) get two pops. }
-  for I := CountArgSlots(MD.Params) - 1 downto 0 do
-    Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
-  Self.Emit(#9'movq %r10, %rdi');
-  Self.Emit(#9'callq ' + Sym);
+    for I := 0 to ACall.Args.Count - 1 do
+    begin
+      Arg := TASTExpr(ACall.Args.Items[I]);
+      if I + 1 < 6 then
+        Dest := I * 8 + 8
+      else
+        Dest := 6 * 8 + (I + 1 - 6) * 8;
+      if TMethodParam(MD.Params.Items[I]).IsVarParam then
+      begin
+        if (Arg is TIdentExpr) and Self.IsLocal(TIdentExpr(Arg).Name) then
+          Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(TIdentExpr(Arg).Name)]))
+        else if Arg is TIdentExpr then
+          Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [TIdentExpr(Arg).Name]))
+        else
+          Self.EmitExprToEax(Arg);
+      end
+      else
+        Self.EmitExprToEax(Arg);
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
+    end;
+
+    if ACall.IsImplicitSelf and (ACall.ImplicitBaseInfo <> nil) then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+      if ACall.ImplicitBaseInfo.Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rax', [ACall.ImplicitBaseInfo.Offset]));
+      if ACall.ImplicitBaseInfo.TypeDesc.Kind <> tyRecord then
+        Self.Emit(#9'movq (%rax), %rax');
+    end
+    else if MD.IsRecordMethod and ACall.IsVarParam then
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
+    else if MD.IsRecordMethod then
+    begin
+      if FSretFunc and SameText(ACall.ObjectName, 'Result') then
+        Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Result')]))
+      else if Self.IsLocal(ACall.ObjectName) then
+        Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
+      else
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rax', [ACall.ObjectName]));
+    end
+    else if ACall.ObjectName <> '' then
+    begin
+      if Self.IsLocal(ACall.ObjectName) then
+        Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(ACall.ObjectName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rax', [ACall.ObjectName]));
+    end
+    else if ACall.ObjExpr <> nil then
+      Self.EmitExprToEax(ACall.ObjExpr)
+    else
+      Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+    Self.Emit(Format(#9'movq %%rax, 0(%%rsp)', []));
+
+    for I := 0 to 5 do
+      Self.Emit(Format(#9'movq %d(%%rsp), %s', [I * 8, SysVArgRegs64[I]]));
+
+    Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
+  end;
+
+  if MD.VTableSlot >= 0 then
+  begin
+    Self.Emit(#9'movq (%rdi), %rax');
+    Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
+    Self.Emit(#9'callq *%rax');
+  end
+  else
+    Self.Emit(#9'callq ' + Sym);
+
+  if TotalSlots > 6 then
+    Self.Emit(Format(#9'addq $%d, %%rsp', [CleanUp]));
 end;
 
 procedure TX86_64Backend.EmitInheritedCall(ACall: TInheritedCallStmt);

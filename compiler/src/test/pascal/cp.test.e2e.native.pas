@@ -272,6 +272,12 @@ type
     { Property writes via setter methods }
     procedure TestRun_Native_PropertyWrite_Simple;
     procedure TestRun_Native_PropertyWrite_Indexed;
+
+    { Built-in class access }
+    procedure TestRun_Native_ClassName;
+
+    { Method call >5 user args }
+    procedure TestRun_Native_MethodCall_ManyArgs;
   end;
 
 implementation
@@ -4211,6 +4217,42 @@ begin
     + '  A.Free '
     + 'end.',
     '10' + LE + '30' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_ClassName;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type TFoo = class end;'
+    + 'var F: TFoo;'
+    + 'begin'
+    + '  F := TFoo.Create;'
+    + '  WriteLn(F.ClassName);'
+    + '  F.Free '
+    + 'end.',
+    'TFoo' + LE, 0);
+end;
+
+procedure TE2ENativeTests.TestRun_Native_MethodCall_ManyArgs;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnBoth(
+    'program P;'
+    + 'type TCalc = class'
+    + ' function Sum6(A: Integer; B: Integer; C: Integer;'
+    + ' D: Integer; E: Integer; F: Integer): Integer;'
+    + 'end;'
+    + 'function TCalc.Sum6(A: Integer; B: Integer; C: Integer;'
+    + ' D: Integer; E: Integer; F: Integer): Integer;'
+    + 'begin Result := A + B + C + D + E + F end;'
+    + 'var Obj: TCalc;'
+    + 'begin'
+    + '  Obj := TCalc.Create;'
+    + '  WriteLn(Obj.Sum6(1, 2, 3, 4, 5, 6));'
+    + '  Obj.Free '
+    + 'end.',
+    '21' + LE, 0);
 end;
 
 initialization
