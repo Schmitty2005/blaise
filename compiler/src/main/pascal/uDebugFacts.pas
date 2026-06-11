@@ -62,6 +62,9 @@ type
   public
     SymbolName: string;  { emitted assembly label — LowPC }
     EndLabel: string;    { label after the final ret — exact HighPC }
+    SourceFile: string;  { .pas file the function's body lives in; empty
+                           means the emitter falls back to the program's
+                           main source file }
     Vars: TObjectList;   { owned TDbgVar }
     Lines: TObjectList;  { owned TDbgLine }
     constructor Create;

@@ -1137,6 +1137,7 @@ var
   F: TDbgFunc;
   V: TDbgVar;
   LineF: TDbgLine;
+  LineFile: string;
 begin
   ScopeID := 0;
   DeclIdx := 0;
@@ -1173,7 +1174,14 @@ begin
       EmitFactLocalVar(V, ScopeID, ParamIdx);
     end;
 
-    RecSize := 16 + Length(FSourceFile);
+    { Per-function source file: unit functions carry their own .pas path
+      (recorded by the backend at emission time) so break file:line works
+      inside units; empty means the program's main source file. }
+    if F.SourceFile <> '' then
+      LineFile := F.SourceFile
+    else
+      LineFile := FSourceFile;
+    RecSize := 16 + Length(LineFile);
     for J := 0 to F.Lines.Count - 1 do
     begin
       LineF := TDbgLine(F.Lines.Items[J]);
@@ -1183,7 +1191,7 @@ begin
       L('    .quad ' + LineF.LabelName + '  # Address (statement label)');
       L('    .int  ' + IntToStr(LineF.Line) + '  # LineNumber');
       L('    .word ' + IntToStr(LineF.Col) + '  # ColumnNumber');
-      EmitStrField(FSourceFile);
+      EmitStrField(LineFile);
     end;
   end;
 end;

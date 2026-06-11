@@ -72,6 +72,10 @@ type
       DbgMarkParams resolve captured-var types from the outer var/param
       declarations.  nil for top-level functions. }
     [Unretained] FDbgOuterDecl: TMethodDecl;
+    { Source file of the unit currently being emitted; stamped onto each
+      TDbgFunc so per-unit line records carry the right file.  Empty while
+      emitting the main program (the emitter falls back to its own file). }
+    FDbgSrcFile: string;
     { Global slots to define in the .data section: program-level variables plus
       hidden for-loop end-value slots.  Insertion-ordered so EmitDataSection
       emits them in declaration order; ContainsKey gives O(1) dedup.  The value
@@ -3252,6 +3256,7 @@ procedure TX86_64Backend.DbgBeginFunc(const ASymbol: string);
 begin
   if FDbgFacts = nil then Exit;
   FDbgCur := FDbgFacts.BeginFunc(ASymbol);
+  FDbgCur.SourceFile := FDbgSrcFile;
 end;
 
 procedure TX86_64Backend.DbgRecordSlot(const AName: string; AType: TTypeDesc;
@@ -12512,6 +12517,7 @@ var
   Decl:  TMethodDecl;
 begin
   FCurrentUnitName := AProg.Name;
+  FDbgSrcFile := '';
   FProgramName := AProg.Name;
   { Register declared program-level variables as global slots. }
   for I := 0 to AProg.Block.Decls.Count - 1 do
@@ -12631,6 +12637,7 @@ var
   UnitSym:   TSymbolTable;
 begin
   FCurrentUnitName := AUnit.Name;
+  FDbgSrcFile := AUnit.SourceFile;
   { Register the unit's global variables (interface + implementation sections)
     as data slots, mirroring EmitProgram's program-global registration. }
   for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
