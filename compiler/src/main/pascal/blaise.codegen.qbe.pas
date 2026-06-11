@@ -306,6 +306,7 @@ type
       arg loops can pass an interface param as the two-slot fat pointer the
       callee now expects, without each site declaring extra temps. }
     function  InterfaceArgFragment(AExpr: TASTExpr): string;
+    function  OpenArrayArgFragment(AArg: TASTExpr): string;
     { Assign the interface value produced by AExpr into the two memory slots
       pointed to by AObjSlotPtr (obj) and AItabSlotPtr (itab).  Handles ARC
       for strong interface fields (addref new obj, release old obj). }
@@ -5604,6 +5605,40 @@ begin
   end;
 end;
 
+{ Emit an argument bound to an open-array parameter and return the
+  'l <data>, l <high>' fragment (no leading separator).  Handles inline
+  array literals, static arrays coerced to open arrays, and forwarding an
+  open-array parameter. }
+function TCodeGenQBE.OpenArrayArgFragment(AArg: TASTExpr): string;
+var
+  ArgTemp:  string;
+  HighTemp: string;
+begin
+  if AArg is TArrayLiteralExpr then
+  begin
+    ArgTemp := EmitArrayLiteralExpr(TArrayLiteralExpr(AArg));
+    Result := Format('l %s, l %d',
+      [ArgTemp, TArrayLiteralExpr(AArg).Elements.Count - 1]);
+    Exit;
+  end;
+  if (AArg.ResolvedType <> nil) and
+     (AArg.ResolvedType.Kind = tyStaticArray) then
+  begin
+    { Static array coerced to open-array: pass base ptr + compile-time high }
+    ArgTemp := EmitExpr(AArg);
+    Result := Format('l %s, l %d', [ArgTemp,
+      TStaticArrayTypeDesc(AArg.ResolvedType).HighBound -
+      TStaticArrayTypeDesc(AArg.ResolvedType).LowBound]);
+    Exit;
+  end;
+  { Forward an open-array param variable }
+  ArgTemp  := EmitExpr(AArg);
+  HighTemp := AllocTemp();
+  EmitLine(Format('  %s =l loadl %%_var_%s_high',
+    [HighTemp, TIdentExpr(AArg).Name]));
+  Result := Format('l %s, l %s', [ArgTemp, HighTemp]);
+end;
+
 procedure TCodeGenQBE.EmitMethodCall(ACall: TMethodCallStmt);
 var
   RT:       TRecordTypeDesc;
@@ -5757,7 +5792,13 @@ begin
     for I := 0 to ACall.Args.Count - 1 do
     begin
       Par := TMethodParam(MDecl.Params.Items[I]);
-      if Par.IsVarParam then
+      if Par.IsOpenArray then
+      begin
+        ArgTemps.Add('');
+        ArgLine := ArgLine + ', ' +
+          OpenArrayArgFragment(TASTExpr(ACall.Args.Items[I]));
+      end
+      else if Par.IsVarParam then
       begin
         ArgTemps.Add('');
         ArgLine := ArgLine + Format(', l %s',
@@ -5942,7 +5983,13 @@ begin
     for I := 0 to ACall.Args.Count - 1 do
     begin
       Par := TMethodParam(MDecl.Params.Items[I]);
-      if Par.IsVarParam then
+      if Par.IsOpenArray then
+      begin
+        ArgTemps.Add('');
+        ArgLine := ArgLine + ', ' +
+          OpenArrayArgFragment(TASTExpr(ACall.Args.Items[I]));
+      end
+      else if Par.IsVarParam then
       begin
         ArgTemps.Add('');
         ArgLine := ArgLine + Format(', l %s',
@@ -9604,7 +9651,13 @@ begin
           for I := 0 to MCallExpr.Args.Count - 1 do
           begin
             Par := TMethodParam(MDecl.Params.Items[I]);
-            if Par.IsVarParam then
+            if Par.IsOpenArray then
+            begin
+              ArgTemps.Add('');
+              ArgLine := ArgLine + ', ' +
+                OpenArrayArgFragment(TASTExpr(MCallExpr.Args.Items[I]));
+            end
+            else if Par.IsVarParam then
             begin
               ArgTemps.Add('');
               ArgLine := ArgLine + Format(', l %s',
@@ -9784,7 +9837,13 @@ begin
     for I := 0 to MCallExpr.Args.Count - 1 do
     begin
       Par := TMethodParam(MDecl.Params.Items[I]);
-      if Par.IsVarParam then
+      if Par.IsOpenArray then
+      begin
+        ArgTemps.Add('');
+        ArgLine := ArgLine + ', ' +
+          OpenArrayArgFragment(TASTExpr(MCallExpr.Args.Items[I]));
+      end
+      else if Par.IsVarParam then
       begin
         ArgTemps.Add('');
         ArgLine := ArgLine + Format(', l %s',

@@ -39,6 +39,10 @@ type
 
     { Procedural type as open-array element }
     procedure TestRun_OpenArray_ProcType_CallEach;
+
+    { Open-array params on METHODS and CONSTRUCTORS: the call sites must
+      pass the (data, high) pair just like standalone functions. }
+    procedure TestRun_OpenArray_MethodAndCtorParams;
   end;
 
 implementation
@@ -311,6 +315,50 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcProcTypeOpenArray, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('1+2+3=6', '6', Trim(Output));
+end;
+
+const
+  SrcOpenArrayMethodCtor = '''
+    program P;
+    type
+      TFoo = class
+        FSeed: Integer;
+        constructor Create(const Init: array of Integer);
+        function Sum(const A: array of Integer): Integer;
+        procedure Note(const A: array of Integer);
+      end;
+    constructor TFoo.Create(const Init: array of Integer);
+    var I: Integer;
+    begin
+      FSeed := 0;
+      for I := 0 to High(Init) do
+        FSeed := FSeed + Init[I];
+    end;
+    function TFoo.Sum(const A: array of Integer): Integer;
+    var I: Integer;
+    begin
+      Result := FSeed;
+      for I := 0 to High(A) do
+        Result := Result + A[I];
+    end;
+    procedure TFoo.Note(const A: array of Integer);
+    begin
+      writeln(High(A) + 1);
+    end;
+    var
+      F: TFoo;
+    begin
+      F := TFoo.Create([1, 2]);
+      writeln(F.FSeed);
+      writeln(F.Sum([10, 20, 30]));
+      F.Note([5, 6, 7, 8]);
+    end.
+    ''';
+
+procedure TE2EOpenArrayTests.TestRun_OpenArray_MethodAndCtorParams;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcOpenArrayMethodCtor, '3' + #10 + '63' + #10 + '4' + #10, 0);
 end;
 
 initialization
