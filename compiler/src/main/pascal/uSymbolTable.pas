@@ -417,21 +417,25 @@ type
                                      routines / methods that came in via a
                                      .bif (no source TUnit holds them). }
 
-    FTypeInteger:  TTypeDesc;
-    FTypeInt64:    TTypeDesc;
-    FTypeUInt32:   TTypeDesc;
-    FTypeUInt64:   TTypeDesc;
-    FTypeSmallInt: TTypeDesc;
-    FTypeWord:     TTypeDesc;
-    FTypeByte:     TTypeDesc;
-    FTypeBoolean: TTypeDesc;
-    FTypeString:  TTypeDesc;
-    FTypeVoid:    TTypeDesc;
-    FTypeNil:     TTypeDesc;
-    FTypeDouble:  TTypeDesc;
-    FTypeSingle:  TTypeDesc;
-    FTypePointer: TPointerTypeDesc;  { untyped Pointer }
-    FTypePChar:   TTypeDesc;         { opaque C pointer }
+    { Builtin-type caches: borrowed views into FAllTypes (the owning pool).
+      [Unretained] keeps the pool's single reference authoritative; the
+      owned +1 a NewType call returns is released by the Unretained-store
+      lowering at the assignment site. }
+    [Unretained] FTypeInteger:  TTypeDesc;
+    [Unretained] FTypeInt64:    TTypeDesc;
+    [Unretained] FTypeUInt32:   TTypeDesc;
+    [Unretained] FTypeUInt64:   TTypeDesc;
+    [Unretained] FTypeSmallInt: TTypeDesc;
+    [Unretained] FTypeWord:     TTypeDesc;
+    [Unretained] FTypeByte:     TTypeDesc;
+    [Unretained] FTypeBoolean: TTypeDesc;
+    [Unretained] FTypeString:  TTypeDesc;
+    [Unretained] FTypeVoid:    TTypeDesc;
+    [Unretained] FTypeNil:     TTypeDesc;
+    [Unretained] FTypeDouble:  TTypeDesc;
+    [Unretained] FTypeSingle:  TTypeDesc;
+    [Unretained] FTypePointer: TPointerTypeDesc;  { untyped Pointer }
+    [Unretained] FTypePChar:   TTypeDesc;         { opaque C pointer }
 
     { Optional hook into uses-chain lookup.  Set by TSemanticAnalyser
       so Lookup() can consult per-unit visibility after exhausting the
