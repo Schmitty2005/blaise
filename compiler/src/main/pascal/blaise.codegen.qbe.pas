@@ -247,6 +247,8 @@ type
     procedure EmitCompoundStmt(AStmt: TCompoundStmt);
     procedure EmitAssignment(AAssign: TAssignment);
     procedure EmitFieldAssignment(AAssign: TFieldAssignment);
+    procedure EmitFieldElemStore(AAssign: TFieldAssignment;
+      const AFieldPtr: string);
     procedure EmitMethodCall(ACall: TMethodCallStmt);
     { After a call, release any value-argument temporaries that carried a
       +1-owned reference (function/property/method returns passed directly).
@@ -5197,6 +5199,97 @@ begin
   end;
 end;
 
+{ Element write into an array-typed field: Receiver.Field[Index] := Value.
+  AFieldPtr addresses the FIELD slot (computed by EmitFieldAssignment for
+  every receiver shape).  For a dynamic-array field the data pointer is
+  loaded from the slot; for a static-array field the slot IS the inline
+  storage.  The value is stored by ELEMENT type with the same ARC and
+  record-copy rules as plain array subscript writes. }
+procedure TCodeGenQBE.EmitFieldElemStore(AAssign: TFieldAssignment;
+  const AFieldPtr: string);
+var
+  ArrT:     TTypeDesc;
+  ElemT:    TTypeDesc;
+  LowBnd:   Integer;
+  ElemSize: Integer;
+  BaseT:    string;
+  IdxW:     string;
+  IdxL:     string;
+  Adj:      string;
+  Offset:   string;
+  ElemPtr:  string;
+  ValTemp:  string;
+  OldTemp:  string;
+begin
+  ArrT := AAssign.FieldInfo.TypeDesc;
+  if ArrT.Kind = tyDynArray then
+  begin
+    ElemT := TDynArrayTypeDesc(ArrT).ElementType;
+    LowBnd := 0;
+    BaseT := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [BaseT, AFieldPtr]));  { data pointer }
+  end
+  else
+  begin
+    ElemT := TStaticArrayTypeDesc(ArrT).ElementType;
+    LowBnd := TStaticArrayTypeDesc(ArrT).LowBound;
+    BaseT := AFieldPtr;  { inline storage starts at the field slot }
+  end;
+  ElemSize := ElemT.RawSize();
+  IdxW := EmitExpr(AAssign.PropIndexExpr);
+  IdxL := AllocTemp();
+  EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
+  if LowBnd <> 0 then
+  begin
+    Adj := AllocTemp();
+    EmitLine(Format('  %s =l sub %s, %d', [Adj, IdxL, LowBnd]));
+    IdxL := Adj;
+  end;
+  Offset := AllocTemp();
+  EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
+  ElemPtr := AllocTemp();
+  EmitLine(Format('  %s =l add %s, %s', [ElemPtr, BaseT, Offset]));
+
+  if ElemT.Kind = tyRecord then
+  begin
+    ValTemp := EmitExpr(AAssign.Expr);
+    EmitRecordCopy(TRecordTypeDesc(ElemT), ElemPtr, ValTemp);
+    Exit;
+  end;
+  if ElemT.Kind in [tyByte, tyBoolean] then
+    ValTemp := EmitByteRhs(AAssign.Expr)
+  else
+    ValTemp := EmitExpr(AAssign.Expr);
+  { Extend w-typed values into 8-byte integer elements. }
+  if (ElemT.Kind in [tyInt64, tyUInt64]) and
+     (AAssign.Expr.ResolvedType <> nil) and
+     not (AAssign.Expr.ResolvedType.Kind in [tyInt64, tyUInt64]) then
+  begin
+    Adj := AllocTemp();
+    if ElemT.Kind = tyUInt64 then
+      EmitLine(Format('  %s =l extuw %s', [Adj, ValTemp]))
+    else
+      EmitLine(Format('  %s =l extsw %s', [Adj, ValTemp]));
+    ValTemp := Adj;
+  end;
+  { ARC for managed element types: retain new, release old, then store. }
+  if ElemT.IsString() then
+  begin
+    OldTemp := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [OldTemp, ElemPtr]));
+    EmitLine(Format('  call $_StringAddRef(l %s)',  [ValTemp]));
+    EmitLine(Format('  call $_StringRelease(l %s)', [OldTemp]));
+  end
+  else if ElemT.Kind = tyClass then
+  begin
+    OldTemp := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [OldTemp, ElemPtr]));
+    EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
+    EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
+  end;
+  EmitLine(Format('  %s %s, %s', [StoreInstrFor(ElemT), ValTemp, ElemPtr]));
+end;
+
 procedure TCodeGenQBE.EmitFieldAssignment(AAssign: TFieldAssignment);
 var
   Ptr, PtrTemp, ValTemp, OldTemp, QType, StoreInstr, ExtTemp: string;
@@ -5260,8 +5353,10 @@ begin
   { Interface-typed field: the RHS must be stored as a two-slot fat pointer
     (obj + itab), not a single value.  EmitInterfaceToFieldSlots evaluates the
     RHS itself, so the generic single-value EmitExpr below must be skipped for
-    this case (re-evaluating would double any side effects). }
-  if AAssign.FieldInfo.TypeDesc.Kind <> tyInterface then
+    this case (re-evaluating would double any side effects).  Element writes
+    also evaluate the RHS themselves (after the index). }
+  if (AAssign.FieldInfo.TypeDesc.Kind <> tyInterface) and
+     not AAssign.IsElemWrite then
     ValTemp := EmitExpr(AAssign.Expr);
 
   if AAssign.ObjExpr <> nil then
@@ -5338,6 +5433,14 @@ begin
   end
   else
     Ptr := FieldPtr(AAssign.RecordName, AAssign.FieldInfo.Offset, AAssign.IsGlobal);
+
+  { Element write into an array-typed field: Ptr addresses the FIELD;
+    redirect to the selected element and store by element type. }
+  if AAssign.IsElemWrite then
+  begin
+    EmitFieldElemStore(AAssign, Ptr);
+    Exit;
+  end;
 
   { Interface-typed field: store the fat pointer (obj at Ptr, itab at Ptr+8)
     with ARC on the obj slot.  EmitInterfaceToFieldSlots handles both an
@@ -7746,14 +7849,10 @@ var
   Extra:    string;
   I:        Integer;
 begin
-  { Address of the string slot (works for plain idents, var params,
-    implicit-Self fields).  Field-access targets (R.F or P^.F) are not
-    supported here — semantic enforces the L-value forms we accept. }
-  if TASTExpr(ACall.Args.Items[0]) is TIdentExpr then
-    Addr := EmitVarArgAddr(TIdentExpr(TASTExpr(ACall.Args.Items[0])))
-  else
-    raise ECodeGenError.Create(
-      'String mutator on non-ident receiver not yet supported');
+  { Address of the string slot.  EmitLValueAddr covers plain idents, var
+    params, implicit-Self fields, field-access targets (R.F, C.F, P^.F)
+    and raises for unsupported L-value shapes. }
+  Addr := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
 
   OldTemp := AllocTemp();
   EmitLine(Format('  %s =l loadl %s', [OldTemp, Addr]));
@@ -7781,10 +7880,9 @@ var
   ElemSz:  Integer;
   DAT:     TDynArrayTypeDesc;
 begin
-  if not (TASTExpr(ACall.Args.Items[0]) is TIdentExpr) then
-    raise ECodeGenError.Create(
-      'SetLength on dynamic array: first argument must be a variable');
-  Addr    := EmitVarArgAddr(TIdentExpr(TASTExpr(ACall.Args.Items[0])));
+  { EmitLValueAddr covers plain idents, var params, implicit-Self fields and
+    field-access targets (R.F, C.F, P^.F); it raises for unsupported shapes. }
+  Addr    := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
   OldPtr  := AllocTemp();
   EmitLine(Format('  %s =l loadl %s', [OldPtr, Addr]));
   NTemp   := EmitExpr(TASTExpr(ACall.Args.Items[1]));
@@ -10251,14 +10349,32 @@ begin
     end
     else if FldAccess.IsArrayAccess then
     begin
-      { Array field subscript: Rec.Arr[I] — load array base, compute element addr. }
+      { Array field subscript: Rec.Arr[I] — load array base, compute element
+        addr.  The receiver base address depends on the leaf shape: class
+        variables and var-params hold a POINTER in their slot (load it);
+        implicit-Self fields start from the Self pointer; inline records use
+        the slot address directly. }
       L := AllocTemp();
-      if FldAccess.IsVarParam then
+      if FldAccess.IsImplicitSelf then
       begin
-        T := AllocTemp();
-        EmitLine(Format('  %s =l loadl %s', [T, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
-        L := T;
+        EmitLine(Format('  %s =l loadl %%_var_Self', [L]));
+        if (FldAccess.ImplicitBaseInfo <> nil) and
+           (FldAccess.ImplicitBaseInfo.Offset > 0) then
+        begin
+          T := AllocTemp();
+          EmitLine(Format('  %s =l add %s, %d',
+            [T, L, FldAccess.ImplicitBaseInfo.Offset]));
+          L := T;
+        end;
+        if FldAccess.IsClassAccess then
+        begin
+          T := AllocTemp();
+          EmitLine(Format('  %s =l loadl %s', [T, L]));
+          L := T;
+        end;
       end
+      else if FldAccess.IsClassAccess or FldAccess.IsVarParam then
+        EmitLine(Format('  %s =l loadl %s', [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]))
       else
         EmitLine(Format('  %s =l copy %s', [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
       if FldAccess.FieldInfo.Offset > 0 then
@@ -12653,7 +12769,23 @@ begin
     ElemSize  := ElemType.RawSize();
     PCharBase := AllocTemp();
     { load the data pointer from the variable slot }
-    if AStmt.IsGlobal then
+    if AStmt.IsImplicitSelf then
+    begin
+      { ArrayName is a dyn-array field of Self: Self + offset holds the
+        data pointer. }
+      EmitLine(Format('  %s =l loadl %%_var_Self', [PCharBase]));
+      if AStmt.ImplicitFieldInfo.Offset > 0 then
+      begin
+        ElemPtr := AllocTemp();
+        EmitLine(Format('  %s =l add %s, %d',
+          [ElemPtr, PCharBase, AStmt.ImplicitFieldInfo.Offset]));
+        PCharBase := ElemPtr;
+      end;
+      ElemPtr := AllocTemp();
+      EmitLine(Format('  %s =l loadl %s', [ElemPtr, PCharBase]));
+      PCharBase := ElemPtr;
+    end
+    else if AStmt.IsGlobal then
       EmitLine(Format('  %s =l loadl $%s', [PCharBase, AStmt.ArrayName]))
     else if IsPromoted(AStmt.ArrayName) then
       EmitLine(Format('  %s =l copy %%_var_%s', [PCharBase, AStmt.ArrayName]))
@@ -12739,8 +12871,24 @@ begin
   end
   else
     EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
-  EmitLine(Format('  %s =l add %s, %s',
-    [ElemPtr, VarRef(AStmt.ArrayName, AStmt.IsGlobal), Offset]));
+  if AStmt.IsImplicitSelf then
+  begin
+    { ArrayName is a static-array field of Self: the inline storage starts
+      at Self + field offset. }
+    PCharBase := AllocTemp();
+    EmitLine(Format('  %s =l loadl %%_var_Self', [PCharBase]));
+    if AStmt.ImplicitFieldInfo.Offset > 0 then
+    begin
+      Adj := AllocTemp();
+      EmitLine(Format('  %s =l add %s, %d',
+        [Adj, PCharBase, AStmt.ImplicitFieldInfo.Offset]));
+      PCharBase := Adj;
+    end;
+    EmitLine(Format('  %s =l add %s, %s', [ElemPtr, PCharBase, Offset]));
+  end
+  else
+    EmitLine(Format('  %s =l add %s, %s',
+      [ElemPtr, VarRef(AStmt.ArrayName, AStmt.IsGlobal), Offset]));
   if ElemType.Kind = tyRecord then
   begin
     ElemVal := EmitExpr(AStmt.ValueExpr);

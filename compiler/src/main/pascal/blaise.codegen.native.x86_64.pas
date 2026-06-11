@@ -403,6 +403,7 @@ type
     procedure EmitNarrowToType(AType: TTypeDesc);
     { Inc(x)/Dec(x) with support for simple variables, implicit-Self fields,
       var params, and field-access expressions. }
+    procedure EmitLValueSlotAddr(AExpr: TASTExpr);
     procedure EmitIncDec(ACall: TProcCall);
     procedure EmitIncDecAddrOp(IsInc, IsWide, HasStep: Boolean);
     { Evaluate a boolean condition and branch: if true jump ATrueLabel, else
@@ -3106,6 +3107,74 @@ end;
   - var-param TIdentExpr (dereference the pointer)
   - TFieldAccessExpr (Rec.Field, Obj.Field)
   - TDerefExpr (P^) }
+{ Compute the ADDRESS of an L-value slot into %rdx.  Supports plain
+  identifiers (locals, globals, var-params, implicit-Self fields) and
+  field-access targets: R.F (inline record), C.F (class variable — slot
+  holds the object pointer), implicit-Self record/class bases, var-param
+  record bases, and chained Base.F (Base evaluated to an address). }
+procedure TX86_64Backend.EmitLValueSlotAddr(AExpr: TASTExpr);
+var
+  IE:  TIdentExpr;
+  FAE: TFieldAccessExpr;
+  FI:  TFieldInfo;
+begin
+  if AExpr is TIdentExpr then
+  begin
+    IE := TIdentExpr(AExpr);
+    if IE.IsImplicitSelf and (IE.ImplicitFieldInfo <> nil) then
+    begin
+      FI := TFieldInfo(IE.ImplicitFieldInfo);
+      Self.Emit(Format(#9'movq %s, %%rdx', [Self.VarOperand('Self')]));
+      if FI.Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rdx', [FI.Offset]));
+    end
+    else if IE.ParamMode <> pmNone then
+      Self.Emit(Format(#9'movq %s, %%rdx', [Self.VarOperand(IE.Name)]))
+    else if Self.IsLocal(IE.Name) then
+      Self.Emit(Format(#9'leaq %s, %%rdx', [Self.VarOperand(IE.Name)]))
+    else
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rdx', [IE.Name]));
+    Exit;
+  end;
+  if AExpr is TFieldAccessExpr then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    if FAE.FieldInfo = nil then
+      raise ENativeCodeGenError.Create(
+        'native backend: L-value field access has no resolved field info');
+    if FAE.Base <> nil then
+    begin
+      Self.EmitExprToEax(FAE.Base);
+      Self.Emit(#9'movq %rax, %rdx');
+    end
+    else if FAE.IsImplicitSelf then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rdx', [Self.VarOperand('Self')]));
+      if (FAE.ImplicitBaseInfo <> nil) and (FAE.ImplicitBaseInfo.Offset > 0) then
+        Self.Emit(Format(#9'addq $%d, %%rdx', [FAE.ImplicitBaseInfo.Offset]));
+      if FAE.IsClassAccess then
+        Self.Emit(#9'movq (%rdx), %rdx');
+    end
+    else if FAE.IsClassAccess or FAE.IsVarParam then
+    begin
+      { Class variable / var-param: the slot holds a POINTER — load it. }
+      if Self.IsLocal(FAE.RecordName) then
+        Self.Emit(Format(#9'movq %s, %%rdx', [Self.VarOperand(FAE.RecordName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rdx', [FAE.RecordName]));
+    end
+    else if Self.IsLocal(FAE.RecordName) then
+      Self.Emit(Format(#9'leaq %s, %%rdx', [Self.VarOperand(FAE.RecordName)]))
+    else
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rdx', [FAE.RecordName]));
+    if FAE.FieldInfo.Offset > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rdx', [FAE.FieldInfo.Offset]));
+    Exit;
+  end;
+  raise ENativeCodeGenError.Create(
+    'native backend: unsupported L-value form');
+end;
+
 procedure TX86_64Backend.EmitIncDec(ACall: TProcCall);
 var
   Arg0: TASTExpr;
@@ -5173,13 +5242,32 @@ begin
     field, then index into the array (static, dynamic, or open). }
   if (AExpr is TFieldAccessExpr) and
      TFieldAccessExpr(AExpr).IsArrayAccess and
-     (TFieldAccessExpr(AExpr).FieldInfo <> nil) and
-     (TFieldAccessExpr(AExpr).Base = nil) then
+     (TFieldAccessExpr(AExpr).FieldInfo <> nil) then
   begin
     FAE := TFieldAccessExpr(AExpr);
-    if FAE.IsVarParam then
+    if FAE.Base <> nil then
     begin
-      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]));
+      { Chained receiver (c.N.Arr[I]): the base expression evaluates to the
+        record/object address. }
+      Self.EmitExprToEax(FAE.Base);
+      Self.Emit(#9'movq %rax, %rcx');
+    end
+    else if FAE.IsImplicitSelf then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+      if (FAE.ImplicitBaseInfo <> nil) and (FAE.ImplicitBaseInfo.Offset > 0) then
+        Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.ImplicitBaseInfo.Offset]));
+      if FAE.IsClassAccess then
+        Self.Emit(#9'movq (%rcx), %rcx');
+    end
+    else if FAE.IsClassAccess or FAE.IsVarParam then
+    begin
+      { Class variable / var-param: the slot holds a POINTER to the object
+        or record — load it. }
+      if Self.IsLocal(FAE.RecordName) then
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FAE.RecordName]));
     end
     else if Self.IsLocal(FAE.RecordName) then
       Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
@@ -8283,7 +8371,9 @@ begin
        (TASTExpr(PC.Args.Items[0]).ResolvedType <> nil) and
        (TASTExpr(PC.Args.Items[0]).ResolvedType.Kind = tyDynArray) then
     begin
-      if TASTExpr(PC.Args.Items[0]) is TIdentExpr then
+      if (TASTExpr(PC.Args.Items[0]) is TIdentExpr) and
+         not TIdentExpr(TASTExpr(PC.Args.Items[0])).IsImplicitSelf and
+         (TIdentExpr(TASTExpr(PC.Args.Items[0])).ParamMode = pmNone) then
       begin
         FDynArgName := TIdentExpr(TASTExpr(PC.Args.Items[0])).Name;
         FDynElemSz :=
@@ -8304,6 +8394,26 @@ begin
           Self.Emit(Format(#9'movq %%rax, %s', [Self.VarOperand(FDynArgName)]))
         else
           Self.Emit(Format(#9'movq %%rax, %s(%%rip)', [FDynArgName]));
+      end
+      else
+      begin
+        { Field receiver (R.A / C.A / chained): compute the slot address,
+          call through it, store the new data pointer back. }
+        FDynElemSz :=
+          TDynArrayTypeDesc(TASTExpr(PC.Args.Items[0]).ResolvedType).ElementType.RawSize();
+        Self.EmitLValueSlotAddr(TASTExpr(PC.Args.Items[0]));
+        Self.Emit(#9'pushq %rdx');
+        Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
+        Self.Emit(#9'popq %rdx');
+        Self.Emit(#9'pushq %rdx');
+        Self.Emit(#9'subq $8, %rsp');   { keep calls 16-byte aligned }
+        Self.Emit(#9'movl %eax, %esi');
+        Self.Emit(#9'movq (%rdx), %rdi');
+        Self.Emit(Format(#9'movl $%d, %%edx', [FDynElemSz]));
+        Self.Emit(#9'callq _DynArraySetLength');
+        Self.Emit(#9'addq $8, %rsp');
+        Self.Emit(#9'popq %rdx');
+        Self.Emit(#9'movq %rax, (%rdx)');
       end;
       Exit;
     end;
@@ -8318,7 +8428,9 @@ begin
       Self.Emit(#9'movl %eax, %esi');
       Self.Emit(#9'popq %rdi');
       Self.Emit(#9'callq _StringSetLength');
-      if TASTExpr(PC.Args.Items[0]) is TIdentExpr then
+      if (TASTExpr(PC.Args.Items[0]) is TIdentExpr) and
+         not TIdentExpr(TASTExpr(PC.Args.Items[0])).IsImplicitSelf and
+         (TIdentExpr(TASTExpr(PC.Args.Items[0])).ParamMode = pmNone) then
       begin
         Self.Emit(#9'pushq %rax');
         Self.Emit(#9'movq %rax, %rdi');
@@ -8337,6 +8449,21 @@ begin
         else
           Self.Emit(Format(#9'movq %%rax, %s(%%rip)',
             [TIdentExpr(TASTExpr(PC.Args.Items[0])).Name]));
+      end
+      else
+      begin
+        { Field receiver: new string is in %rax — retain it, release the old
+          field value, store through the slot address. }
+        Self.Emit(#9'pushq %rax');
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(#9'callq _StringAddRef');
+        Self.EmitLValueSlotAddr(TASTExpr(PC.Args.Items[0]));
+        Self.Emit(#9'pushq %rdx');
+        Self.Emit(#9'movq (%rdx), %rdi');
+        Self.Emit(#9'callq _StringRelease');
+        Self.Emit(#9'popq %rdx');
+        Self.Emit(#9'popq %rax');
+        Self.Emit(#9'movq %rax, (%rdx)');
       end;
       Exit;
     end;
@@ -8729,6 +8856,104 @@ begin
     if FA.FieldInfo = nil then
       raise ENativeCodeGenError.Create(
         'native backend: field assignment has no resolved field info');
+    { Element write into an array-typed field: Receiver.Field[Idx] := V.
+      Evaluate the value, the scaled index, then the field slot address;
+      for a dynamic array deref the slot to reach the data pointer; store
+      by ELEMENT type with the same ARC rules as plain subscript writes. }
+    if FA.IsElemWrite then
+    begin
+      if FA.FieldInfo.TypeDesc.Kind = tyDynArray then
+        DAElemType := TDynArrayTypeDesc(FA.FieldInfo.TypeDesc).ElementType
+      else
+        DAElemType := TStaticArrayTypeDesc(FA.FieldInfo.TypeDesc).ElementType;
+      Self.EmitExprToEax(FA.Expr);
+      Self.Emit(#9'pushq %rax');           { value (or record src addr) }
+      Self.EmitExprToEax(FA.PropIndexExpr);
+      if (FA.FieldInfo.TypeDesc.Kind = tyStaticArray) and
+         (TStaticArrayTypeDesc(FA.FieldInfo.TypeDesc).LowBound <> 0) then
+        Self.Emit(Format(#9'subq $%d, %%rax',
+          [TStaticArrayTypeDesc(FA.FieldInfo.TypeDesc).LowBound]));
+      Self.Emit(Format(#9'imulq $%d, %%rax', [DAElemType.RawSize()]));
+      Self.Emit(#9'pushq %rax');           { scaled element offset }
+      { Field slot address → %rdx, per receiver shape. }
+      if FA.ObjExpr <> nil then
+      begin
+        Self.EmitExprToEax(FA.ObjExpr);
+        Self.Emit(#9'movq %rax, %rdx');
+      end
+      else if FSretFunc and (FA.RecordName = 'Result') then
+        Self.Emit(Format(#9'movq %s, %%rdx', [Self.VarOperand('Result')]))
+      else if FA.IsImplicitSelf then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rdx', [Self.VarOperand('Self')]));
+        if (FA.ImplicitBaseInfo <> nil) and (FA.ImplicitBaseInfo.Offset > 0) then
+          Self.Emit(Format(#9'addq $%d, %%rdx', [FA.ImplicitBaseInfo.Offset]));
+        if FA.IsClassAccess then
+          Self.Emit(#9'movq (%rdx), %rdx');
+      end
+      else if FA.IsClassAccess or FA.IsVarParam then
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'movq %s, %%rdx', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rdx', [FA.RecordName]));
+      end
+      else if Self.IsLocal(FA.RecordName) then
+        Self.Emit(Format(#9'leaq %s, %%rdx', [Self.VarOperand(FA.RecordName)]))
+      else
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rdx', [FA.RecordName]));
+      if FA.FieldInfo.Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rdx', [FA.FieldInfo.Offset]));
+      if FA.FieldInfo.TypeDesc.Kind = tyDynArray then
+        Self.Emit(#9'movq (%rdx), %rdx');  { data pointer }
+      Self.Emit(#9'popq %rax');            { scaled offset }
+      Self.Emit(#9'addq %rax, %rdx');
+      Self.Emit(#9'movq %rdx, %rcx');      { element address }
+      if DAElemType.Kind = tyRecord then
+      begin
+        { Record element: ARC-aware copy (retain src fields, release dest
+          fields, memcpy).  Source record address is on the stack. }
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(#9'pushq %r15');
+        Self.Emit(#9'subq $8, %rsp');
+        Self.Emit(#9'movq %rcx, %r15');      { dest element addr }
+        Self.Emit(#9'movq 24(%rsp), %rbx');  { src record addr }
+        Self.EmitRecordFieldRetains(TRecordTypeDesc(DAElemType), '%rbx');
+        Self.EmitRecordFieldReleases(TRecordTypeDesc(DAElemType), '%r15');
+        Self.Emit(#9'movq %r15, %rdi');
+        Self.Emit(#9'movq %rbx, %rsi');
+        Self.Emit(Format(#9'movq $%d, %%rdx', [DAElemType.RawSize()]));
+        Self.Emit(#9'callq memcpy');
+        Self.Emit(#9'addq $8, %rsp');
+        Self.Emit(#9'popq %r15');
+        Self.Emit(#9'popq %rbx');
+        Self.Emit(#9'addq $8, %rsp');        { drop saved src addr }
+        Exit;
+      end;
+      if DAElemType.Kind = tyString then
+      begin
+        Self.Emit(#9'pushq %rcx');
+        Self.Emit(#9'movq 8(%rsp), %rdi');
+        Self.Emit(#9'callq _StringAddRef');
+        Self.Emit(#9'movq (%rsp), %rcx');
+        Self.Emit(#9'movq (%rcx), %rdi');
+        Self.Emit(#9'callq _StringRelease');
+        Self.Emit(#9'popq %rcx');
+      end
+      else if DAElemType.Kind = tyClass then
+      begin
+        Self.Emit(#9'pushq %rcx');
+        Self.Emit(#9'movq 8(%rsp), %rdi');
+        Self.Emit(#9'callq _ClassAddRef');
+        Self.Emit(#9'movq (%rsp), %rcx');
+        Self.Emit(#9'movq (%rcx), %rdi');
+        Self.Emit(#9'callq _ClassRelease');
+        Self.Emit(#9'popq %rcx');
+      end;
+      Self.Emit(#9'popq %rax');
+      Self.EmitStoreVar('(%rcx)', DAElemType);
+      Exit;
+    end;
     { Interface-typed field: store a two-slot fat pointer (obj + itab), not a
       single value.  Compute the destination record/object base into %rcx for
       each receiver shape, then hand off to EmitInterfaceToFieldSlotsAt (which
@@ -9263,7 +9488,16 @@ begin
       Self.Emit(#9'pushq %rax');
       Self.EmitExprToEax(SSA.IndexExpr);
       Self.Emit(Format(#9'imulq $%d, %%rax', [DAElemType.RawSize()]));
-      if Self.IsLocal(SSA.ArrayName) then
+      if SSA.IsImplicitSelf then
+      begin
+        { ArrayName is a dyn-array field of Self: Self + offset holds the
+          data pointer. }
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+        if SSA.ImplicitFieldInfo.Offset > 0 then
+          Self.Emit(Format(#9'addq $%d, %%rcx', [SSA.ImplicitFieldInfo.Offset]));
+        Self.Emit(#9'movq (%rcx), %rcx');
+      end
+      else if Self.IsLocal(SSA.ArrayName) then
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
       else
         Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [SSA.ArrayName]));
@@ -9329,7 +9563,15 @@ begin
       Self.Emit(Format(#9'subq $%d, %%rax',
         [TStaticArrayTypeDesc(SSA.ResolvedArrayType).LowBound]));
     Self.Emit(Format(#9'imulq $%d, %%rax', [DAElemType.RawSize()]));
-    if Self.IsLocal(SSA.ArrayName) then
+    if SSA.IsImplicitSelf then
+    begin
+      { ArrayName is a static-array field of Self: the inline storage
+        starts at Self + field offset. }
+      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+      if SSA.ImplicitFieldInfo.Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rcx', [SSA.ImplicitFieldInfo.Offset]));
+    end
+    else if Self.IsLocal(SSA.ArrayName) then
       Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(SSA.ArrayName)]))
     else
       Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [SSA.ArrayName]));

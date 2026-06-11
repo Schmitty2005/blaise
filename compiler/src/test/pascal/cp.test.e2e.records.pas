@@ -45,6 +45,12 @@ type
     procedure TestRun_DynArrayRecordElem_CopyNoAlias;
     procedure TestRun_StaticArrayRecordElem_FieldAssignAndRead;
     procedure TestRun_DynArrayClassElem_MethodCallStmt;
+    procedure TestRun_RecordField_DynArrayElemWrite;
+    procedure TestRun_ClassField_DynArrayElemWrite_AllReceiverShapes;
+    procedure TestRun_NestedChain_DynArrayElemWrite;
+    procedure TestRun_SubscriptChain_FieldElemWrite;
+    procedure TestRun_RecordField_StaticArrayElemWrite;
+    procedure TestRun_RecordField_DynArrayOfString_ElemWrite_ARC;
   end;
 
 implementation
@@ -872,6 +878,157 @@ procedure TE2ERecordsTests.TestRun_DynArrayClassElem_MethodCallStmt;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcDynClassElemMethodCall, '2' + LE, 0);
+end;
+
+const
+  SrcRecFieldDynElemWrite = '''
+    program P;
+    type
+      TIA = array of Integer;
+      TR  = record A: TIA; end;
+    var r: TR;
+    begin
+      SetLength(r.A, 3);
+      r.A[0] := 10;
+      r.A[1] := 20;
+      r.A[2] := r.A[0] + r.A[1];
+      writeln(r.A[0]);
+      writeln(r.A[1]);
+      writeln(r.A[2]);
+    end.
+    ''';
+
+  SrcClassFieldDynElemWrite = '''
+    program P;
+    type
+      TIA = array of Integer;
+      TC = class
+        A: TIA;
+        procedure Fill;
+      end;
+    procedure TC.Fill;
+    begin
+      SetLength(A, 3);
+      A[0] := 42;
+      Self.A[1] := 43;
+      A[2] := A[0] + Self.A[1];
+    end;
+    var c: TC;
+    begin
+      c := TC.Create();
+      c.Fill;
+      writeln(c.A[0]);
+      writeln(c.A[1]);
+      writeln(c.A[2]);
+      c.A[0] := 7;
+      writeln(c.A[0]);
+    end.
+    ''';
+
+  SrcNestedChainDynElemWrite = '''
+    program P;
+    type
+      TIA    = array of Integer;
+      TInner = record A: TIA; end;
+      TC     = class N: TInner; end;
+    var c: TC;
+    begin
+      c := TC.Create();
+      SetLength(c.N.A, 3);
+      c.N.A[0] := 7;
+      c.N.A[1] := 8;
+      writeln(c.N.A[0]);
+      writeln(c.N.A[1]);
+    end.
+    ''';
+
+  SrcSubscriptChainFieldElemWrite = '''
+    program P;
+    type
+      TIA = array of Integer;
+      TR  = record A: TIA; end;
+    var
+      rs: array of TR;
+    begin
+      SetLength(rs, 2);
+      SetLength(rs[1].A, 3);
+      rs[1].A[2] := 99;
+      writeln(rs[1].A[2]);
+    end.
+    ''';
+
+  SrcRecFieldStaticElemWrite = '''
+    program P;
+    type
+      TR = record S: array[0..2] of Integer; end;
+    var r: TR;
+    begin
+      r.S[0] := 5;
+      r.S[1] := 6;
+      r.S[2] := r.S[0] + r.S[1];
+      writeln(r.S[0]);
+      writeln(r.S[1]);
+      writeln(r.S[2]);
+    end.
+    ''';
+
+  SrcRecFieldDynStrElemWrite = '''
+    program P;
+    type
+      TSA = array of String;
+      TR  = record N: TSA; end;
+    var
+      r: TR;
+      s: String;
+    begin
+      SetLength(r.N, 2);
+      s := 'wor';
+      r.N[0] := 'hello';
+      r.N[1] := s + 'ld';
+      r.N[0] := 'bye';
+      writeln(r.N[0]);
+      writeln(r.N[1]);
+    end.
+    ''';
+
+procedure TE2ERecordsTests.TestRun_RecordField_DynArrayElemWrite;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcRecFieldDynElemWrite,
+    '10' + LE + '20' + LE + '30' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_ClassField_DynArrayElemWrite_AllReceiverShapes;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcClassFieldDynElemWrite,
+    '42' + LE + '43' + LE + '85' + LE + '7' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_NestedChain_DynArrayElemWrite;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcNestedChainDynElemWrite, '7' + LE + '8' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_SubscriptChain_FieldElemWrite;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcSubscriptChainFieldElemWrite, '99' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_RecordField_StaticArrayElemWrite;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcRecFieldStaticElemWrite,
+    '5' + LE + '6' + LE + '11' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_RecordField_DynArrayOfString_ElemWrite_ARC;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcRecFieldDynStrElemWrite,
+    'bye' + LE + 'world' + LE, 0);
 end;
 
 initialization

@@ -357,9 +357,12 @@ type
     [Unretained] ImplicitBaseInfo:  TFieldInfo; { non-owned — the field of Self that holds the record/class }
     IsGlobal:          Boolean; { set by uSemantic — RecordName is a program-level global }
     IsVarParam:        Boolean; { set by uSemantic — RecordName is a var parameter (record by-ref) }
-    PropIndexExpr: TASTExpr;  { owned — non-nil = indexed property write via setter }
+    PropIndexExpr: TASTExpr;  { owned — non-nil = indexed property write via setter,
+                                OR (IsElemWrite) the element index into an array-typed field }
     [Unretained] PropWriteInfo: TPropertyInfo;  { non-owned — set by semantic when PropIndexExpr is set }
     PropOwnerType: string;  { owner class name for setter call; valid when PropIndexExpr set }
+    IsElemWrite: Boolean;   { set by uSemantic — FieldName is an array-typed field and
+                              PropIndexExpr selects the element to store into }
     destructor Destroy; override;
   end;
 
@@ -371,6 +374,8 @@ type
     ValueExpr: TASTExpr;  { owned }
     IsGlobal: Boolean;    { set by uSemantic }
     [Unretained] ResolvedArrayType: TTypeDesc;  { set by uSemantic; not owned }
+    IsImplicitSelf: Boolean;  { set by uSemantic — ArrayName is an array-typed field of Self }
+    [Unretained] ImplicitFieldInfo: TFieldInfo;  { non-owned — the Self field; set with IsImplicitSelf }
     destructor Destroy; override;
   end;
 

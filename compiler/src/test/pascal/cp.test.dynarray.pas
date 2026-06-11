@@ -68,6 +68,14 @@ type
     procedure TestParse_DynArray_RecordElem_FieldAssign_Accepted;
     procedure TestCodegen_DynArray_RecordElem_Write_FieldwiseCopy;
     procedure TestCodegen_DynArray_RecordElem_FieldAssign_StringARC;
+
+    { ------------------------------------------------------------------ }
+    { Array-typed FIELDS: r.A[i] := v writes the element, not the array    }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_RecordField_DynArrayElemAssign_Accepted;
+    procedure TestParse_ChainedField_DynArrayElemAssign_Accepted;
+    procedure TestCodegen_RecordField_DynArrayElemWrite_StoresElement;
+    procedure TestCodegen_ClassField_DynArrayElemWrite_StoresElement;
   end;
 
 implementation
@@ -549,6 +557,96 @@ begin
     Self.CountOccurrences(IR, 'call $_StringAddRef') > 0);
   AssertTrue('releases the old element field value',
     Self.CountOccurrences(IR, 'call $_StringRelease') > 0);
+end;
+
+procedure TDynArrayTests.TestSemantic_RecordField_DynArrayElemAssign_Accepted;
+var Prog: TProgram;
+begin
+  { r.A[0] := 10 used to fail semantic with "expected 'array of Integer'
+    but got 'Integer'" — the subscript was treated as an indexed-property
+    index and dropped from the LHS type. }
+  Prog := AnalyseSrc('''
+      program P;
+      type
+        TIA = array of Integer;
+        TR  = record A: TIA; end;
+      var r: TR;
+      begin
+        SetLength(r.A, 3);
+        r.A[0] := 10;
+      end.
+      ''');
+  AssertNotNil('record-field element assign analyses', Prog);
+  Prog.Free();
+end;
+
+procedure TDynArrayTests.TestParse_ChainedField_DynArrayElemAssign_Accepted;
+var Prog: TProgram;
+begin
+  { c.N.A[0] := 7 used to fail parse with "Expected 'end' but got '['" —
+    the chained L-value walker refused a subscript after the final field. }
+  Prog := ParseSrc('''
+      program P;
+      type
+        TIA    = array of Integer;
+        TInner = record A: TIA; end;
+        TC     = class N: TInner; end;
+      var c: TC;
+      begin
+        c := TC.Create();
+        SetLength(c.N.A, 3);
+        c.N.A[0] := 7;
+      end.
+      ''');
+  AssertNotNil('chained field element assign parses', Prog);
+  Prog.Free();
+end;
+
+procedure TDynArrayTests.TestCodegen_RecordField_DynArrayElemWrite_StoresElement;
+var IR: string;
+begin
+  IR := GenIR('''
+      program P;
+      type
+        TIA = array of Integer;
+        TR  = record A: TIA; end;
+      procedure Foo;
+      var r: TR;
+      begin
+        SetLength(r.A, 3);
+        r.A[1] := 10;
+      end;
+      begin
+      end.
+      ''');
+  AssertTrue('element offset arithmetic emitted',
+    Self.CountOccurrences(IR, 'mul') > 0);
+  AssertTrue('integer element stored with storew',
+    Self.CountOccurrences(IR, 'storew') > 0);
+end;
+
+procedure TDynArrayTests.TestCodegen_ClassField_DynArrayElemWrite_StoresElement;
+var IR: string;
+begin
+  IR := GenIR('''
+      program P;
+      type
+        TIA = array of Integer;
+        TC  = class A: TIA; end;
+      procedure Foo;
+      var c: TC;
+      begin
+        c := TC.Create();
+        SetLength(c.A, 3);
+        c.A[1] := 10;
+      end;
+      begin
+      end.
+      ''');
+  AssertTrue('element offset arithmetic emitted',
+    Self.CountOccurrences(IR, 'mul') > 0);
+  AssertTrue('integer element stored with storew',
+    Self.CountOccurrences(IR, 'storew') > 0);
 end;
 
 initialization

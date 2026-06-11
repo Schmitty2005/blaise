@@ -666,11 +666,12 @@ StaticSubscriptAssign
  * (SubscriptMethodCall).  Examples:
  *   a[0].Name := 'x';        a[i].Inner.N := 5;
  *   a[0].Bump;               a[i].Items.Add(x);
- * A terminating subscript on the LHS of ASSIGN (a[i].Items[j] := v) is
- * not yet supported. *)
+ *   a[i].Arr[j] := v;        — element write into an array-typed field
+ * A terminating subscript directly over another subscript
+ * (a[i][j] := v) is not yet supported on the LHS of ASSIGN. *)
 SubscriptFieldAssign
     = IDENT LBRACKET Expr RBRACKET { SubscriptSuffix }
-      DOT IDENT ASSIGN Expr
+      DOT IDENT [ LBRACKET Expr RBRACKET ] ASSIGN Expr
     ;
 
 SubscriptMethodCall
@@ -761,10 +762,19 @@ MethodCall
  *   - Followed by ASSIGN or LBRACKET ASSIGN → FieldAssignment (plain or indexed)
  *   - Otherwise                              → MethodCall
  *
- * When IDENT DOT IDENT is followed by LBRACKET, the parser checks whether the
- * member is an indexed property (symbol table lookup).  If it is, LBRACKET Expr
- * RBRACKET is consumed as the index; the result is an indexed property access.
- * A following ASSIGN makes it an IndexedPropWrite; absence of ASSIGN is a read. *)
+ * The LBRACKET Expr RBRACKET ASSIGN form covers two cases, disambiguated by
+ * the semantic pass: when the member is an indexed property the subscript is
+ * the property index (setter call); when the member is an ARRAY-TYPED FIELD
+ * (dynamic or static) the subscript selects the element to assign:
+ *   r.A[0] := 10;    c.Buf[i] := b;    Self.A[1] := x;
+ * The same applies after a chain (c.N.A[0] := 7 — see MethodCall chains) and
+ * to a bare implicit-Self field inside a method (A[0] := v parses as
+ * StaticSubscriptAssign and resolves to the Self field).
+ *
+ * When IDENT DOT IDENT is followed by LBRACKET in a READ position, the parser
+ * checks whether the member is an indexed property (symbol table lookup).  If
+ * it is, LBRACKET Expr RBRACKET is consumed as the index; the result is an
+ * indexed property access. *)
 
 Assignment
     = IDENT ASSIGN Expr

@@ -2050,9 +2050,32 @@ begin
           SubNode.IndexExpr := ParseExpr();
           Expect(tkRBracket);
           if Check(tkAssign) then
+          begin
+            if SubNode.StrExpr is TFieldAccessExpr then
+            begin
+              { …Field[idx] := value — element write into an array-typed
+                field (or indexed property write).  Rebuild as a
+                TFieldAssignment: receiver = the field's base, index =
+                the subscript. }
+              Advance();  { consume ':=' }
+              FldNode := TFieldAccessExpr(SubNode.StrExpr);
+              FldAssign := TFieldAssignment.Create();
+              FldAssign.Line := Line;
+              FldAssign.Col := Col;
+              FldAssign.FieldName := FldNode.FieldName;
+              FldAssign.ObjExpr := FldNode.Base;
+              FldNode.Base := nil;
+              FldAssign.PropIndexExpr := SubNode.IndexExpr;
+              SubNode.IndexExpr := nil;
+              ChainBase := nil;
+              SubNode.Free();  { frees the now-detached field node too }
+              FldAssign.Expr := ParseExpr();
+              Exit(FldAssign);
+            end;
             raise EParseError.Create(Format(
               'Subscript assignment through a chained base is not yet supported at line %d col %d in %s',
               [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+          end;
           Continue;
         end;
         if not Check(tkDot) then
@@ -2263,6 +2286,26 @@ begin
             FldNode.Base     := MCall.ObjExpr;
             FldNode.FieldName:= SecondIdent;
             MCall.ObjExpr    := FldNode;
+          end
+          else if Check(tkLBracket) then
+          begin
+            { Chained indexed L-value: A.B.C[idx] := value — element write
+              into an array-typed field (or indexed property write) reached
+              via a chain.  Semantic disambiguates field vs property. }
+            Advance();  { consume '[' }
+            FldAssign           := TFieldAssignment.Create();
+            FldAssign.Line      := Line;
+            FldAssign.Col       := Col;
+            FldAssign.FieldName := SecondIdent;
+            FldAssign.ObjExpr   := MCall.ObjExpr;
+            MCall.ObjExpr       := nil;  { transfer ownership }
+            MCall.Free();
+            MCall := nil;
+            FldAssign.PropIndexExpr := ParseExpr();
+            Expect(tkRBracket);
+            Expect(tkAssign);
+            FldAssign.Expr := ParseExpr();
+            Exit(FldAssign);
           end
           else
           begin

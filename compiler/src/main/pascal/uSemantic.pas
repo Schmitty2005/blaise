@@ -165,6 +165,8 @@ type
     procedure AnalyseStmt(AStmt: TASTStmt);
     procedure AnalyseAssignment(AAssign: TAssignment);
     procedure AnalyseFieldAssignment(AAssign: TFieldAssignment);
+    function  TryAnalyseFieldElemWrite(AAssign: TFieldAssignment;
+      AFldInfo: TFieldInfo): Boolean;
     procedure AnalyseProcCall(ACall: TProcCall);
     { Phase A/B overload resolution.  Walks FProcIndex collecting all
       decls whose name matches AName (case-insensitive); filters by
@@ -5720,6 +5722,44 @@ begin
   ACall.ResolvedMethod     := MDecl;
 end;
 
+{ Element write into an array-typed FIELD: Receiver.Field[Index] := Value.
+  The parser stores the subscript in PropIndexExpr (the same slot used for
+  indexed property writes); when Field resolves to a real array field the
+  subscript is an ELEMENT index — the RHS must match the element type, not
+  the array type.  Returns False when there is no subscript to interpret;
+  errors out when a subscript is applied to a non-array field. }
+function TSemanticAnalyser.TryAnalyseFieldElemWrite(AAssign: TFieldAssignment;
+  AFldInfo: TFieldInfo): Boolean;
+var
+  ElemT:    TTypeDesc;
+  IdxType:  TTypeDesc;
+  ExprType: TTypeDesc;
+begin
+  Result := False;
+  if AAssign.PropIndexExpr = nil then
+    Exit;
+  if AFldInfo.TypeDesc.Kind = tyDynArray then
+    ElemT := TDynArrayTypeDesc(AFldInfo.TypeDesc).ElementType
+  else if AFldInfo.TypeDesc.Kind = tyStaticArray then
+    ElemT := TStaticArrayTypeDesc(AFldInfo.TypeDesc).ElementType
+  else
+  begin
+    SemanticError(
+      Format('Field ''%s'' is not an array — cannot assign to a subscript',
+        [AAssign.FieldName]),
+      AAssign.Line, AAssign.Col);
+    Exit;
+  end;
+  IdxType := AnalyseExpr(AAssign.PropIndexExpr);
+  if not IdxType.IsNumeric() then
+    SemanticError('Array index must be numeric', AAssign.Line, AAssign.Col);
+  ExprType := AnalyseExpr(AAssign.Expr);
+  CheckTypesMatch(ElemT, ExprType,
+    Format('''%s'' element', [AAssign.FieldName]), AAssign.Line, AAssign.Col);
+  AAssign.IsElemWrite := True;
+  Result := True;
+end;
+
 procedure TSemanticAnalyser.AnalyseFieldAssignment(AAssign: TFieldAssignment);
 var
   RecSym:   TSymbol;
@@ -5757,6 +5797,8 @@ begin
     end;
     AAssign.IsClassAccess := ObjType.Kind = tyClass;
     AAssign.FieldInfo     := FldInfo;
+    if TryAnalyseFieldElemWrite(AAssign, FldInfo) then
+      Exit;
     { Set-literal RHS into a tySet field — analyse with set context. }
     if (FldInfo.TypeDesc.Kind = tySet) and (AAssign.Expr is TArrayLiteralExpr) then
     begin
@@ -5819,6 +5861,8 @@ begin
               AAssign.Line, AAssign.Col);
         end;
         AAssign.FieldInfo := FldInfo;
+        if TryAnalyseFieldElemWrite(AAssign, FldInfo) then
+          Exit;
         ExprType := AnalyseExpr(AAssign.Expr);
         CheckTypesMatch(FldInfo.TypeDesc, ExprType, 'field assignment',
           AAssign.Line, AAssign.Col);
@@ -5893,6 +5937,8 @@ begin
   end;
 
   AAssign.FieldInfo := FldInfo;
+  if TryAnalyseFieldElemWrite(AAssign, FldInfo) then
+    Exit;
   { Set-literal RHS into a tySet field — analyse with set context. }
   if (FldInfo.TypeDesc.Kind = tySet) and (AAssign.Expr is TArrayLiteralExpr) then
   begin
@@ -9293,16 +9339,45 @@ end;
 
 procedure TSemanticAnalyser.AnalyseStaticSubscriptAssign(AStmt: TStaticSubscriptAssign);
 var
-  Sym:     TSymbol;
-  ArrType: TStaticArrayTypeDesc;
-  IdxType: TTypeDesc;
-  ValType: TTypeDesc;
+  Sym:      TSymbol;
+  ArrType:  TStaticArrayTypeDesc;
+  IdxType:  TTypeDesc;
+  ValType:  TTypeDesc;
+  BaseInfo: TFieldInfo;
+  ElemT:    TTypeDesc;
 begin
   Sym := FTable.Lookup(AStmt.ArrayName);
   if Sym = nil then
+  begin
+    { Implicit Self.Field[I] := V — ArrayName is an array-typed field of the
+      current class. }
+    if FCurrentClass <> nil then
+    begin
+      BaseInfo := FCurrentClass.FindField(AStmt.ArrayName);
+      if (BaseInfo <> nil) and
+         (BaseInfo.TypeDesc <> nil) and
+         (BaseInfo.TypeDesc.Kind in [tyDynArray, tyStaticArray]) then
+      begin
+        AStmt.IsImplicitSelf    := True;
+        AStmt.ImplicitFieldInfo := BaseInfo;
+        AStmt.ResolvedArrayType := BaseInfo.TypeDesc;
+        if BaseInfo.TypeDesc.Kind = tyDynArray then
+          ElemT := TDynArrayTypeDesc(BaseInfo.TypeDesc).ElementType
+        else
+          ElemT := TStaticArrayTypeDesc(BaseInfo.TypeDesc).ElementType;
+        IdxType := AnalyseExpr(AStmt.IndexExpr);
+        if not IdxType.IsNumeric() then
+          SemanticError('Array index must be numeric', AStmt.Line, AStmt.Col);
+        ValType := AnalyseExpr(AStmt.ValueExpr);
+        CheckTypesMatch(ElemT, ValType,
+          Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
+        Exit;
+      end;
+    end;
     SemanticError(
       Format('Undeclared variable ''%s''', [AStmt.ArrayName]),
       AStmt.Line, AStmt.Col);
+  end;
   AStmt.ArrayName := Sym.Name;  { normalise to declared casing }
   { PChar subscript write: P[I] := Integer — storeb at ptr + I }
   if Sym.TypeDesc.Kind = tyPChar then
