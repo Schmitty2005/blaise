@@ -443,9 +443,10 @@ begin
   if IntfDef <> nil then
     Result := Result +
               EncodeLpstr(IntfDef.ParentName) +
-              EncodeMethodDeclList(IntfDef.Methods)
+              EncodeMethodDeclList(IntfDef.Methods) +
+              EncodePropertyList(IntfDef.Properties)
   else
-    Result := Result + EncodeLpstr('') + EncodeCount(0);
+    Result := Result + EncodeLpstr('') + EncodeCount(0) + EncodeCount(0);
 end;
 
 function WriteProcPayload(AEntry: TTypeEntry): string;
@@ -477,7 +478,8 @@ begin
   Def := TInterfaceTypeDef(AEntry.Def);
   Result :=
     EncodeLpstr(Def.ParentName) +
-    EncodeMethodDeclList(Def.Methods);
+    EncodeMethodDeclList(Def.Methods) +
+    EncodePropertyList(Def.Properties);
 end;
 
 function WriteTypes(AIface: TUnitInterface): string;
@@ -1941,6 +1943,7 @@ begin
   Def.IntfDef := IntfDef;
   IntfDef.ParentName := ReadLpstrAt(AText, APos);
   ReadMethodDeclList(AText, APos, IntfDef.Methods);
+  ReadPropertyList(AText, APos, IntfDef.Properties);
   AEntry.IsGeneric := True;
   AEntry.Def       := Def;
 end;
@@ -1978,6 +1981,7 @@ begin
   Def := TInterfaceTypeDef.Create();
   Def.ParentName := ReadLpstrAt(AText, APos);
   ReadMethodDeclList(AText, APos, Def.Methods);
+  ReadPropertyList(AText, APos, Def.Properties);
   AEntry.Def := Def;
 end;
 

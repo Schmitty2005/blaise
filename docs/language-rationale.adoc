@@ -3524,3 +3524,45 @@ matches the C math library signatures the builtins lower to.
   represents every `Integer` exactly; `Single` does not (24-bit
   mantissa).  Precision should not silently depend on the argument's
   declared integer width.
+
+== Interface Properties
+
+=== Decision
+
+Interfaces may declare properties.  Accessors must be methods of the
+interface itself or an inherited parent interface — interfaces have no
+fields, so field-backed accessors cannot exist:
+
+[source,pascal]
+----
+type
+  IValued = interface
+    function GetValue(): Integer;
+    procedure SetValue(AValue: Integer);
+    property Value: Integer read GetValue write SetValue;
+  end;
+----
+
+`I.Value` lowers to the getter dispatched through the itab; `I.Value := X`
+lowers to the setter dispatch with `X` as the single argument.  Properties
+are pure compile-time sugar: they occupy no itab slots, change no layout,
+and have no ARC implications beyond the underlying method calls.  Child
+interfaces see inherited properties.  Read-only (`read` only) and
+write-only (`write` only) properties are supported; accessing the missing
+direction is a compile-time error.
+
+=== Rationale
+
+Both FPC and Delphi support interface properties with identical syntax —
+there is no dialect fork to choose from.  Without them, interface
+consumers are forced back to raw getter/setter calls even when the
+implementing class exposes a property, which defeats the purpose of
+publishing the interface as the API surface.
+
+=== Limitations (v1)
+
+* Property access requires a plain interface-typed variable as the
+  receiver; access through record/class fields holding interfaces or
+  through chained expressions is not yet wired.
+* Indexed and default array properties in interfaces are not yet
+  supported.

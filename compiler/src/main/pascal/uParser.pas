@@ -1345,9 +1345,12 @@ begin
       Expect(tkRParen);
     end;
     while Check(tkProcedure) or Check(tkFunction) or
-          Check(tkConstructor) or Check(tkDestructor) do
+          Check(tkConstructor) or Check(tkDestructor) or
+          (Check(tkIdent) and SameText(FCurrent.Value, 'property')) do
     begin
-      if Check(tkFunction) then
+      if Check(tkIdent) then
+        Result.Properties.Add(ParsePropertyDecl())
+      else if Check(tkFunction) then
         Result.Methods.Add(ParseMethodDecl(True))
       else
         Result.Methods.Add(ParseMethodDecl(False));

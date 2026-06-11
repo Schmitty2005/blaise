@@ -91,7 +91,10 @@ type
                                        its own next iteration. }
     FThreadVarNames:   TStringList;  { global names declared as threadvar }
     FUnitInitNames:    TStringList;  { unit names that have initialization sections }
-    FCurrentUnitName:  string;       { name of the unit/program being emitted }
+    FCurrentUnitName:  string;
+    FProgramName: string;     { set by Generate/AppendProgram — program-scope
+                                classes keep bare symbol names (no unit prefix),
+                                matching uSemantic.CurrentUnitPrefix }       { name of the unit/program being emitted }
     { mem2reg: parallel lists tracking which locals are promoted SSA temps.
       FPromotedLocals[i] = var name; FPromotedTypes[i] = QBE type ('w','l','d','s').
       Cleared at the start of each function by EmitVarAllocs. }
@@ -5300,7 +5303,41 @@ var
   SelfPtr: string;
   IdxTemp: string;
   IdxQType: string;
+  IntfDesc: TInterfaceTypeDesc;
+  SlotOff: Integer;
 begin
+  { Interface property write: I.Prop := V — FieldName holds the SETTER
+    (rewritten by semantic); dispatch it through the itab with V as the
+    single argument, mirroring EmitMethodCall's interface branch. }
+  if AAssign.IntfWriteDesc <> nil then
+  begin
+    IntfDesc := TInterfaceTypeDesc(AAssign.IntfWriteDesc);
+    SelfPtr := AllocTemp();
+    PtrTemp := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s_obj',
+      [SelfPtr, VarRef(AAssign.RecordName, AAssign.IsGlobal)]));
+    EmitLine(Format('  %s =l loadl %s_itab',
+      [PtrTemp, VarRef(AAssign.RecordName, AAssign.IsGlobal)]));
+    SlotOff := IntfDesc.MethodIndex(AAssign.FieldName) * 8;
+    Ptr := AllocTemp();
+    if SlotOff = 0 then
+      EmitLine(Format('  %s =l loadl %s', [Ptr, PtrTemp]))
+    else
+    begin
+      OldTemp := AllocTemp();
+      EmitLine(Format('  %s =l add %s, %d', [OldTemp, PtrTemp, SlotOff]));
+      EmitLine(Format('  %s =l loadl %s', [Ptr, OldTemp]));
+    end;
+    ValTemp := EmitExpr(AAssign.Expr);
+    if (AAssign.Expr.ResolvedType <> nil) and
+       (AAssign.Expr.ResolvedType.Kind in
+         [tyPointer, tyClass, tyInterface, tyPChar, tyString]) then
+      EmitLine(Format('  call %s(l %s, l %s)', [Ptr, SelfPtr, ValTemp]))
+    else
+      EmitLine(Format('  call %s(l %s, w %s)', [Ptr, SelfPtr, ValTemp]));
+    Exit;
+  end;
+
   { Method-backed property write: emit a call to the setter }
   if AAssign.PropWriteInfo <> nil then
   begin
@@ -11693,6 +11730,10 @@ begin
   Owner := Sym.OwningUnit;
   { Allowlist mirrors uSemantic.IsUnmangledUnit. }
   if Owner = '' then Exit;
+  { Program-scope classes keep bare names: uSemantic.CurrentUnitPrefix gives
+    program-scope methods unprefixed ResolvedQbeNames, so reference sites
+    (itabs, property setter calls) must not add a prefix either. }
+  if (FProgramName <> '') and SameText(Owner, FProgramName) then Exit;
   if SameText(Owner, 'System') then Exit;
   if (Length(Owner) >= 4) and SameText(Copy(Owner, 0, 4), 'rtl.') then Exit;
   if (Length(Owner) >= 7) and SameText(Copy(Owner, 0, 7), 'blaise_') then Exit;
@@ -11747,6 +11788,7 @@ begin
   FTempCount  := 0;
   FLabelCount := 0;
   FCurrentUnitName := AProg.Name;
+  FProgramName := AProg.Name;
 
   CollectThreadVarNames(AProg.Block);
 
@@ -12420,6 +12462,7 @@ begin
   FTempCount  := 0;
   FLabelCount := 0;
   FCurrentUnitName := AProg.Name;
+  FProgramName := AProg.Name;
 
   CollectThreadVarNames(AProg.Block);
 

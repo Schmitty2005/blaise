@@ -152,6 +152,9 @@ type
       _SetArgs — mirrors the QBE backend's EmitMainHeader loop. }
     FUnitInitNames: TStringList;
     FCurrentUnitName: string;
+    FProgramName: string;     { set by EmitProgram — program-scope classes keep
+                                bare symbol names (no unit prefix), matching
+                                uSemantic.CurrentUnitPrefix }
 
     { Allocate a fresh local assembly label (".L<prefix><N>"). }
     function NewLabel(const APrefix: string): string;
@@ -1202,7 +1205,10 @@ begin
     if Sym <> nil then
     begin
       Owner := Sym.OwningUnit;
+      { Program-scope classes keep bare names — see the QBE backend's
+        ClassUnitPrefix and uSemantic.CurrentUnitPrefix. }
       if (Owner <> '') and
+         not ((FProgramName <> '') and SameText(Owner, FProgramName)) and
          not SameText(Owner, 'System') and
          not ((Length(Owner) >= 4) and SameText(Copy(Owner, 0, 4), 'rtl.')) and
          not ((Length(Owner) >= 7) and SameText(Copy(Owner, 0, 7), 'blaise_')) then
@@ -7882,6 +7888,7 @@ var
   FDynArgName: string;
   FDynElemSz:  Integer;
   ISFld:   TFieldInfo;
+  IntfArgs: TObjectList;
 begin
   if AStmt is TAssignment then
   begin
@@ -8875,6 +8882,21 @@ begin
   if AStmt is TFieldAssignment then
   begin
     FA := TFieldAssignment(AStmt);
+    { Interface property write: I.Prop := V — FieldName holds the SETTER
+      (rewritten by semantic); dispatch through the itab with V as the
+      single argument. }
+    if FA.IntfWriteDesc <> nil then
+    begin
+      IntfArgs := TObjectList.Create(False);
+      try
+        IntfArgs.Add(FA.Expr);
+        Self.EmitInterfaceCall(FA.RecordName, FA.IsGlobal,
+          TInterfaceTypeDesc(FA.IntfWriteDesc), FA.FieldName, IntfArgs);
+      finally
+        IntfArgs.Free();
+      end;
+      Exit;
+    end;
     if FA.PropWriteInfo <> nil then
     begin
       Self.EmitExprToEax(FA.Expr);
@@ -12018,6 +12040,7 @@ var
   Decl:  TMethodDecl;
 begin
   FCurrentUnitName := AProg.Name;
+  FProgramName := AProg.Name;
   { Register declared program-level variables as global slots. }
   for I := 0 to AProg.Block.Decls.Count - 1 do
   begin

@@ -3132,6 +3132,21 @@ begin
   end;
 end;
 
+{ Return AName in the casing of the matching method declaration, or AName
+  unchanged when no declaration matches.  Property accessor names must use
+  the method's declared casing — emitted method symbols are case-sensitive
+  at link time, while Pascal name resolution is not. }
+function DeclaredMethodCase(AMethods: TObjectList; const AName: string): string;
+var
+  I: Integer;
+begin
+  Result := AName;
+  if AMethods = nil then Exit;
+  for I := 0 to AMethods.Count - 1 do
+    if SameText(TMethodDecl(AMethods.Items[I]).Name, AName) then
+      Exit(TMethodDecl(AMethods.Items[I]).Name);
+end;
+
 procedure TSemanticAnalyser.AnalyseTypeDecls(ABlock: TBlock);
 var
   I, J, K:    Integer;
@@ -3411,6 +3426,42 @@ begin
                             else VarFlags := VarFlags + '0';
         end;
         IntfDesc.AddMethod(MDecl.Name, MDecl.ReturnTypeName, VarFlags);
+      end;
+      { Register interface properties.  Accessors must be methods of the
+        interface itself (or an inherited one) — interfaces have no fields,
+        so field-backed accessors cannot exist. }
+      for J := 0 to ITD.Properties.Count - 1 do
+      begin
+        PropDecl := TPropertyDecl(ITD.Properties.Items[J]);
+        if IntfDesc.FindProperty(PropDecl.Name) <> nil then Continue;
+        if (PropDecl.ReadName <> '') and
+           not IntfDesc.HasMethod(PropDecl.ReadName) then
+          SemanticError(Format(
+            'Interface property ''%s.%s'': read accessor ''%s'' is not a method of the interface',
+            [TD.Name, PropDecl.Name, PropDecl.ReadName]), TD.Line, TD.Col);
+        if (PropDecl.WriteName <> '') and
+           not IntfDesc.HasMethod(PropDecl.WriteName) then
+          SemanticError(Format(
+            'Interface property ''%s.%s'': write accessor ''%s'' is not a method of the interface',
+            [TD.Name, PropDecl.Name, PropDecl.WriteName]), TD.Line, TD.Col);
+        PropInfo := TPropertyInfo.Create();
+        PropInfo.Name := PropDecl.Name;
+        PropInfo.TypeDesc := FindTypeOrInstantiate(PropDecl.TypeName);
+        if PropInfo.TypeDesc = nil then
+        begin
+          PropInfo.Free();
+          SemanticError(Format(
+            'Unknown type ''%s'' for interface property ''%s.%s''',
+            [PropDecl.TypeName, TD.Name, PropDecl.Name]), TD.Line, TD.Col);
+        end;
+        { Canonical method casing — link-time symbols are case-sensitive. }
+        if PropDecl.ReadName <> '' then
+          PropInfo.ReadMethod :=
+            IntfDesc.MethodName(IntfDesc.MethodIndex(PropDecl.ReadName));
+        if PropDecl.WriteName <> '' then
+          PropInfo.WriteMethod :=
+            IntfDesc.MethodName(IntfDesc.MethodIndex(PropDecl.WriteName));
+        IntfDesc.AddProperty(PropInfo);
       end;
       Continue;
     end;
@@ -3741,14 +3792,16 @@ begin
           if RT.FindField(PropDecl.ReadName) <> nil then
             PropInfo.ReadField := PropDecl.ReadName
           else
-            PropInfo.ReadMethod := PropDecl.ReadName;
+            PropInfo.ReadMethod := DeclaredMethodCase(
+              TClassTypeDef(TD.Def).Methods, PropDecl.ReadName);
         end;
         if PropDecl.WriteName <> '' then
         begin
           if RT.FindField(PropDecl.WriteName) <> nil then
             PropInfo.WriteField := PropDecl.WriteName
           else
-            PropInfo.WriteMethod := PropDecl.WriteName;
+            PropInfo.WriteMethod := DeclaredMethodCase(
+              TClassTypeDef(TD.Def).Methods, PropDecl.WriteName);
         end;
         PropInfo.IndexParamName := PropDecl.IndexParamName;
         if PropDecl.IndexTypeName <> '' then
@@ -5791,6 +5844,7 @@ var
   PropInfo: TPropertyInfo;
   ExprType: TTypeDesc;
   ObjType:  TTypeDesc;
+  IntfDesc: TInterfaceTypeDesc;
 begin
   { ObjExpr path: receiver is an arbitrary expression (e.g. typecast result) }
   if AAssign.ObjExpr <> nil then
@@ -5898,6 +5952,33 @@ begin
     SemanticError(
       Format('''%s'' is not a variable', [AAssign.RecordName]),
       AAssign.Line, AAssign.Col);
+  { Interface property write: I.Prop := V lowers to the setter dispatched
+    through the itab.  FieldName is rewritten to the setter method name;
+    codegen reads IntfWriteDesc to emit the indirect call. }
+  if RecSym.TypeDesc.Kind = tyInterface then
+  begin
+    IntfDesc := TInterfaceTypeDesc(RecSym.TypeDesc);
+    PropInfo := IntfDesc.FindProperty(AAssign.FieldName);
+    if PropInfo = nil then
+      SemanticError(
+        Format('Interface ''%s'' has no property ''%s''',
+          [IntfDesc.Name, AAssign.FieldName]),
+        AAssign.Line, AAssign.Col);
+    if PropInfo.WriteMethod = '' then
+      SemanticError(
+        Format('Interface property ''%s.%s'' is read-only',
+          [IntfDesc.Name, AAssign.FieldName]),
+        AAssign.Line, AAssign.Col);
+    AAssign.RecordName    := RecSym.Name;  { normalise to declared casing }
+    AAssign.FieldName     := PropInfo.WriteMethod;
+    AAssign.IntfWriteDesc := IntfDesc;
+    AAssign.IsGlobal      := RecSym.IsGlobal;
+    AAssign.IsVarParam    := RecSym.Kind = skVarParameter;
+    ExprType := AnalyseExpr(AAssign.Expr);
+    CheckTypesMatch(PropInfo.TypeDesc, ExprType, 'property assignment',
+      AAssign.Line, AAssign.Col);
+    Exit;
+  end;
   if not (RecSym.TypeDesc.Kind in [tyRecord, tyClass]) then
     SemanticError(
       Format('''%s'' is not a record or class variable', [AAssign.RecordName]),
@@ -8523,10 +8604,22 @@ begin
   begin
     IntfDesc := TInterfaceTypeDesc(RecSym.TypeDesc);
     if not IntfDesc.HasMethod(AAccess.FieldName) then
-      SemanticError(
-        Format('Interface ''%s'' has no method ''%s''',
-          [IntfDesc.Name, AAccess.FieldName]),
-        AAccess.Line, AAccess.Col);
+    begin
+      { Property read: lower to the getter — pure sugar over the
+        zero-argument interface method dispatch below. }
+      PropInfo := IntfDesc.FindProperty(AAccess.FieldName);
+      if PropInfo = nil then
+        SemanticError(
+          Format('Interface ''%s'' has no method or property ''%s''',
+            [IntfDesc.Name, AAccess.FieldName]),
+          AAccess.Line, AAccess.Col);
+      if PropInfo.ReadMethod = '' then
+        SemanticError(
+          Format('Interface property ''%s.%s'' is write-only',
+            [IntfDesc.Name, AAccess.FieldName]),
+          AAccess.Line, AAccess.Col);
+      AAccess.FieldName := PropInfo.ReadMethod;
+    end;
     AAccess.IsInterfaceCall  := True;
     AAccess.ResolvedClassType := IntfDesc;
     AAccess.IsGlobal         := RecSym.IsGlobal;

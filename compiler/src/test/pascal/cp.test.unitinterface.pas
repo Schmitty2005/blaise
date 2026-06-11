@@ -246,6 +246,7 @@ type
     procedure TestRoundTrip_Record;
     procedure TestRoundTrip_Class_WithVirtualMethod;
     procedure TestRoundTrip_Interface;
+    procedure TestRoundTrip_Interface_WithProperty;
     procedure TestRoundTrip_ProceduralType;
     procedure TestRoundTrip_Metadata_UsedUnits_SourceFile;
     procedure TestRoundTrip_GenericClass_TemplateParams;
@@ -2977,6 +2978,46 @@ begin
         what uSemanticImport.RegisterInterface walks. }
       AssertEquals('2 methods', 2,
         TInterfaceTypeDef(E.Def).Methods.Count);
+    finally
+      Round.Free();
+    end;
+  finally
+    Iface.Free();
+  end;
+end;
+
+procedure TIfaceIOTests.TestRoundTrip_Interface_WithProperty;
+const
+  SRC =
+    'unit U;' + #10 +
+    'interface' + #10 +
+    'type IValued = interface' + #10 +
+    '  function GetValue(): Integer;' + #10 +
+    '  procedure SetValue(AValue: Integer);' + #10 +
+    '  property Value: Integer read GetValue write SetValue;' + #10 +
+    'end;' + #10 +
+    'implementation end.' + #10;
+var
+  Iface, Round: TUnitInterface;
+  Buf:          string;
+  E:            TTypeEntry;
+  P:            TPropertyDecl;
+begin
+  Iface := ParseAnalyseAndExport(SRC);
+  try
+    Buf   := WriteUnitInterface(Iface);
+    Round := ReadUnitInterface(Buf);
+    try
+      E := Round.FindType('IValued');
+      AssertTrue('IValued present', E <> nil);
+      AssertTrue('is interface', E.Def is TInterfaceTypeDef);
+      AssertEquals('2 methods', 2, TInterfaceTypeDef(E.Def).Methods.Count);
+      AssertEquals('1 property', 1, TInterfaceTypeDef(E.Def).Properties.Count);
+      P := TPropertyDecl(TInterfaceTypeDef(E.Def).Properties.Items[0]);
+      AssertEquals('property name', 'Value', P.Name);
+      AssertEquals('property type', 'Integer', P.TypeName);
+      AssertEquals('read accessor', 'GetValue', P.ReadName);
+      AssertEquals('write accessor', 'SetValue', P.WriteName);
     finally
       Round.Free();
     end;

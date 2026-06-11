@@ -298,17 +298,22 @@ GenericClassDef
       END
     ;
 
+(* Interface members are method signatures and properties.  Property
+ * accessors must name methods of the interface (or an inherited one) —
+ * interfaces have no fields, so field-backed accessors cannot exist.
+ * I.Prop reads lower to the getter dispatch; I.Prop := V lowers to the
+ * setter dispatch through the itab. *)
 InterfaceDef
     = INTERFACE
       [ LPAREN IDENT RPAREN ]             (* optional parent interface *)
-      MethodSignatureList
+      { MethodSignature | PropertyDecl }
       END
     ;
 
 GenericInterfaceDef
     = INTERFACE
       [ LPAREN IDENT RPAREN ]             (* optional parent interface *)
-      MethodSignatureList
+      { MethodSignature | PropertyDecl }
       END
     ;
 

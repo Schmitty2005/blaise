@@ -242,6 +242,20 @@ begin
   end;
 end;
 
+{ Return AName in the casing of the matching method declaration, or AName
+  unchanged when no declaration matches — emitted method symbols are
+  case-sensitive at link time. }
+function DeclaredMethodCaseOf(AMethods: TObjectList; const AName: string): string;
+var
+  I: Integer;
+begin
+  Result := AName;
+  if AMethods = nil then Exit;
+  for I := 0 to AMethods.Count - 1 do
+    if SameText(TMethodDecl(AMethods.Items[I]).Name, AName) then
+      Exit(TMethodDecl(AMethods.Items[I]).Name);
+end;
+
 procedure RegisterInterface(AEntry: TTypeEntry; ATable: TSymbolTable;
                             const AUnitName: string);
 var
@@ -251,6 +265,10 @@ var
   ParentSym: TSymbol;
   M:        TMethodDecl;
   I:        Integer;
+  PropDecl: TPropertyDecl;
+  PropInfo: TPropertyInfo;
+  PropSym:  TSymbol;
+  PropType: TTypeDesc;
 begin
   IntfDef  := TInterfaceTypeDef(AEntry.Def);
 
@@ -288,6 +306,43 @@ begin
   begin
     M := TMethodDecl(IntfDef.Methods.Items[I]);
     IntfDesc.AddMethod(M.Name, M.ReturnTypeName, ParamVarFlags(M));
+  end;
+
+  { Register interface properties.  Accessors are always interface methods
+    (interfaces have no fields); the type resolves against the importing
+    table like class property types do. }
+  for I := 0 to IntfDef.Properties.Count - 1 do
+  begin
+    PropDecl := TPropertyDecl(IntfDef.Properties.Items[I]);
+    if IntfDesc.FindProperty(PropDecl.Name) <> nil then Continue;
+    PropInfo := TPropertyInfo.Create();
+    PropInfo.Name := PropDecl.Name;
+    PropSym := ATable.Lookup(PropDecl.TypeName);
+    if (PropSym <> nil) and (PropSym.Kind = skType) then
+      PropInfo.TypeDesc := PropSym.TypeDesc
+    else
+    begin
+      PropType := ResolveInlineTypeName(PropDecl.TypeName, ATable);
+      if PropType <> nil then
+        PropInfo.TypeDesc := PropType;
+    end;
+    if PropDecl.ReadName <> '' then
+    begin
+      if IntfDesc.MethodIndex(PropDecl.ReadName) >= 0 then
+        PropInfo.ReadMethod :=
+          IntfDesc.MethodName(IntfDesc.MethodIndex(PropDecl.ReadName))
+      else
+        PropInfo.ReadMethod := PropDecl.ReadName;
+    end;
+    if PropDecl.WriteName <> '' then
+    begin
+      if IntfDesc.MethodIndex(PropDecl.WriteName) >= 0 then
+        PropInfo.WriteMethod :=
+          IntfDesc.MethodName(IntfDesc.MethodIndex(PropDecl.WriteName))
+      else
+        PropInfo.WriteMethod := PropDecl.WriteName;
+    end;
+    IntfDesc.AddProperty(PropInfo);
   end;
 end;
 
@@ -426,14 +481,16 @@ begin
       if RT.FindField(PropDecl.ReadName) <> nil then
         PropInfo.ReadField := PropDecl.ReadName
       else
-        PropInfo.ReadMethod := PropDecl.ReadName;
+        PropInfo.ReadMethod :=
+          DeclaredMethodCaseOf(ClassDef.Methods, PropDecl.ReadName);
     end;
     if PropDecl.WriteName <> '' then
     begin
       if RT.FindField(PropDecl.WriteName) <> nil then
         PropInfo.WriteField := PropDecl.WriteName
       else
-        PropInfo.WriteMethod := PropDecl.WriteName;
+        PropInfo.WriteMethod :=
+          DeclaredMethodCaseOf(ClassDef.Methods, PropDecl.WriteName);
     end;
     PropInfo.IndexParamName := PropDecl.IndexParamName;
     if PropDecl.IndexTypeName <> '' then

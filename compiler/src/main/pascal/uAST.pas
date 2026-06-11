@@ -363,6 +363,11 @@ type
     PropOwnerType: string;  { owner class name for setter call; valid when PropIndexExpr set }
     IsElemWrite: Boolean;   { set by uSemantic — FieldName is an array-typed field and
                               PropIndexExpr selects the element to store into }
+    [Unretained] IntfWriteDesc: TTypeDesc;  { set by uSemantic — non-nil = interface
+                              property write: RecordName is interface-typed and
+                              FieldName has been rewritten to the SETTER method;
+                              codegen dispatches it through the itab with Expr
+                              as the single argument }
     destructor Destroy; override;
   end;
 
@@ -752,6 +757,7 @@ type
   public
     ParentName: string;
     Methods:    TObjectList;  { owned TMethodDecl — forward signatures only }
+    Properties: TObjectList;  { owned TPropertyDecl — accessors are interface methods }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -1366,6 +1372,7 @@ constructor TInterfaceTypeDef.Create;
 begin
   inherited Create();
   Methods := TObjectList.Create(True);
+  Properties := TObjectList.Create(True);
 end;
 
 destructor TInterfaceTypeDef.Destroy;
@@ -2272,6 +2279,8 @@ begin
   Result.ParentName := ASrc.ParentName;
   for I := 0 to ASrc.Methods.Count - 1 do
     Result.Methods.Add(CloneMethodDecl(TMethodDecl(ASrc.Methods.Items[I])));
+  for I := 0 to ASrc.Properties.Count - 1 do
+    Result.Properties.Add(ClonePropertyDecl(TPropertyDecl(ASrc.Properties.Items[I])));
 end;
 
 function CloneGenericInterfaceDef(ASrc: TGenericInterfaceDef): TGenericInterfaceDef;

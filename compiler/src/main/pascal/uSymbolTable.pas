@@ -213,6 +213,7 @@ type
     FMethods:     TStringList;  { method names, case-insensitive }
     FReturnTypes: TStringList;  { parallel: return type name, '' = procedure }
     FParamIsVar:  TStringList;  { parallel: comma-separated '1'/'0' per param; '1' = var param }
+    FProperties:  TObjectList;  { owned TPropertyInfo — accessors are interface methods }
     [Unretained] FParent:      TInterfaceTypeDesc;  { not owned; nil if no parent }
   public
     constructor Create(const AName: string);
@@ -226,6 +227,9 @@ type
     function  MethodIndex(const AName: string): Integer;
     function  MethodParamIsVar(AMethodIndex: Integer; AParamIndex: Integer): Boolean;
     function  MethodParamVarFlagsStr(AMethodIndex: Integer): string;
+    procedure AddProperty(AInfo: TPropertyInfo);
+    { Walks the parent chain — a child interface sees inherited properties. }
+    function  FindProperty(const AName: string): TPropertyInfo;
     property  Parent: TInterfaceTypeDesc read FParent write FParent;
   end;
 
@@ -981,15 +985,37 @@ begin
   FMethods.CaseSensitive := False;
   FReturnTypes := TStringList.Create();
   FParamIsVar  := TStringList.Create();
+  FProperties  := TObjectList.Create(True);
   FParent      := nil;
 end;
 
 destructor TInterfaceTypeDesc.Destroy;
 begin
+  FProperties.Free();
   FParamIsVar.Free();
   FReturnTypes.Free();
   FMethods.Free();
   inherited Destroy();
+end;
+
+procedure TInterfaceTypeDesc.AddProperty(AInfo: TPropertyInfo);
+begin
+  FProperties.Add(AInfo);
+end;
+
+function TInterfaceTypeDesc.FindProperty(const AName: string): TPropertyInfo;
+var
+  I: Integer;
+begin
+  for I := 0 to FProperties.Count - 1 do
+  begin
+    Result := TPropertyInfo(FProperties.Items[I]);
+    if SameText(Result.Name, AName) then
+      Exit;
+  end;
+  if FParent <> nil then
+    Exit(FParent.FindProperty(AName));
+  Result := nil;
 end;
 
 procedure TInterfaceTypeDesc.AddMethod(const AName: string;

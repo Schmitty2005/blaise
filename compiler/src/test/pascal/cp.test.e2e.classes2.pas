@@ -76,6 +76,14 @@ type
     { Regression (issue #64): interface-typed field with same name as a
       program-level global of a different type. }
     procedure TestRun_InterfaceField_ShadowsGlobal_Dispatches;
+
+    { Interface properties: read/write through the interface variable. }
+    procedure TestRun_InterfaceProperty_ReadWrite;
+    { Accessor names with non-declared casing must still link (symbols are
+      case-sensitive; Pascal resolution is not), and program-level classes
+      implementing interfaces must link when units are in the uses chain
+      (program-scope symbols carry no unit prefix). }
+    procedure TestRun_InterfaceProperty_CaseMismatchAndUses;
   end;
 
 implementation
@@ -1240,6 +1248,115 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcIntfFieldShadowsGlobal, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('interface dispatch through field shadowing global', 'printed' + LE, Output);
+end;
+
+const
+  SrcInterfaceProperty = '''
+    program P;
+    type
+      IInter = interface
+        function GetValue(): Integer;
+        procedure SetValue(AValue: Integer);
+        property Value: Integer read GetValue write SetValue;
+      end;
+      IChild = interface(IInter)
+        procedure Bump();
+      end;
+      TFace = class(TObject, IInter, IChild)
+        FVal: Integer;
+        function GetValue(): Integer;
+        procedure SetValue(AValue: Integer);
+        procedure Bump();
+        property Value: Integer read GetValue write SetValue;
+      end;
+    function TFace.GetValue(): Integer;
+    begin
+      Result := FVal;
+    end;
+    procedure TFace.SetValue(AValue: Integer);
+    begin
+      FVal := AValue;
+    end;
+    procedure TFace.Bump();
+    begin
+      FVal := FVal + 1;
+    end;
+    var
+      C: TFace;
+      I: IInter;
+      K: IChild;
+    begin
+      C := TFace.Create();
+      C.Value := 13;
+      writeln(C.Value);
+      I := TFace.Create();
+      I.Value := 21;
+      writeln(I.Value);
+      I.Value := I.Value + 1;
+      writeln(I.Value);
+      K := TFace.Create();
+      K.Value := 40;
+      K.Bump();
+      writeln(K.Value);
+    end.
+    ''';
+
+procedure TE2EClasses2Tests.TestRun_InterfaceProperty_ReadWrite;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcInterfaceProperty,
+    '13' + LE + '21' + LE + '22' + LE + '41' + LE, 0);
+end;
+
+const
+  SrcIntfPropCaseUses = '''
+    program P;
+    uses classes;
+    type
+      Iinter = interface
+        function GetValue(): Integer;
+        procedure SetValue(AValue: Integer);
+        property prop: Integer read getValue write setValue;
+      end;
+      Tface = class(TObject, Iinter)
+        fProp: Integer;
+        function GetValue(): Integer;
+        procedure SetValue(AValue: Integer);
+        property prop: Integer read getValue write setValue;
+      end;
+    function Tface.GetValue(): Integer;
+    begin
+      Result := fProp;
+    end;
+    procedure Tface.SetValue(AValue: Integer);
+    begin
+      fProp := AValue;
+    end;
+    var
+      ift: Tface;
+      iit: Iinter;
+    begin
+      ift := Tface.Create();
+      ift.prop := 13;
+      writeln(ift.prop);
+      iit := Tface.Create();
+      iit.prop := 29;
+      writeln(iit.prop);
+    end.
+    ''';
+
+procedure TE2EClasses2Tests.TestRun_InterfaceProperty_CaseMismatchAndUses;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run (qbe)',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcIntfPropCaseUses, Output, RCode, False));
+  AssertEquals('exit code (qbe)', 0, RCode);
+  AssertEquals('output (qbe)', '13' + LE + '29' + LE, Output);
+  AssertTrue('compile+run (native)',
+    CompileAndRunWithRTLDebugOn(beNative, SrcIntfPropCaseUses, Output, RCode, False));
+  AssertEquals('exit code (native)', 0, RCode);
+  AssertEquals('output (native)', '13' + LE + '29' + LE, Output);
 end;
 
 initialization

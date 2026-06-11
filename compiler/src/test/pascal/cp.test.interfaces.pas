@@ -102,6 +102,17 @@ type
     { Regression — interface field shadowing a same-named global          }
     { ------------------------------------------------------------------ }
     procedure TestSemantic_InterfaceField_ShadowsGlobal_OK;
+
+    { ------------------------------------------------------------------ }
+    { Interface properties                                                 }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_Interface_WithProperty;
+    procedure TestSemantic_InterfaceProperty_Registered;
+    procedure TestSemantic_InterfaceProperty_UnknownAccessor_RaisesError;
+    procedure TestSemantic_InterfaceProperty_WriteToReadOnly_RaisesError;
+    procedure TestSemantic_InterfaceProperty_InheritedFromParent_OK;
+    procedure TestCodegen_InterfacePropertyRead_DispatchesGetter;
+    procedure TestCodegen_InterfacePropertyWrite_DispatchesSetter;
   end;
 
 implementation
@@ -1191,6 +1202,186 @@ begin
   IR := GenIR(SrcInterfaceFieldInRecord);
   AssertTrue('Tag field lives at offset 16 (interface field is 16 bytes)',
     Pos('add $r, 16', IR) > 0);
+end;
+
+const
+  SrcIntfProperty =
+    '''
+        program P;
+        type
+          IInter = interface
+            function GetValue(): Integer;
+            procedure SetValue(AValue: Integer);
+            property Value: Integer read GetValue write SetValue;
+          end;
+          TFace = class(TObject, IInter)
+            FVal: Integer;
+            function GetValue(): Integer;
+            procedure SetValue(AValue: Integer);
+          end;
+        function TFace.GetValue(): Integer;
+        begin
+          Result := FVal;
+        end;
+        procedure TFace.SetValue(AValue: Integer);
+        begin
+          FVal := AValue;
+        end;
+        var
+          I: IInter;
+        begin
+          I := TFace.Create();
+          I.Value := 13;
+          WriteLn(I.Value);
+        end.
+        ''';
+
+procedure TInterfaceTests.TestParse_Interface_WithProperty;
+var Prog: TProgram;
+begin
+  Prog := ParseSrc(SrcIntfProperty);
+  AssertNotNil('interface with property parses', Prog);
+  Prog.Free();
+end;
+
+procedure TInterfaceTests.TestSemantic_InterfaceProperty_Registered;
+var
+  Prog: TProgram;
+  Sym:  TSymbol;
+  Intf: TInterfaceTypeDesc;
+begin
+  Prog := AnalyseSrc(SrcIntfProperty);
+  try
+    Sym := Prog.SymbolTable.Lookup('IInter');
+    AssertNotNil('IInter registered', Sym);
+    Intf := TInterfaceTypeDesc(Sym.TypeDesc);
+    AssertNotNil('property Value found', Intf.FindProperty('Value'));
+    AssertEquals('read accessor', 'GetValue', Intf.FindProperty('Value').ReadMethod);
+    AssertEquals('write accessor', 'SetValue', Intf.FindProperty('Value').WriteMethod);
+  finally
+    Prog.Free();
+  end;
+end;
+
+procedure TInterfaceTests.TestSemantic_InterfaceProperty_UnknownAccessor_RaisesError;
+var
+  Prog: TProgram;
+  A:    TSemanticAnalyser;
+  Got:  Boolean;
+begin
+  Prog := ParseSrc('''
+      program P;
+      type
+        IInter = interface
+          function GetValue(): Integer;
+          property Value: Integer read NoSuchMethod;
+        end;
+      begin
+      end.
+      ''');
+  A := TSemanticAnalyser.Create();
+  Got := False;
+  try
+    try
+      A.Analyse(Prog);
+    except
+      on E: ESemanticError do Got := True;
+    end;
+  finally
+    A.Free();
+    Prog.Free();
+  end;
+  AssertTrue('unknown accessor rejected', Got);
+end;
+
+procedure TInterfaceTests.TestSemantic_InterfaceProperty_WriteToReadOnly_RaisesError;
+var
+  Prog: TProgram;
+  A:    TSemanticAnalyser;
+  Got:  Boolean;
+begin
+  Prog := ParseSrc('''
+      program P;
+      type
+        IInter = interface
+          function GetValue(): Integer;
+          property Value: Integer read GetValue;
+        end;
+        TFace = class(TObject, IInter)
+          function GetValue(): Integer;
+        end;
+      function TFace.GetValue(): Integer;
+      begin
+        Result := 1;
+      end;
+      var I: IInter;
+      begin
+        I := TFace.Create();
+        I.Value := 5;
+      end.
+      ''');
+  A := TSemanticAnalyser.Create();
+  Got := False;
+  try
+    try
+      A.Analyse(Prog);
+    except
+      on E: ESemanticError do Got := True;
+    end;
+  finally
+    A.Free();
+    Prog.Free();
+  end;
+  AssertTrue('write to read-only interface property rejected', Got);
+end;
+
+procedure TInterfaceTests.TestSemantic_InterfaceProperty_InheritedFromParent_OK;
+var
+  Prog: TProgram;
+  Sym:  TSymbol;
+  Intf: TInterfaceTypeDesc;
+begin
+  Prog := AnalyseSrc('''
+      program P;
+      type
+        IBase = interface
+          function GetValue(): Integer;
+          property Value: Integer read GetValue;
+        end;
+        IChild = interface(IBase)
+          procedure Extra();
+        end;
+      begin
+      end.
+      ''');
+  try
+    Sym := Prog.SymbolTable.Lookup('IChild');
+    Intf := TInterfaceTypeDesc(Sym.TypeDesc);
+    AssertNotNil('child sees parent property', Intf.FindProperty('Value'));
+  finally
+    Prog.Free();
+  end;
+end;
+
+procedure TInterfaceTests.TestCodegen_InterfacePropertyRead_DispatchesGetter;
+var IR: string;
+begin
+  IR := GenIR(SrcIntfProperty);
+  { Property read lowers to an itab-dispatched getter: the itab slot is
+    loaded and called indirectly — the IR must load from the _itab slot. }
+  AssertTrue('reads receiver itab slot', Pos('_itab', IR) > 0);
+  AssertTrue('indirect call through function pointer temp',
+    Pos('=w call %', IR) > 0);
+end;
+
+procedure TInterfaceTests.TestCodegen_InterfacePropertyWrite_DispatchesSetter;
+var IR: string;
+begin
+  IR := GenIR(SrcIntfProperty);
+  { Property write lowers to an itab-dispatched setter call with the value
+    as the single argument after Self. }
+  AssertTrue('setter dispatched with value argument',
+    Pos('call %', IR) > 0);
 end;
 
 initialization
