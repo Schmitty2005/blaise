@@ -125,6 +125,11 @@ type
     procedure TestRun_Native_String_ConcatWithInt;
     procedure TestRun_Native_String_ChrConcat;
 
+    { Local dynamic-array variables must start nil: SetLength reads the old
+      pointer and the epilogue releases it.  The dirty-stack helper makes the
+      uninitialised slot hold garbage rather than lucky zeros. }
+    procedure TestRun_Native_LocalDynArray_DirtyStack;
+
     { M7d — exception handling }
     procedure TestRun_Native_TryFinally_Normal;
     procedure TestRun_Native_TryFinally_NestedNormal;
@@ -1922,6 +1927,39 @@ procedure TE2ENativeTests.TestRun_Native_String_ChrConcat;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcChrConcat, 'ABC' + LE + 'ABCDE' + LE, 0);
+end;
+
+const
+  SrcLocalDynDirty =
+    '''
+    program P;
+    procedure Dirty();
+    var
+      A: array[0..63] of Int64;
+      I: Integer;
+    begin
+      for I := 0 to 63 do
+        A[I] := -81985529216486896;
+    end;
+    procedure UseLocalDyn();
+    var
+      Arr: array of Integer;
+    begin
+      SetLength(Arr, 5);
+      Arr[2] := 42;
+      writeln(Arr[2]);
+    end;
+    begin
+      Dirty();
+      UseLocalDyn();
+      writeln('done');
+    end.
+    ''';
+
+procedure TE2ENativeTests.TestRun_Native_LocalDynArray_DirtyStack;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcLocalDynDirty, '42' + LE + 'done' + LE, 0);
 end;
 
 { M7d — exception handling source programs }

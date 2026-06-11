@@ -402,6 +402,7 @@ type
                                AArgs: TObjectList);
     { Evaluate an integer expression; result left in %rax (64-bit-extended). }
     procedure EmitExprToEax(AExpr: TASTExpr);
+    procedure EmitByteRhsToEax(AExpr: TASTExpr);
     { Evaluate a float expression (tyDouble or tySingle); result left in %xmm0.
       Binary ops: left → push onto int stack via subq/movsd, right → %xmm0,
       pop left → %xmm1, then addsd/subsd/mulsd/divsd. }
@@ -3150,6 +3151,32 @@ end;
   field-access targets: R.F (inline record), C.F (class variable — slot
   holds the object pointer), implicit-Self record/class bases, var-param
   record bases, and chained Base.F (Base evaluated to an address). }
+{ Evaluate the RHS of a byte-sized store into %eax.
+
+  Chr(N) must NOT lower via the normal _Chr call — that returns a heap
+  string POINTER, and the byte store would truncate to the pointer's low
+  byte (the "P[I] := Chr(N)" garbage bug).  Emit the argument N directly.
+  Single-char string literals get the same fold to their ordinal.
+  Mirrors the QBE backend's EmitByteRhs. }
+procedure TX86_64Backend.EmitByteRhsToEax(AExpr: TASTExpr);
+begin
+  if (AExpr is TFuncCallExpr) and
+     SameText(TFuncCallExpr(AExpr).Name, 'Chr') and
+     (TFuncCallExpr(AExpr).Args.Count = 1) then
+  begin
+    Self.EmitExprToEax(TASTExpr(TFuncCallExpr(AExpr).Args.Items[0]));
+    Exit;
+  end;
+  if (AExpr is TStringLiteral) and
+     (Length(TStringLiteral(AExpr).Value) = 1) then
+  begin
+    Self.Emit(Format(#9'movl $%d, %%eax',
+      [Ord(TStringLiteral(AExpr).Value[0])]));
+    Exit;
+  end;
+  Self.EmitExprToEax(AExpr);
+end;
+
 procedure TX86_64Backend.EmitLValueSlotAddr(AExpr: TASTExpr);
 var
   IE:  TIdentExpr;
@@ -9276,7 +9303,10 @@ begin
         DAElemType := TDynArrayTypeDesc(FA.FieldInfo.TypeDesc).ElementType
       else
         DAElemType := TStaticArrayTypeDesc(FA.FieldInfo.TypeDesc).ElementType;
-      Self.EmitExprToEax(FA.Expr);
+      if DAElemType.Kind in [tyByte, tyBoolean] then
+        Self.EmitByteRhsToEax(FA.Expr)
+      else
+        Self.EmitExprToEax(FA.Expr);
       Self.Emit(#9'pushq %rax');           { value (or record src addr) }
       Self.EmitExprToEax(FA.PropIndexExpr);
       if (FA.FieldInfo.TypeDesc.Kind = tyStaticArray) and
@@ -9901,7 +9931,7 @@ begin
     begin
       { PChar subscript write: P[I] := byte — storeb at base + I.  The PChar
         value lives directly in the variable slot (an 8-byte pointer). }
-      Self.EmitExprToEax(SSA.ValueExpr);
+      Self.EmitByteRhsToEax(SSA.ValueExpr);
       Self.Emit(#9'pushq %rax');
       Self.EmitExprToEax(SSA.IndexExpr);
       if Self.IsLocal(SSA.ArrayName) then
@@ -9943,7 +9973,10 @@ begin
         Self.Emit(#9'popq %rbx');
         Exit;
       end;
-      Self.EmitExprToEax(SSA.ValueExpr);
+      if DAElemType.Kind in [tyByte, tyBoolean] then
+        Self.EmitByteRhsToEax(SSA.ValueExpr)
+      else
+        Self.EmitExprToEax(SSA.ValueExpr);
       Self.Emit(#9'pushq %rax');
       Self.EmitExprToEax(SSA.IndexExpr);
       Self.Emit(Format(#9'imulq $%d, %%rax', [DAElemType.RawSize()]));
@@ -10042,7 +10075,10 @@ begin
       Self.Emit(#9'popq %rbx');
       Exit;
     end;
-    Self.EmitExprToEax(SSA.ValueExpr);
+    if DAElemType.Kind in [tyByte, tyBoolean] then
+      Self.EmitByteRhsToEax(SSA.ValueExpr)
+    else
+      Self.EmitExprToEax(SSA.ValueExpr);
     Self.Emit(#9'pushq %rax');
     Self.EmitExprToEax(SSA.IndexExpr);
     if TStaticArrayTypeDesc(SSA.ResolvedArrayType).LowBound <> 0 then
@@ -10171,7 +10207,11 @@ begin
     end
     else
     begin
-      Self.EmitExprToEax(TPointerWriteStmt(AStmt).ValExpr);
+      if (TPointerWriteStmt(AStmt).BaseTy <> nil) and
+         (TPointerWriteStmt(AStmt).BaseTy.Kind in [tyByte, tyBoolean]) then
+        Self.EmitByteRhsToEax(TPointerWriteStmt(AStmt).ValExpr)
+      else
+        Self.EmitExprToEax(TPointerWriteStmt(AStmt).ValExpr);
       Self.Emit(#9'pushq %rax');
       Self.EmitExprToEax(TPointerWriteStmt(AStmt).PtrExpr);
       Self.Emit(#9'movq %rax, %rcx');
@@ -12244,6 +12284,13 @@ begin
           Self.Emit(Format(#9'movq $0, %s',
             [Self.IntfItabOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J], False)]));
         end
+      else if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind = tyDynArray then
+        { Dyn-array locals MUST start nil: SetLength reads the old pointer
+          (_DynArrayLength / _BlaiseFreeMem on it) and the epilogue releases
+          it — stack garbage in the slot corrupts the heap or crashes. }
+        for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
+          Self.Emit(Format(#9'movq $0, %s',
+            [Self.VarOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J])]))
       else if TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType.Kind = tyRecord then
         for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
         begin

@@ -561,7 +561,12 @@ begin
   L('    # recGlobalVar: ' + AVarName);
   EmitRecHdr(REC_GLOBALVAR, RecSize);
   L('    .int  ' + IntToStr(GetOrAllocTypeID(CName)) + '  # TypeID');
-  L('    .quad ' + AVarName + '  # Address (linker-resolved)');
+  if (AType <> nil) and (AType.Kind = tyInterface) then
+    { Interface globals are two labels, Name_obj + Name_itab — there is no
+      bare Name symbol.  Point the record at the object-pointer half. }
+    L('    .quad ' + AVarName + '_obj  # Address (linker-resolved)')
+  else
+    L('    .quad ' + AVarName + '  # Address (linker-resolved)');
   EmitStrField(AVarName);
 end;
 
