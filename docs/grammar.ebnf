@@ -646,6 +646,8 @@ Stmt
     | CompoundStmt
     | PointerWriteStmt
     | StaticSubscriptAssign
+    | SubscriptFieldAssign
+    | SubscriptMethodCall
     | FieldAssignment
     | MethodCall
     | Assignment
@@ -655,6 +657,30 @@ Stmt
 
 StaticSubscriptAssign
     = IDENT LBRACKET Expr RBRACKET ASSIGN Expr
+    ;
+
+(* A statement starting with IDENT LBRACKET Expr RBRACKET that is NOT
+ * directly followed by ASSIGN continues as a postfix chain on the element:
+ * field accesses and further subscripts, terminated by either a field
+ * assignment (SubscriptFieldAssign) or a method call on the element
+ * (SubscriptMethodCall).  Examples:
+ *   a[0].Name := 'x';        a[i].Inner.N := 5;
+ *   a[0].Bump;               a[i].Items.Add(x);
+ * A terminating subscript on the LHS of ASSIGN (a[i].Items[j] := v) is
+ * not yet supported. *)
+SubscriptFieldAssign
+    = IDENT LBRACKET Expr RBRACKET { SubscriptSuffix }
+      DOT IDENT ASSIGN Expr
+    ;
+
+SubscriptMethodCall
+    = IDENT LBRACKET Expr RBRACKET { SubscriptSuffix }
+      DOT IDENT [ LPAREN [ ArgList ] RPAREN ]
+    ;
+
+SubscriptSuffix
+    = DOT IDENT
+    | LBRACKET Expr RBRACKET
     ;
 
 IfStmt

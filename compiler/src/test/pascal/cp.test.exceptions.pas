@@ -97,6 +97,12 @@ type
     { Exit inside try/finally must emit the finally body on the exit path,
       not just pop the frame. }
     procedure TestCodegen_ExitInTryFinally_RunsFinally;
+    { Exit inside the SECOND try block of a function must still pop its
+      frame: the emitter's FExcDepth bookkeeping is per-path, and the
+      exception path must rebalance it (regression: a double decrement left
+      later try blocks at depth 0, so their Exit paths skipped the pop and
+      left a stale g_exc_top -> crash on a later raise/pop). }
+    procedure TestCodegen_ExitInSecondTryExcept_PopsFrame;
 
     { ------------------------------------------------------------------ }
     { Codegen — ARC cleanup on exception paths                            }
@@ -672,6 +678,54 @@ end;
   The RTL (blaise_exc.c) fixes the contract at 512 bytes — jmp_buf alone is
   200 B on Linux x86_64 / ~312 B on macOS ARM64, plus two pointer fields.
   Undersizing silently corrupts the caller's stack when setjmp writes jbuf. }
+procedure TExceptionTests.TestCodegen_ExitInSecondTryExcept_PopsFrame;
+var
+  IR:  string;
+  N:   Integer;
+  Idx: Integer;
+begin
+  IR := GenIR('''
+      program P;
+      function F(n: Integer): Integer;
+      begin
+        Result := 0;
+        try
+          if n = 0 then
+          begin
+            Exit(100);
+          end;
+        except
+        end;
+        try
+          repeat
+            if n > 2 then
+            begin
+              Exit(n * 10);
+            end;
+            n := n + 1;
+          until False;
+        except
+        end;
+      end;
+      begin
+      end.
+      ''');
+  { Each try/except emits three pops: the Exit path inside the try body,
+    the normal fall-through path, and the handler path.  Two try blocks
+    with one Exit each = 6 pops.  The double-decrement bug dropped the
+    Exit-path pop of the second block (5 pops). }
+  N := 0;
+  Idx := 0;
+  while True do
+  begin
+    Idx := PosEx('call $_PopExcFrame()', IR, Idx);
+    if Idx < 0 then Break;
+    Inc(N);
+    Inc(Idx);
+  end;
+  AssertEquals('balanced frame pops across both try blocks', 6, N);
+end;
+
 procedure TExceptionTests.TestCodegen_TryExcept_FrameAllocSize;
 var IR: string;
 begin

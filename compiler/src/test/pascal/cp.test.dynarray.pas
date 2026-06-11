@@ -61,6 +61,13 @@ type
     procedure TestCodegen_DynArray_AddrOfRecordFieldElement;
     procedure TestSemantic_DynArray_High_Accepted;
     procedure TestSemantic_DynArray_Low_Accepted;
+
+    { ------------------------------------------------------------------ }
+    { Record elements: a[i] := r copies; a[i].F := v assigns in place      }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_DynArray_RecordElem_FieldAssign_Accepted;
+    procedure TestCodegen_DynArray_RecordElem_Write_FieldwiseCopy;
+    procedure TestCodegen_DynArray_RecordElem_FieldAssign_StringARC;
   end;
 
 implementation
@@ -475,6 +482,73 @@ begin
     Self.CountOccurrences(IR, 'mul') > 0);
   AssertTrue('add to combine base + offset',
     Self.CountOccurrences(IR, 'add') > 0);
+end;
+
+procedure TDynArrayTests.TestParse_DynArray_RecordElem_FieldAssign_Accepted;
+var Prog: TProgram;
+begin
+  { a[i].Field := v on the statement LHS used to raise
+    "Expected ':=' but got '.'" — the subscript statement branch only
+    accepted ':=' directly after ']'. }
+  Prog := ParseSrc('''
+      program P;
+      type TRec = record Name: String; Number: Integer; end;
+      var A: array of TRec;
+      begin
+        SetLength(A, 2);
+        A[0].Name := 'hello';
+        A[1].Number := 42;
+      end.
+      ''');
+  AssertNotNil('program with a[i].Field := v parses', Prog);
+  Prog.Free();
+end;
+
+procedure TDynArrayTests.TestCodegen_DynArray_RecordElem_Write_FieldwiseCopy;
+var IR: string;
+begin
+  { a[i] := r with a record element must copy the record contents
+    (ARC-aware fieldwise copy), not store the address of r into the
+    element slot. }
+  IR := GenIR('''
+      program P;
+      type TRec = record Name: String; Number: Integer; end;
+      procedure Foo;
+      var A: array of TRec;
+          R: TRec;
+      begin
+        SetLength(A, 2);
+        A[0] := R;
+      end;
+      begin
+      end.
+      ''');
+  AssertTrue('string field retained during element copy',
+    Self.CountOccurrences(IR, 'call $_StringAddRef') > 0);
+  AssertEquals('record address must not be stored into the element',
+    0, Self.CountOccurrences(IR, 'storel %_var_R,'));
+end;
+
+procedure TDynArrayTests.TestCodegen_DynArray_RecordElem_FieldAssign_StringARC;
+var IR: string;
+begin
+  { a[i].Name := s must write through the element address with string ARC
+    (retain new value, release old element field). }
+  IR := GenIR('''
+      program P;
+      type TRec = record Name: String; Number: Integer; end;
+      var A: array of TRec;
+          S: String;
+      begin
+        SetLength(A, 1);
+        S := 'hello';
+        A[0].Name := S;
+      end.
+      ''');
+  AssertTrue('retains the new string value',
+    Self.CountOccurrences(IR, 'call $_StringAddRef') > 0);
+  AssertTrue('releases the old element field value',
+    Self.CountOccurrences(IR, 'call $_StringRelease') > 0);
 end;
 
 initialization

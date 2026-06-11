@@ -1894,6 +1894,8 @@ var
   CastRcv:     TASTExpr;
   FCallNode:   TFuncCallExpr;
   SubAssign:   TStaticSubscriptAssign;
+  SubNode:     TStringSubscriptExpr;
+  ChainBase:   TASTExpr;
   ExitS:       TExitStmt;
 begin
   Result := nil;
@@ -1994,7 +1996,12 @@ begin
 
   if Check(tkLBracket) then
   begin
-    { Static array subscript assignment: Name[IndexExpr] := ValueExpr }
+    { Subscript on the statement LHS.  Three shapes:
+        Name[I] := V                — element write (TStaticSubscriptAssign)
+        Name[I]....F := V           — field assignment through the element
+                                      (TFieldAssignment via ObjExpr)
+        Name[I]....M / ....M(args)  — method call on the element
+                                      (TMethodCallStmt via ObjExpr) }
     Advance();  { consume '[' }
     SubAssign := TStaticSubscriptAssign.Create();
     SubAssign.Line := Line;
@@ -2003,13 +2010,116 @@ begin
     try
       SubAssign.IndexExpr := ParseExpr();
       Expect(tkRBracket);
-      Expect(tkAssign);
-      SubAssign.ValueExpr := ParseExpr();
+      if Check(tkAssign) then
+      begin
+        Advance();  { consume ':=' }
+        SubAssign.ValueExpr := ParseExpr();
+        Exit(SubAssign);
+      end;
     except
       SubAssign.Free();
       raise;
     end;
-    Exit(SubAssign);
+    { Postfix chain on the element: rebuild Name[Index] as an expression
+      base, then consume '.' field / '[' subscript suffixes until the
+      terminating assignment or method call. }
+    PtrIdNode := TIdentExpr.Create();
+    PtrIdNode.Line := Line;
+    PtrIdNode.Col := Col;
+    PtrIdNode.Name := Name;
+    SubNode := TStringSubscriptExpr.Create();
+    SubNode.Line := Line;
+    SubNode.Col := Col;
+    SubNode.StrExpr := PtrIdNode;
+    SubNode.IndexExpr := SubAssign.IndexExpr;
+    SubAssign.IndexExpr := nil;  { ownership transferred to SubNode }
+    SubAssign.Free();
+    SubAssign := nil;
+    ChainBase := SubNode;
+    try
+      repeat
+        if Check(tkLBracket) then
+        begin
+          { Further subscript: ChainBase[Index] }
+          Advance();  { consume '[' }
+          SubNode := TStringSubscriptExpr.Create();
+          SubNode.Line := FCurrent.Line;
+          SubNode.Col := FCurrent.Col;
+          SubNode.StrExpr := ChainBase;
+          ChainBase := SubNode;
+          SubNode.IndexExpr := ParseExpr();
+          Expect(tkRBracket);
+          if Check(tkAssign) then
+            raise EParseError.Create(Format(
+              'Subscript assignment through a chained base is not yet supported at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+          Continue;
+        end;
+        if not Check(tkDot) then
+          raise EParseError.Create(Format(
+            'Expected ''.'' or '':='' after subscript at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        Advance();  { consume '.' }
+        if not Check(tkIdent) then
+          raise EParseError.Create(Format(
+            'Expected field or method name at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        SecondIdent := FCurrent.Value;
+        Advance();  { consume ident }
+        if Check(tkAssign) then
+        begin
+          { Name[I]....F := Expr — field assignment through the element }
+          Advance();  { consume ':=' }
+          FldAssign := TFieldAssignment.Create();
+          FldAssign.Line := Line;
+          FldAssign.Col := Col;
+          FldAssign.FieldName := SecondIdent;
+          FldAssign.ObjExpr := ChainBase;
+          ChainBase := nil;
+          FldAssign.Expr := ParseExpr();
+          Exit(FldAssign);
+        end;
+        if Check(tkLParen) then
+        begin
+          { Name[I]....M(args) — method call on the element }
+          MCall := TMethodCallStmt.Create();
+          MCall.Line := Line;
+          MCall.Col := Col;
+          MCall.ObjectName := '';
+          MCall.Name := SecondIdent;
+          MCall.ObjExpr := ChainBase;
+          ChainBase := nil;
+          Advance();  { consume '(' }
+          if not Check(tkRParen) then
+            ParseMethodCallArgList(MCall);
+          Expect(tkRParen);
+          Exit(MCall);
+        end;
+        if Check(tkDot) or Check(tkLBracket) then
+        begin
+          { Extend the chain: Name[I].F.…  or  Name[I].F[J]… }
+          FldNode := TFieldAccessExpr.Create();
+          FldNode.Line := Line;
+          FldNode.Col := Col;
+          FldNode.Base := ChainBase;
+          FldNode.FieldName := SecondIdent;
+          ChainBase := FldNode;
+          Continue;
+        end;
+        { Statement boundary: parenless method call Name[I]....M }
+        MCall := TMethodCallStmt.Create();
+        MCall.Line := Line;
+        MCall.Col := Col;
+        MCall.ObjectName := '';
+        MCall.Name := SecondIdent;
+        MCall.ObjExpr := ChainBase;
+        ChainBase := nil;
+        Exit(MCall);
+      until False;
+    except
+      ChainBase.Free();
+      raise;
+    end;
   end;
 
   if Check(tkCaret) then

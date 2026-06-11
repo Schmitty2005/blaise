@@ -41,6 +41,10 @@ type
     procedure TestRun_Record_InterfaceField_AssignCallAndCopy;
     procedure TestRun_Record_ByValParam_StringField_HeapARC;
     procedure TestRun_Record_ByValArg_InlineCallResult_NestedManaged_NoLeak;
+    procedure TestRun_DynArrayRecordElem_FieldAssignAndRead;
+    procedure TestRun_DynArrayRecordElem_CopyNoAlias;
+    procedure TestRun_StaticArrayRecordElem_FieldAssignAndRead;
+    procedure TestRun_DynArrayClassElem_MethodCallStmt;
   end;
 
 implementation
@@ -742,6 +746,132 @@ begin
   AssertEquals('exit code 0 over 1000 inline-temp iterations', 0, RCode);
   AssertTrue('Driver printed nested strings',
     Pos('outer-heap|inner-heap' + LE, Output) >= 0);
+end;
+
+const
+  SrcDynRecElemFieldAssign = '''
+    program P;
+    type
+      TInner = record N: Integer; end;
+      TRec = record
+        Name: String;
+        Number: Integer;
+        Inner: TInner;
+      end;
+    var
+      r1, r2: TRec;
+      a: array of TRec;
+    begin
+      SetLength(a, 2);
+      r1.Name := 'First';  r1.Number := 1;
+      r2.Name := 'Second'; r2.Number := 2;
+      a[0] := r1;
+      a[1] := r2;
+      writeln(a[0].Name);
+      a[0].Name := 'Patched';
+      a[0].Number := 10;
+      a[0].Inner.N := 7;
+      writeln(a[0].Name);
+      writeln(a[1].Name);
+      writeln(a[0].Number);
+      writeln(a[1].Number);
+      writeln(a[0].Inner.N);
+      writeln(r1.Name);
+    end.
+    ''';
+
+  SrcDynRecElemCopyNoAlias = '''
+    program P;
+    type TRec = record Name: String; Number: Integer; end;
+    var
+      r: TRec;
+      a: array of TRec;
+    begin
+      SetLength(a, 1);
+      r.Name := 'one';
+      r.Number := 1;
+      a[0] := r;
+      r.Name := 'two';
+      r.Number := 2;
+      writeln(a[0].Name);
+      writeln(a[0].Number);
+      r := a[0];
+      a[0].Name := 'three';
+      writeln(r.Name);
+      writeln(r.Number);
+      writeln(a[0].Name);
+    end.
+    ''';
+
+  SrcStaticRecElemFieldAssign = '''
+    program P;
+    type TRec = record Name: String; Number: Integer; end;
+    var
+      r1, r2: TRec;
+      sa: array[0..1] of TRec;
+    begin
+      r1.Name := 'First';  r1.Number := 1;
+      r2.Name := 'Second'; r2.Number := 2;
+      sa[0] := r1;
+      sa[1] := r2;
+      sa[0].Name := 'Patched';
+      sa[0].Number := 10;
+      writeln(sa[0].Name);
+      writeln(sa[1].Name);
+      writeln(sa[0].Number);
+      writeln(sa[1].Number);
+      writeln(r1.Name);
+    end.
+    ''';
+
+  SrcDynClassElemMethodCall = '''
+    program P;
+    type
+      TC = class
+        V: Integer;
+        procedure Bump;
+      end;
+    procedure TC.Bump;
+    begin
+      V := V + 1;
+    end;
+    var
+      a: array of TC;
+    begin
+      SetLength(a, 1);
+      a[0] := TC.Create();
+      a[0].Bump;
+      a[0].Bump();
+      writeln(a[0].V);
+    end.
+    ''';
+
+procedure TE2ERecordsTests.TestRun_DynArrayRecordElem_FieldAssignAndRead;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDynRecElemFieldAssign,
+    'First' + LE + 'Patched' + LE + 'Second' + LE + '10' + LE + '2' + LE +
+    '7' + LE + 'First' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_DynArrayRecordElem_CopyNoAlias;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDynRecElemCopyNoAlias,
+    'one' + LE + '1' + LE + 'one' + LE + '1' + LE + 'three' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_StaticArrayRecordElem_FieldAssignAndRead;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcStaticRecElemFieldAssign,
+    'Patched' + LE + 'Second' + LE + '10' + LE + '2' + LE + 'First' + LE, 0);
+end;
+
+procedure TE2ERecordsTests.TestRun_DynArrayClassElem_MethodCallStmt;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDynClassElemMethodCall, '2' + LE, 0);
 end;
 
 initialization

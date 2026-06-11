@@ -4981,8 +4981,11 @@ begin
       [TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
     Self.Emit(#9'popq %rcx');
     Self.Emit(#9'addq %rcx, %rax');
-    Self.EmitLoadVar('(%rax)',
-      TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
+    { Record elements evaluate to their address — records are by-value via
+      pointer; loading 8 bytes here would read the first field instead. }
+    if TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.Kind <> tyRecord then
+      Self.EmitLoadVar('(%rax)',
+        TOpenArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
     Exit;
   end;
 
@@ -5000,8 +5003,11 @@ begin
       [TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
     Self.Emit(#9'popq %rcx');
     Self.Emit(#9'addq %rcx, %rax');
-    Self.EmitLoadVar('(%rax)',
-      TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
+    { Record elements evaluate to their address — records are by-value via
+      pointer; loading 8 bytes here would read the first field instead. }
+    if TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.Kind <> tyRecord then
+      Self.EmitLoadVar('(%rax)',
+        TDynArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
     Exit;
   end;
 
@@ -5022,8 +5028,11 @@ begin
       [TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.RawSize()]));
     Self.Emit(#9'popq %rcx');
     Self.Emit(#9'addq %rcx, %rax');
-    Self.EmitLoadVar('(%rax)',
-      TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
+    { Record elements evaluate to their address — records are by-value via
+      pointer; loading 8 bytes here would read the first field instead. }
+    if TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType.Kind <> tyRecord then
+      Self.EmitLoadVar('(%rax)',
+        TStaticArrayTypeDesc(SAE.StrExpr.ResolvedType).ElementType);
     Exit;
   end;
 
@@ -9260,6 +9269,29 @@ begin
         Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [SSA.ArrayName]));
       Self.Emit(#9'addq %rcx, %rax');
       Self.Emit(#9'movq %rax, %rcx');
+      if DAElemType.Kind = tyRecord then
+      begin
+        { Record element: ARC-aware copy of the record contents (retain the
+          source's managed fields, release the destination's, then memcpy).
+          The source record address was pushed above; %rcx holds the element
+          address.  Push count stays even so calls remain 16-byte aligned. }
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(#9'pushq %r15');
+        Self.Emit(#9'subq $8, %rsp');
+        Self.Emit(#9'movq %rcx, %r15');        { dest element addr }
+        Self.Emit(#9'movq 24(%rsp), %rbx');    { src record addr }
+        Self.EmitRecordFieldRetains(TRecordTypeDesc(DAElemType), '%rbx');
+        Self.EmitRecordFieldReleases(TRecordTypeDesc(DAElemType), '%r15');
+        Self.Emit(#9'movq %r15, %rdi');
+        Self.Emit(#9'movq %rbx, %rsi');
+        Self.Emit(Format(#9'movq $%d, %%rdx', [DAElemType.RawSize()]));
+        Self.Emit(#9'callq memcpy');
+        Self.Emit(#9'addq $8, %rsp');
+        Self.Emit(#9'popq %r15');
+        Self.Emit(#9'popq %rbx');
+        Self.Emit(#9'addq $8, %rsp');          { drop saved src addr }
+        Exit;
+      end;
       if DAElemType.Kind = tyString then
       begin
         Self.Emit(#9'pushq %rcx');
@@ -9303,6 +9335,27 @@ begin
       Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [SSA.ArrayName]));
     Self.Emit(#9'addq %rcx, %rax');
     Self.Emit(#9'movq %rax, %rcx');
+    if DAElemType.Kind = tyRecord then
+    begin
+      { Record element: ARC-aware copy — same scheme as the dyn-array
+        record branch above. }
+      Self.Emit(#9'pushq %rbx');
+      Self.Emit(#9'pushq %r15');
+      Self.Emit(#9'subq $8, %rsp');
+      Self.Emit(#9'movq %rcx, %r15');        { dest element addr }
+      Self.Emit(#9'movq 24(%rsp), %rbx');    { src record addr }
+      Self.EmitRecordFieldRetains(TRecordTypeDesc(DAElemType), '%rbx');
+      Self.EmitRecordFieldReleases(TRecordTypeDesc(DAElemType), '%r15');
+      Self.Emit(#9'movq %r15, %rdi');
+      Self.Emit(#9'movq %rbx, %rsi');
+      Self.Emit(Format(#9'movq $%d, %%rdx', [DAElemType.RawSize()]));
+      Self.Emit(#9'callq memcpy');
+      Self.Emit(#9'addq $8, %rsp');
+      Self.Emit(#9'popq %r15');
+      Self.Emit(#9'popq %rbx');
+      Self.Emit(#9'addq $8, %rsp');          { drop saved src addr }
+      Exit;
+    end;
     if DAElemType.Kind = tyString then
     begin
       Self.Emit(#9'pushq %rcx');

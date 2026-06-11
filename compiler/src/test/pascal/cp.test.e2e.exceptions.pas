@@ -50,6 +50,10 @@ type
 
     { String variable mutated in finally must be visible after re-raise. }
     procedure TestRun_FinallyStringMutation_SurvivesReraise;
+
+    { Exit inside the second try block of a function must pop its exc frame;
+      a later raise must still dispatch correctly (stale-frame regression). }
+    procedure TestRun_ExitInSecondTry_LaterRaiseStillWorks;
   end;
 
 implementation
@@ -471,6 +475,55 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcFinallyStringMutationSurvives, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('string mutations in finally survive re-raise', 'A,F,H,', Trim(Output));
+end;
+
+const
+  SrcExitInSecondTry = '''
+    program P;
+    type EBoom = class end;
+
+    function F(n: Integer): Integer;
+    begin
+      Result := 0;
+      try
+        if n = 0 then
+        begin
+          Exit(100);
+        end;
+      except
+      end;
+      try
+        repeat
+          if n > 2 then
+          begin
+            Exit(n * 10);
+          end;
+          n := n + 1;
+        until False;
+      except
+      end;
+    end;
+
+    var x: Integer;
+    begin
+      x := F(0);
+      writeln(x);
+      x := F(5);
+      writeln(x);
+      try
+        raise EBoom.Create();
+      except
+        on E: EBoom do writeln('caught');
+      end;
+      writeln('done');
+    end.
+    ''';
+
+procedure TE2EExceptionTests.TestRun_ExitInSecondTry_LaterRaiseStillWorks;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcExitInSecondTry,
+    '100' + LE + '50' + LE + 'caught' + LE + 'done' + LE, 0);
 end;
 
 initialization

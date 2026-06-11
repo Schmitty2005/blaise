@@ -2290,12 +2290,22 @@ begin
   { Exception path: capture exception, pop frame, run finally body, re-raise.
     ARC cleanup is NOT emitted here — the outer handler (or function exit)
     is responsible for releasing variables that are still in scope. Releasing
-    them here would nil variables that the outer except handler still reads. }
+    them here would nil variables that the outer except handler still reads.
+
+    Restore codegen-time FExcDepth/FFinallyStack to the try-entry level first:
+    both paths are emitted sequentially but are runtime alternatives, so each
+    must balance the bookkeeping independently.  Without this the second and
+    later try blocks in a function are emitted with FExcDepth one too low and
+    a non-local exit inside them skips the frame pop (stale g_exc_top → crash
+    on the next raise). }
+  Inc(FExcDepth);
+  FFinallyStack.Add(AStmt.FinallyBody);
   EmitLine('@' + LblFinExc);
   ExcTemp := AllocTemp();
   EmitLine(Format('  %s =l call $_CurrentException()', [ExcTemp]));
   EmitLine('  call $_PopExcFrame()');
   Dec(FExcDepth);
+  FFinallyStack.Delete(FFinallyStack.Count - 1);
   for I := 0 to AStmt.FinallyBody.Stmts.Count - 1 do
     EmitStmt(TASTStmt(AStmt.FinallyBody.Stmts.Items[I]));
   EmitLine(Format('  call $_Reraise(l %s)', [ExcTemp]));
@@ -2347,7 +2357,12 @@ begin
   FFinallyStack.Delete(FFinallyStack.Count - 1);
   EmitLine(Format('  jmp @%s', [LblEnd]));
 
-  { Exception path: capture exception before popping frame, then pop }
+  { Exception path: capture exception before popping frame, then pop.
+    Restore codegen-time FExcDepth/FFinallyStack to the try-entry level first:
+    both paths are emitted sequentially but are runtime alternatives, so each
+    must balance the bookkeeping independently (see EmitTryFinallyStmt). }
+  Inc(FExcDepth);
+  FFinallyStack.Add(nil);
   EmitLine('@' + LblExcept);
 
   if AStmt.Handlers.Count > 0 then
@@ -2358,6 +2373,7 @@ begin
     EmitLine(Format('  %s =l call $_CurrentException()', [ExcTemp]));
     EmitLine('  call $_PopExcFrame()');
     Dec(FExcDepth);
+    FFinallyStack.Delete(FFinallyStack.Count - 1);
 
     for I := 0 to AStmt.Handlers.Count - 1 do
     begin
@@ -2408,6 +2424,7 @@ begin
     { Plain catch-all body }
     EmitLine('  call $_PopExcFrame()');
     Dec(FExcDepth);
+    FFinallyStack.Delete(FFinallyStack.Count - 1);
     for I := 0 to AStmt.ExceptBody.Stmts.Count - 1 do
       EmitStmt(TASTStmt(AStmt.ExceptBody.Stmts.Items[I]));
     EmitLine(Format('  jmp @%s', [LblEnd]));
@@ -12345,10 +12362,15 @@ begin
     IdxL    := AllocTemp();
     Offset  := AllocTemp();
     ElemPtr := AllocTemp();
-    ByteVal := AllocTemp();
     EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
     EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
     EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
+    { Record elements: return address directly — records are by-value via pointer }
+    if ElemType.ElementType.Kind = tyRecord then
+    begin
+      Exit(ElemPtr);
+    end;
+    ByteVal := AllocTemp();
     EmitLine(Format('  %s =%s %s %s', [ByteVal, QType, QLoad, ElemPtr]));
     Exit(ByteVal);
   end;
@@ -12364,10 +12386,15 @@ begin
     IdxL    := AllocTemp();
     Offset  := AllocTemp();
     ElemPtr := AllocTemp();
-    ByteVal := AllocTemp();
     EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
     EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
     EmitLine(Format('  %s =l add %s, %s', [ElemPtr, StrPtr, Offset]));
+    { Record elements: return address directly — records are by-value via pointer }
+    if TDynArrayTypeDesc(AExpr.StrExpr.ResolvedType).ElementType.Kind = tyRecord then
+    begin
+      Exit(ElemPtr);
+    end;
+    ByteVal := AllocTemp();
     EmitLine(Format('  %s =%s %s %s', [ByteVal, QType, QLoad, ElemPtr]));
     Exit(ByteVal);
   end;
@@ -12636,6 +12663,17 @@ begin
     IdxL    := AllocTemp();
     Offset  := AllocTemp();
     ElemPtr := AllocTemp();
+    { Record elements: copy the record contents into the element slot
+      (ARC-aware fieldwise copy), never a single 8-byte store. }
+    if ElemType.Kind = tyRecord then
+    begin
+      EmitLine(Format('  %s =l extsw %s', [IdxL, IdxW]));
+      EmitLine(Format('  %s =l mul %s, %d', [Offset, IdxL, ElemSize]));
+      EmitLine(Format('  %s =l add %s, %s', [ElemPtr, PCharBase, Offset]));
+      ElemVal := EmitExpr(AStmt.ValueExpr);
+      EmitRecordCopy(TRecordTypeDesc(ElemType), ElemPtr, ElemVal);
+      Exit;
+    end;
     if ElemType.Kind in [tyByte, tyBoolean] then
       ElemVal := EmitByteRhs(AStmt.ValueExpr)
     else
