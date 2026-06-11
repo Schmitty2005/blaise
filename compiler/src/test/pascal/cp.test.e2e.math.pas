@@ -152,9 +152,15 @@ type
     { WriteLn(Double) / WriteLn(Single) — direct float output without DoubleToStr }
     procedure TestRun_WriteLn_Double_Direct;
     procedure TestRun_WriteLn_Single_Direct;
+    { Integer arguments to float builtins + float typecasts }
+    procedure TestRun_Trig_IntegerArgs;
+    procedure TestRun_FloatCast_FromInteger;
   end;
 
 implementation
+
+const
+  LE = #10;
 
 procedure TE2EMathTests.SetUp;
 begin
@@ -1481,6 +1487,52 @@ begin
     ''', Output, RCode));
   AssertEquals('exit code', 0, RCode);
   AssertEquals('WriteLn(Single)', '1.5', Trim(Output));
+end;
+
+procedure TE2EMathTests.TestRun_Trig_IntegerArgs;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  { tanh(32) ~ 1.0; sin(12 rad) ~ -0.53657; sqrt(16) = 4; 2^10 = 1024 }
+  AssertRunsOnAll(
+    '''
+    program P;
+    var
+      d: Double;
+      s: Single;
+      i: Integer;
+    begin
+      i := 32;
+      d := Tanh(i);
+      WriteLn(Round(d * 1000));
+      s := Sin(12);
+      WriteLn(Round(s * 1000));
+      d := Sqrt(16);
+      WriteLn(Round(d));
+      WriteLn(Round(Power(2, 10)));
+    end.
+    ''', '1000' + LE + '-537' + LE + '4' + LE + '1024' + LE, 0);
+end;
+
+procedure TE2EMathTests.TestRun_FloatCast_FromInteger;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(
+    '''
+    program P;
+    var
+      d: Double;
+      s: Single;
+      i: Integer;
+    begin
+      i := 32;
+      d := Double(i);
+      s := Single(i);
+      WriteLn(Round(d));
+      WriteLn(Round(s * 2));
+      d := Tanh(Single(i));
+      WriteLn(Round(d * 1000));
+    end.
+    ''', '32' + LE + '64' + LE + '1000' + LE, 0);
 end;
 
 initialization

@@ -167,6 +167,8 @@ type
     procedure AnalyseFieldAssignment(AAssign: TFieldAssignment);
     function  TryAnalyseFieldElemWrite(AAssign: TFieldAssignment;
       AFldInfo: TFieldInfo): Boolean;
+    function  FloatBuiltinArgType(const AName: string; AArgType: TTypeDesc;
+      ALine, ACol: Integer): TTypeDesc;
     procedure AnalyseProcCall(ACall: TProcCall);
     { Phase A/B overload resolution.  Walks FProcIndex collecting all
       decls whose name matches AName (case-insensitive); filters by
@@ -5722,6 +5724,25 @@ begin
   ACall.ResolvedMethod     := MDecl;
 end;
 
+{ Effective float type of a float-builtin argument: float types pass
+  through unchanged; integer-family arguments implicitly widen to Double
+  (FPC/Delphi semantics, consistent with Blaise's int→float assignment
+  rule).  Anything else is an error. }
+function TSemanticAnalyser.FloatBuiltinArgType(const AName: string;
+  AArgType: TTypeDesc; ALine, ACol: Integer): TTypeDesc;
+begin
+  if AArgType.IsFloat() then
+    Exit(AArgType);
+  if AArgType.Kind in [tyInteger, tyInt64, tyUInt32, tyUInt64,
+                       tySmallInt, tyWord, tyByte] then
+    Exit(FTable.TypeDouble);
+  SemanticError(
+    Format('%s requires a numeric argument, got ''%s''',
+      [AName, AArgType.Name]),
+    ALine, ACol);
+  Result := nil;
+end;
+
 { Element write into an array-typed FIELD: Receiver.Field[Index] := Value.
   The parser stores the subscript in PropIndexExpr (the same slot used for
   indexed property writes); when Field resolves to a real array field the
@@ -7146,6 +7167,9 @@ begin
     so that the codegen can emit dtosi/stosi for the float→integer
     conversions (Ceil/Floor/Round/Trunc) and can dispatch to the *f
     variants for Single arguments on the trig functions.
+    Integer-family arguments are accepted and implicitly widened to
+    Double (FloatBuiltinArgType) — matching FPC/Delphi and Blaise's own
+    implicit int→float assignment rule.
     Min and Max are implemented in pure Pascal in math.pas because they
     are handled correctly by normal overload resolution. }
 
@@ -7154,9 +7178,7 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError('Sqrt requires exactly one argument', AExpr.Line, AExpr.Col);
     Result := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not Result.IsFloat() then
-      SemanticError(Format('Sqrt requires a float argument, got ''%s''', [Result.Name]),
-        AExpr.Line, AExpr.Col);
+    Result := FloatBuiltinArgType(AExpr.Name, Result, AExpr.Line, AExpr.Col);
     AExpr.ResolvedType := Result;
     Exit;
   end;
@@ -7167,9 +7189,7 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);
     ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not ArgType.IsFloat() then
-      SemanticError(Format('%s requires a float argument, got ''%s''', [AExpr.Name, ArgType.Name]),
-        AExpr.Line, AExpr.Col);
+    FloatBuiltinArgType(AExpr.Name, ArgType, AExpr.Line, AExpr.Col);
     Result := FTable.TypeInteger;
     AExpr.ResolvedType := Result;
     Exit;
@@ -7181,9 +7201,7 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);
     ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not ArgType.IsFloat() then
-      SemanticError(Format('%s requires a float argument, got ''%s''', [AExpr.Name, ArgType.Name]),
-        AExpr.Line, AExpr.Col);
+    FloatBuiltinArgType(AExpr.Name, ArgType, AExpr.Line, AExpr.Col);
     Result := FTable.TypeDouble;
     AExpr.ResolvedType := Result;
     Exit;
@@ -7193,8 +7211,10 @@ begin
   begin
     if AExpr.Args.Count <> 2 then
       SemanticError('Power requires exactly two arguments', AExpr.Line, AExpr.Col);
-    AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    AnalyseExpr(TASTExpr(AExpr.Args.Items[1]));
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    FloatBuiltinArgType(AExpr.Name, ArgType, AExpr.Line, AExpr.Col);
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[1]));
+    FloatBuiltinArgType(AExpr.Name, ArgType, AExpr.Line, AExpr.Col);
     Result := FTable.TypeDouble;
     AExpr.ResolvedType := Result;
     Exit;
@@ -7209,10 +7229,10 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);
     Result := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not Result.IsFloat() then
-      SemanticError(Format('%s requires a float argument, got ''%s''', [AExpr.Name, Result.Name]),
-        AExpr.Line, AExpr.Col);
-    AExpr.ResolvedType := Result;  { return type matches argument type — Single→Single, Double→Double }
+    { Return type matches argument type — Single→Single, Double→Double,
+      integer→Double. }
+    Result := FloatBuiltinArgType(AExpr.Name, Result, AExpr.Line, AExpr.Col);
+    AExpr.ResolvedType := Result;
     Exit;
   end;
 
@@ -7221,9 +7241,9 @@ begin
     if AExpr.Args.Count <> 2 then
       SemanticError('ArcTan2 requires exactly two arguments', AExpr.Line, AExpr.Col);
     Result := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    AnalyseExpr(TASTExpr(AExpr.Args.Items[1]));
-    if not Result.IsFloat() then
-      SemanticError('ArcTan2 requires float arguments', AExpr.Line, AExpr.Col);
+    Result := FloatBuiltinArgType(AExpr.Name, Result, AExpr.Line, AExpr.Col);
+    ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[1]));
+    FloatBuiltinArgType(AExpr.Name, ArgType, AExpr.Line, AExpr.Col);
     AExpr.ResolvedType := Result;  { return type matches first argument type }
     Exit;
   end;
@@ -7233,9 +7253,7 @@ begin
     if AExpr.Args.Count <> 1 then
       SemanticError(AExpr.Name + ' requires exactly one argument', AExpr.Line, AExpr.Col);
     ArgType := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
-    if not ArgType.IsFloat() then
-      SemanticError(Format('%s requires a float argument, got ''%s''', [AExpr.Name, ArgType.Name]),
-        AExpr.Line, AExpr.Col);
+    FloatBuiltinArgType(AExpr.Name, ArgType, AExpr.Line, AExpr.Col);
     Result := FTable.TypeBoolean;
     AExpr.ResolvedType := Result;
     Exit;

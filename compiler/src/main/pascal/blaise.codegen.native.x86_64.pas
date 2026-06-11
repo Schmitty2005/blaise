@@ -393,6 +393,7 @@ type
     procedure EmitLoadFloat(const AOperand: string; AType: TTypeDesc);
     { Store %xmm0 into AOperand at the float type's width. }
     procedure EmitStoreFloat(const AOperand: string; AType: TTypeDesc);
+    procedure EmitXmm0WidthAdjust(ASrcType: TTypeDesc; AWantSingle: Boolean);
     { The integer-family type to use when loading the value of AExpr: the
       recorded slot type for a known local/global (authoritative), otherwise
       the node's ResolvedType. }
@@ -3370,6 +3371,22 @@ begin
 end;
 
 { Store %xmm0 into memory. }
+{ Adjust the float width of the value in %xmm0.  EmitExprToXmm0 leaves a
+  SINGLE for tySingle-typed expressions and a DOUBLE for everything else
+  (Double expressions, integer expressions through the int fallback, and
+  integer literals).  Callers that need a specific width convert here. }
+procedure TX86_64Backend.EmitXmm0WidthAdjust(ASrcType: TTypeDesc;
+  AWantSingle: Boolean);
+var
+  SrcIsSingle: Boolean;
+begin
+  SrcIsSingle := (ASrcType <> nil) and (ASrcType.Kind = tySingle);
+  if AWantSingle and not SrcIsSingle then
+    Self.Emit(#9'cvtsd2ss %xmm0, %xmm0')
+  else if SrcIsSingle and not AWantSingle then
+    Self.Emit(#9'cvtss2sd %xmm0, %xmm0');
+end;
+
 procedure TX86_64Backend.EmitStoreFloat(const AOperand: string; AType: TTypeDesc);
 begin
   if (AType <> nil) and (AType.Kind = tySingle) then
@@ -3441,6 +3458,15 @@ begin
     Exit;
   end;
 
+  { Integer-typed expression in a float context (e.g. Tanh(i), Power(2, n)):
+    evaluate to %rax (sign-extended) and convert to double. }
+  if (AExpr.ResolvedType <> nil) and IsIntFamily(AExpr.ResolvedType) then
+  begin
+    Self.EmitExprToEax(AExpr);
+    Self.Emit(#9'cvtsi2sdq %rax, %xmm0');
+    Exit;
+  end;
+
   if AExpr is TIdentExpr then
   begin
     Ty := AExpr.ResolvedType;
@@ -3465,14 +3491,19 @@ begin
     BE  := TBinaryExpr(AExpr);
     IsS := (BE.ResolvedType <> nil) and (BE.ResolvedType.Kind = tySingle);
     { left → %xmm0, push to stack via subq/movsd; right → %xmm0;
-      pop left into %xmm1 via movsd/addq. }
+      pop left into %xmm1 via movsd/addq.  Operands whose own width differs
+      from the operation width (mixed Single/Double, integer operands and
+      integer literals — which EmitExprToXmm0 produces as Double) are
+      converted as they arrive. }
     Self.EmitExprToXmm0(BE.Left);
+    Self.EmitXmm0WidthAdjust(BE.Left.ResolvedType, IsS);
     Self.Emit(#9'subq $8, %rsp');
     if IsS then
       Self.Emit(#9'movss %xmm0, (%rsp)')
     else
       Self.Emit(#9'movsd %xmm0, (%rsp)');
     Self.EmitExprToXmm0(BE.Right);
+    Self.EmitXmm0WidthAdjust(BE.Right.ResolvedType, IsS);
     if IsS then
     begin
       Self.Emit(#9'movss (%rsp), %xmm1');
@@ -3549,6 +3580,31 @@ begin
     FC := TFuncCallExpr(AExpr);
     if Self.EmitFloatBuiltin(FC) then
       Exit;
+    { Type cast Double(X) / Single(X): ResolvedDecl is nil.  Emit a real
+      numeric conversion, never a bit copy. }
+    if (FC.ResolvedDecl = nil) and (FC.Args.Count = 1) then
+    begin
+      if (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
+         TASTExpr(FC.Args.Items[0]).ResolvedType.IsFloat() then
+      begin
+        Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));
+        if (TASTExpr(FC.Args.Items[0]).ResolvedType.Kind = tySingle) and
+           (FC.ResolvedType.Kind = tyDouble) then
+          Self.Emit(#9'cvtss2sd %xmm0, %xmm0')
+        else if (TASTExpr(FC.Args.Items[0]).ResolvedType.Kind = tyDouble) and
+                (FC.ResolvedType.Kind = tySingle) then
+          Self.Emit(#9'cvtsd2ss %xmm0, %xmm0');
+      end
+      else
+      begin
+        Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+        if FC.ResolvedType.Kind = tySingle then
+          Self.Emit(#9'cvtsi2ssq %rax, %xmm0')
+        else
+          Self.Emit(#9'cvtsi2sdq %rax, %xmm0');
+      end;
+      Exit;
+    end;
     if FC.IsImplicitSelfMethod and (FC.ResolvedDecl <> nil) then
     begin
       MD := TMethodDecl(FC.ResolvedDecl);
@@ -8102,12 +8158,11 @@ begin
     begin
       { Float assignment: value → %xmm0, then store. }
       Self.EmitExprToXmm0(Asgn.Expr);
-      { If LHS is Single and RHS is Double (e.g. a float literal which defaults
-        to Double), convert via cvtsd2ss so we store the correct 4-byte value. }
-      if (Asgn.ResolvedLhsType.Kind = tySingle) and
-         (Asgn.Expr.ResolvedType <> nil) and
-         (Asgn.Expr.ResolvedType.Kind = tyDouble) then
-        Self.Emit(#9'cvtsd2ss %xmm0, %xmm0');
+      { Adjust the value to the LHS width: Double/integer RHS into a Single
+        LHS narrows (cvtsd2ss); a Single RHS into a Double LHS widens
+        (cvtss2sd). }
+      Self.EmitXmm0WidthAdjust(Asgn.Expr.ResolvedType,
+        Asgn.ResolvedLhsType.Kind = tySingle);
       if Self.IsLocal(Asgn.Name) then
         Self.EmitStoreFloat(Self.VarOperand(Asgn.Name), Self.LocalType(Asgn.Name))
       else

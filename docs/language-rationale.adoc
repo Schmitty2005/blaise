@@ -3483,3 +3483,44 @@ parentheses, `TFieldAccessExpr` only for field/property reads.
   record value parameters in `TMethodCallExpr`, and native backend missing
   `leaq` for record receivers.  All were masked by the old
   `TFieldAccessExpr.IsMethodCall` path.
+
+== Implicit Integer→Float Widening — Builtins and Typecasts
+
+=== Decision
+
+Integer-family values (`Integer`, `Int64`, `UInt32`, `UInt64`, `SmallInt`,
+`Word`, `Byte`) widen implicitly to `Double` wherever a float is expected:
+
+* Assignment to a `Single` or `Double` variable (`d := i`).
+* Arguments to the float compiler builtins: `Sqrt`, `Ceil`, `Floor`,
+  `Round`, `Trunc`, `Ln`, `Log2`, `Log10`, `Power`, `Sin`, `Cos`, `Tan`,
+  `ArcTan`, `ArcTan2`, `ArcSin`, `ArcCos`, `Sinh`, `Cosh`, `Tanh`,
+  `IsNaN`, `IsInfinite`.  `Sin(12)` and `Tanh(I)` are valid; the result
+  type of the value-returning trig builtins is `Double` for integer
+  arguments (for float arguments it continues to match the argument
+  type — `Single`→`Single`, `Double`→`Double`).
+* Explicit float typecasts: `Double(I)` and `Single(I)` perform a real
+  numeric conversion (never a bit reinterpretation).  Float-to-float
+  casts likewise convert: `Single(D)` narrows, `Double(S)` widens.
+
+=== Rationale
+
+Both FPC and Delphi accept integer arguments at every float call site via
+implicit widening; rejecting them made Blaise's builtins stricter than the
+rest of the language for no benefit — plain assignment already widened
+implicitly, so `d := i; d := Tanh(d)` compiled while `d := Tanh(i)` did
+not.  Mixed integer/float arithmetic (`s * 1000`) was likewise already
+accepted by the semantic pass.  The widening is always to `Double`
+(not `Single`): it is the lossless choice for every 32-bit integer and
+matches the C math library signatures the builtins lower to.
+
+=== Alternatives Rejected
+
+* *Require explicit float literals/casts* (status quo) — rejected: it
+  contradicts both Pascal tradition and Blaise's own assignment rule, and
+  the recommended workaround (`Tanh(Single(I))`) did not work because
+  float typecasts were lowered as bit copies.
+* *Widen to `Single` for small integer types* — rejected: `Double`
+  represents every `Integer` exactly; `Single` does not (24-bit
+  mantissa).  Precision should not silently depend on the argument's
+  declared integer width.

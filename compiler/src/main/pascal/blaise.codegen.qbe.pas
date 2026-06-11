@@ -247,6 +247,8 @@ type
     procedure EmitCompoundStmt(AStmt: TCompoundStmt);
     procedure EmitAssignment(AAssign: TAssignment);
     procedure EmitFieldAssignment(AAssign: TFieldAssignment);
+    function  EmitFloatArg(AExpr: TASTExpr; out AQType: string): string;
+    function  EmitFloatArgAsDouble(AExpr: TASTExpr): string;
     procedure EmitFieldElemStore(AAssign: TFieldAssignment;
       const AFieldPtr: string);
     procedure EmitMethodCall(ACall: TMethodCallStmt);
@@ -8034,6 +8036,45 @@ begin
     EmitLine(Format('  call $_SysWriteNewline(w %s)', [FdLit]));
 end;
 
+{ Emit a float-builtin argument: float-typed expressions pass through with
+  their own QBE type ('s' or 'd'); integer-family expressions are widened
+  to Double ('d') with the matching signed/unsigned conversion. }
+function TCodeGenQBE.EmitFloatArg(AExpr: TASTExpr; out AQType: string): string;
+var
+  T: string;
+begin
+  Result := EmitExpr(AExpr);
+  AQType := QbeTypeOf(AExpr.ResolvedType);
+  if (AQType = 's') or (AQType = 'd') then
+    Exit;
+  T := AllocTemp();
+  case AExpr.ResolvedType.Kind of
+    tyInt64:  EmitLine(Format('  %s =d sltof %s', [T, Result]));
+    tyUInt64: EmitLine(Format('  %s =d ultof %s', [T, Result]));
+    tyUInt32: EmitLine(Format('  %s =d uwtof %s', [T, Result]));
+  else
+    EmitLine(Format('  %s =d swtof %s', [T, Result]));
+  end;
+  Result := T;
+  AQType := 'd';
+end;
+
+{ As EmitFloatArg, but Single arguments are also widened to Double — for
+  builtins that always call the double-precision C function (pow). }
+function TCodeGenQBE.EmitFloatArgAsDouble(AExpr: TASTExpr): string;
+var
+  Q: string;
+  T: string;
+begin
+  Result := EmitFloatArg(AExpr, Q);
+  if Q = 's' then
+  begin
+    T := AllocTemp();
+    EmitLine(Format('  %s =d exts %s', [T, Result]));
+    Result := T;
+  end;
+end;
+
 function TCodeGenQBE.EmitExpr(AExpr: TASTExpr): string;
 var
   T, L, R, T2: string;
@@ -8409,9 +8450,8 @@ begin
 
       if SameText(FC.Name, 'Sqrt') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $sqrtf(s %s)', [T, L]))
         else
@@ -8421,10 +8461,9 @@ begin
 
       if SameText(FC.Name, 'Ceil') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
         R := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
         begin
           EmitLine(Format('  %s =s call $ceilf(s %s)', [T, L]));
@@ -8440,10 +8479,9 @@ begin
 
       if SameText(FC.Name, 'Floor') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
         R := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
         begin
           EmitLine(Format('  %s =s call $floorf(s %s)', [T, L]));
@@ -8459,9 +8497,8 @@ begin
 
       if SameText(FC.Name, 'Trunc') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =w stosi %s', [T, L]))
         else
@@ -8473,10 +8510,9 @@ begin
       begin
         { Round half-away from zero: C99 round() rounds .5 away from zero,
           matching the behaviour of Delphi/FPC Round(). }
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
         R := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
         begin
           EmitLine(Format('  %s =s call $roundf(s %s)', [T, L]));
@@ -8492,9 +8528,8 @@ begin
 
       if SameText(FC.Name, 'Ln') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $logf(s %s)', [T, L]))
         else
@@ -8504,9 +8539,8 @@ begin
 
       if SameText(FC.Name, 'Log2') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $log2f(s %s)', [T, L]))
         else
@@ -8516,9 +8550,8 @@ begin
 
       if SameText(FC.Name, 'Log10') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $log10f(s %s)', [T, L]))
         else
@@ -8528,8 +8561,8 @@ begin
 
       if SameText(FC.Name, 'Power') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
-        R := EmitExpr(TASTExpr(FC.Args.Items[1]));
+        L := EmitFloatArgAsDouble(TASTExpr(FC.Args.Items[0]));
+        R := EmitFloatArgAsDouble(TASTExpr(FC.Args.Items[1]));
         T := AllocTemp();
         EmitLine(Format('  %s =d call $pow(d %s, d %s)', [T, L, R]));
         Exit(T);
@@ -8537,9 +8570,8 @@ begin
 
       if SameText(FC.Name, 'Sin') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $sinf(s %s)', [T, L]))
         else
@@ -8549,9 +8581,8 @@ begin
 
       if SameText(FC.Name, 'Cos') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $cosf(s %s)', [T, L]))
         else
@@ -8561,9 +8592,8 @@ begin
 
       if SameText(FC.Name, 'Tan') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $tanf(s %s)', [T, L]))
         else
@@ -8573,9 +8603,8 @@ begin
 
       if SameText(FC.Name, 'ArcTan') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $atanf(s %s)', [T, L]))
         else
@@ -8585,10 +8614,9 @@ begin
 
       if SameText(FC.Name, 'ArcTan2') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
-        R := EmitExpr(TASTExpr(FC.Args.Items[1]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
+        R := EmitFloatArg(TASTExpr(FC.Args.Items[1]), T2);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $atan2f(s %s, s %s)', [T, L, R]))
         else
@@ -8598,9 +8626,8 @@ begin
 
       if SameText(FC.Name, 'ArcSin') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $asinf(s %s)', [T, L]))
         else
@@ -8610,9 +8637,8 @@ begin
 
       if SameText(FC.Name, 'ArcCos') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $acosf(s %s)', [T, L]))
         else
@@ -8622,9 +8648,8 @@ begin
 
       if SameText(FC.Name, 'Sinh') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $sinhf(s %s)', [T, L]))
         else
@@ -8634,9 +8659,8 @@ begin
 
       if SameText(FC.Name, 'Cosh') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $coshf(s %s)', [T, L]))
         else
@@ -8646,9 +8670,8 @@ begin
 
       if SameText(FC.Name, 'Tanh') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =s call $tanhf(s %s)', [T, L]))
         else
@@ -8658,9 +8681,8 @@ begin
 
       if SameText(FC.Name, 'IsNaN') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =w call $__isnanf(s %s)', [T, L]))
         else
@@ -8670,9 +8692,8 @@ begin
 
       if SameText(FC.Name, 'IsInfinite') then
       begin
-        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        L := EmitFloatArg(TASTExpr(FC.Args.Items[0]), QType);
         T := AllocTemp();
-        QType := QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType);
         if QType = 's' then
           EmitLine(Format('  %s =w call $__isinff(s %s)', [T, L]))
         else
@@ -9164,7 +9185,33 @@ begin
           ArgTemp := EmitExpr(TASTExpr(FC.Args.Items[0]));
         T        := AllocTemp();
         QType    := QbeTypeOf(FC.ResolvedType);
-        if FC.ResolvedType.Kind = tyByte then
+        if FC.ResolvedType.IsFloat() then
+        begin
+          { Double(X) / Single(X): emit a real numeric conversion, never a
+            bit copy.  Integer sources convert with the matching
+            signed/unsigned op; float sources widen/narrow as needed. }
+          if (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
+             TASTExpr(FC.Args.Items[0]).ResolvedType.IsFloat() then
+          begin
+            if QbeTypeOf(TASTExpr(FC.Args.Items[0]).ResolvedType) = QType then
+              EmitLine(Format('  %s =%s copy %s', [T, QType, ArgTemp]))
+            else if QType = 'd' then
+              EmitLine(Format('  %s =d exts %s', [T, ArgTemp]))
+            else
+              EmitLine(Format('  %s =s truncd %s', [T, ArgTemp]));
+          end
+          else
+          begin
+            case TASTExpr(FC.Args.Items[0]).ResolvedType.Kind of
+              tyInt64:  EmitLine(Format('  %s =%s sltof %s', [T, QType, ArgTemp]));
+              tyUInt64: EmitLine(Format('  %s =%s ultof %s', [T, QType, ArgTemp]));
+              tyUInt32: EmitLine(Format('  %s =%s uwtof %s', [T, QType, ArgTemp]));
+            else
+              EmitLine(Format('  %s =%s swtof %s', [T, QType, ArgTemp]));
+            end;
+          end;
+        end
+        else if FC.ResolvedType.Kind = tyByte then
           { Byte(X): truncate to 8 bits — mask to [0..255] }
           EmitLine(Format('  %s =w and %s, 255', [T, ArgTemp]))
         else if FC.ResolvedType.Kind in [tySmallInt, tyWord] then

@@ -43,7 +43,7 @@ type
     procedure TestSemantic_Sqrt_Double_OK;
     procedure TestSemantic_Sqrt_Single_OK;
     procedure TestSemantic_Sqrt_ReturnsDouble;
-    procedure TestSemantic_Sqrt_RejectInteger;
+    procedure TestSemantic_Sqrt_IntegerArg_Accepted;
 
     { Ceil / Floor / Round / Trunc → Integer }
     procedure TestSemantic_Ceil_OK;
@@ -54,7 +54,18 @@ type
     procedure TestSemantic_Round_ReturnsInteger;
     procedure TestSemantic_Trunc_OK;
     procedure TestSemantic_Trunc_ReturnsInteger;
-    procedure TestSemantic_Ceil_RejectInteger;
+    procedure TestSemantic_Ceil_IntegerArg_Accepted;
+
+    { Integer arguments to float builtins coerce to Double (FPC/Delphi
+      semantics; consistent with implicit int->float assignment). }
+    procedure TestSemantic_Trig_IntegerArg_Accepted;
+    procedure TestSemantic_Trig_IntegerArg_ReturnsDouble;
+    procedure TestCodegen_Sin_IntegerArg_CoercesToDouble;
+    procedure TestCodegen_Power_IntegerArgs_CoerceToDouble;
+
+    { Float typecasts must emit real conversions, not bit copies. }
+    procedure TestCodegen_CastDoubleFromInt_EmitsConversion;
+    procedure TestCodegen_CastSingleFromInt_EmitsConversion;
 
     { Ln / Log2 / Log10 → Double }
     procedure TestSemantic_Ln_OK;
@@ -372,9 +383,9 @@ begin
   end;
 end;
 
-procedure TMathTests.TestSemantic_Sqrt_RejectInteger;
+procedure TMathTests.TestSemantic_Sqrt_IntegerArg_Accepted;
 begin
-  SemanticError('program P; var X: Integer; R: Double; begin R := Sqrt(X) end.');
+  SemanticOKBuiltin('program P; var X: Integer; R: Double; begin R := Sqrt(X) end.');
 end;
 
 { ------------------------------------------------------------------ }
@@ -497,9 +508,59 @@ begin
   end;
 end;
 
-procedure TMathTests.TestSemantic_Ceil_RejectInteger;
+procedure TMathTests.TestSemantic_Ceil_IntegerArg_Accepted;
 begin
-  SemanticError('program P; var X: Integer; R: Integer; begin R := Ceil(X) end.');
+  SemanticOKBuiltin('program P; var X: Integer; R: Integer; begin R := Ceil(X) end.');
+end;
+
+procedure TMathTests.TestSemantic_Trig_IntegerArg_Accepted;
+begin
+  SemanticOKBuiltin('program P; var I: Integer; D: Double; begin D := Tanh(I) end.');
+  SemanticOKBuiltin('program P; var D: Double; begin D := Sin(12) end.');
+  SemanticOKBuiltin('program P; var I: Integer; D: Double; begin D := ArcTan2(I, I) end.');
+end;
+
+procedure TMathTests.TestSemantic_Trig_IntegerArg_ReturnsDouble;
+begin
+  { The result of a trig builtin on an integer argument is Double — it must
+    be assignable to a Double without error (and to a Single via implicit
+    narrowing on assignment). }
+  SemanticOKBuiltin('program P; var S: Single; begin S := Sin(12) end.');
+end;
+
+procedure TMathTests.TestCodegen_Sin_IntegerArg_CoercesToDouble;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var I: Integer; D: Double; begin I := 3; D := Sin(I) end.');
+  AssertTrue('int argument converted with swtof', IRContains(IR, 'swtof'));
+  AssertTrue('double sin called', IRContains(IR, 'call $sin('));
+end;
+
+procedure TMathTests.TestCodegen_Power_IntegerArgs_CoerceToDouble;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var D: Double; begin D := Power(2, 10) end.');
+  AssertTrue('int arguments converted with swtof', IRContains(IR, 'swtof'));
+  AssertTrue('pow called', IRContains(IR, 'call $pow('));
+end;
+
+procedure TMathTests.TestCodegen_CastDoubleFromInt_EmitsConversion;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var I: Integer; D: Double; begin I := 32; D := Double(I) end.');
+  AssertTrue('Double(I) emits int->float conversion', IRContains(IR, 'swtof'));
+end;
+
+procedure TMathTests.TestCodegen_CastSingleFromInt_EmitsConversion;
+var IR: string;
+begin
+  IR := GenIRBuiltin(
+    'program P; var I: Integer; S: Single; begin I := 32; S := Single(I) end.');
+  AssertTrue('Single(I) emits int->float conversion',
+    IRContains(IR, '=s swtof'));
 end;
 
 { ------------------------------------------------------------------ }
