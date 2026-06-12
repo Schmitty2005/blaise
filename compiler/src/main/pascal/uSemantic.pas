@@ -2363,10 +2363,11 @@ begin
         RT.AddImplements(IntfDesc);
     end;
 
-    GI          := TGenericInstance.Create();
+    GI := TGenericInstance.Create();
     GI.TypeName := ATypeName;
     GI.ClassDef := ClonedCD;
     GI.TypeDesc := RT;
+    GI.DefUnitName := Templ.DefUnitName;
     if FCurrentUnit <> nil then
       FCurrentUnit.GenericInstances.Add(GI)
     else
@@ -3279,7 +3280,10 @@ begin
       RT := FTable.NewClassType(TD.Name)
     else if TD.Def is TGenericTypeDef then
     begin
-      { Register as template — no concrete type symbol; instantiated on demand }
+      { Register as template — no concrete type symbol; instantiated on demand.
+        Record the declaring unit so allocation sites inside cloned method
+        bodies are attributed to the template's source, not the instantiator. }
+      TGenericTypeDef(TD.Def).DefUnitName := FCurrentUnitName;
       FTable.RegisterGeneric(TD.Name, TD.Def);
       Continue;
     end

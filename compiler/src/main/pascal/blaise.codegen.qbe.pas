@@ -7394,6 +7394,7 @@ var
   GRI:     TGenericRecordInstance;
   MDecl:   TMethodDecl;
   Methods: TObjectList;
+  SavedUnit: string;
 begin
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
   begin
@@ -7415,10 +7416,18 @@ begin
         EmitMethodDef(TD.Name, TMethodDecl(Methods.Items[J]));
   end;
 
-  { Generic class instances — emit with mangled type name }
+  { Generic class instances — emit with mangled type name.  Method bodies
+    are clones of the template AST: their Line fields refer to the unit
+    that DECLARES the template, so allocation-site tracking must report
+    that unit, not the instantiating one. }
+  SavedUnit := FCurrentUnitName;
   for I := 0 to AProg.GenericInstances.Count - 1 do
   begin
     GI := TGenericInstance(AProg.GenericInstances.Items[I]);
+    if GI.DefUnitName <> '' then
+      FCurrentUnitName := GI.DefUnitName
+    else
+      FCurrentUnitName := SavedUnit;
     for J := 0 to GI.ClassDef.Methods.Count - 1 do
     begin
       MDecl := TMethodDecl(GI.ClassDef.Methods.Items[J]);
@@ -7426,6 +7435,7 @@ begin
         EmitMethodDef(QBEMangle(GI.TypeName), MDecl);
     end;
   end;
+  FCurrentUnitName := SavedUnit;
 
   { Generic record instances — emit method bodies }
   for I := 0 to AProg.GenericRecordInstances.Count - 1 do
@@ -12356,6 +12366,7 @@ var
   RT:        TRecordTypeDesc;
   VLine:     string;
   E:         TVTableEntry;
+  SavedUnit: string;
 begin
   FOutput.Clear();
   FStrLits.Clear();
@@ -12383,9 +12394,16 @@ begin
           ImplDecl := TMethodDecl(AUnit.ImplBlock.ProcDecls.Items[I]);
           EmitFuncDef(ImplDecl, IntfNames.IndexOf(ImplDecl.Name) >= 0);
         end;
+        { Generic instance method bodies are template clones — attribute
+          allocation sites to the template's defining unit. }
+        SavedUnit := FCurrentUnitName;
         for I := 0 to AUnit.GenericInstances.Count - 1 do
         begin
           GI := TGenericInstance(AUnit.GenericInstances.Items[I]);
+          if GI.DefUnitName <> '' then
+            FCurrentUnitName := GI.DefUnitName
+          else
+            FCurrentUnitName := SavedUnit;
           for J := 0 to GI.ClassDef.Methods.Count - 1 do
           begin
             MDecl := TMethodDecl(GI.ClassDef.Methods.Items[J]);
@@ -12393,6 +12411,7 @@ begin
               EmitMethodDef(GI.TypeName, MDecl);
           end;
         end;
+        FCurrentUnitName := SavedUnit;
         for I := 0 to AUnit.GenericRecordInstances.Count - 1 do
         begin
           GRI := TGenericRecordInstance(AUnit.GenericRecordInstances.Items[I]);
@@ -12520,6 +12539,7 @@ var
   VLine:        string;
   E:            TVTableEntry;
   GII:          TGenericInterfaceInstance;
+  SavedUnit:    string;
 begin
   { No clears — output and string literal table accumulate across calls.
     Counter resets are safe: QBE temps and block labels are function-scoped. }
@@ -12621,10 +12641,17 @@ begin
 
         { Generic class instances declared in this unit — method bodies and
           per-instance field cleanup functions.  Mirrors the program path in
-          EmitMethodDefs and EmitFieldCleanupFns for AProg.GenericInstances. }
+          EmitMethodDefs and EmitFieldCleanupFns for AProg.GenericInstances.
+          Method bodies are template clones — attribute allocation sites to
+          the template's defining unit. }
+        SavedUnit := FCurrentUnitName;
         for I := 0 to AUnit.GenericInstances.Count - 1 do
         begin
           GI := TGenericInstance(AUnit.GenericInstances.Items[I]);
+          if GI.DefUnitName <> '' then
+            FCurrentUnitName := GI.DefUnitName
+          else
+            FCurrentUnitName := SavedUnit;
           for J := 0 to GI.ClassDef.Methods.Count - 1 do
           begin
             MDecl := TMethodDecl(GI.ClassDef.Methods.Items[J]);
@@ -12634,6 +12661,7 @@ begin
           EmitFieldCleanupFn(ClassSymName(QBEMangle(GI.TypeName)),
                              TRecordTypeDesc(GI.TypeDesc));
         end;
+        FCurrentUnitName := SavedUnit;
         for I := 0 to AUnit.GenericRecordInstances.Count - 1 do
         begin
           GRI := TGenericRecordInstance(AUnit.GenericRecordInstances.Items[I]);

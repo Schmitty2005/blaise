@@ -677,6 +677,10 @@ begin
 
     if Entry.IsGeneric or (Entry.Def is TGenericInterfaceDef) then
     begin
+      { Record the declaring unit on class templates so allocation sites
+        inside cloned method bodies are attributed to the template source. }
+      if Entry.Def is TGenericTypeDef then
+        TGenericTypeDef(Entry.Def).DefUnitName := AIface.Name;
       ATable.RegisterGeneric(Entry.Name, Entry.Def);
       Continue;
     end;

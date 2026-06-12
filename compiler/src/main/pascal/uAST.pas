@@ -737,6 +737,11 @@ type
     ParamNames:       TStringList;   { owned — type parameter names, e.g. ['T'] or ['K','V'] }
     ParamConstraints: TStringList;   { owned — parallel to ParamNames; '' = unconstrained }
     ClassDef:         TClassTypeDef; { owned — template class body with unresolved param types }
+    DefUnitName:      string;        { set by uSemantic/uSemanticImport at registration —
+                                       unit (or program) that declares the template; the
+                                       Line fields of cloned method bodies refer to THIS
+                                       unit's source, so codegen attributes allocation
+                                       sites to it }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -758,6 +763,8 @@ type
     TypeName: string;        { raw e.g. 'TBox<Integer>' }
     ClassDef: TClassTypeDef; { owned — cloned class body with substituted type names }
     [Unretained] TypeDesc: TTypeDesc;     { non-owned — points to TRecordTypeDesc in SymbolTable }
+    DefUnitName: string;     { set by uSemantic at instantiation — unit that DECLARES the
+                               template; method-body Line fields refer to that unit's source }
     constructor Create;
     destructor Destroy; override;
   end;

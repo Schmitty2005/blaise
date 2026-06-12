@@ -45,6 +45,11 @@ type
       loop otherwise. }
     procedure TestDebug_ForInEnumerator_NoLeak;
     procedure TestDebug_ForInEnumerator_NoLeak_Native;
+    { Objects allocated inside generic method bodies must be attributed
+      to the unit that DECLARES the template (the line number already
+      refers to the template source), not the instantiating unit. }
+    procedure TestDebug_GenericAllocSite_ReportsDefiningUnit;
+    procedure TestDebug_GenericAllocSite_ReportsDefiningUnit_Native;
   end;
 
 implementation
@@ -278,6 +283,60 @@ begin
   AssertEquals('exit 0', 0, ExitCode);
   AssertEquals('stdout', '9' + LE, Output);
   AssertTrue('no leak report, got: ' + Output, Pos('leak', Output) < 0);
+end;
+
+const
+  { The enumerator is allocated INSIDE TList<T>.GetEnumerator — a generic
+    method body declared in generics.collections.pas.  The extra AddRef
+    keeps it alive past scope exit, so the leak report must show its
+    allocation site as 'generics.collections:<line>', not '<program>:<line>'. }
+  SrcGenericAllocSite = '''
+    program LeakGen;
+    uses blaise_arc, generics.collections;
+    var
+      L: TList<Integer>;
+      E: TListEnumerator<Integer>;
+    begin
+      L := TList<Integer>.Create();
+      L.Add(1);
+      E := L.GetEnumerator();
+      _ClassAddRef(Pointer(E));
+      WriteLn('done')
+    end.
+    ''';
+
+procedure TE2ELeakCheckTests.TestDebug_GenericAllocSite_ReportsDefiningUnit;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcGenericAllocSite, Output, ExitCode, True));
+  AssertEquals('exit 0', 0, ExitCode);
+  AssertTrue('leak header', Pos('Blaise leak report', Output) >= 0);
+  AssertTrue('enumerator class reported', Pos('TListEnumerator', Output) >= 0);
+  AssertTrue('defining unit in report, got: ' + Output,
+    Pos(' at Generics.Collections:', Output) >= 0);
+  AssertTrue('instantiating program NOT in report, got: ' + Output,
+    Pos(' at LeakGen:', Output) < 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_GenericAllocSite_ReportsDefiningUnit_Native;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run',
+    CompileAndRunWithRTLDebugOn(beNative, SrcGenericAllocSite, Output, ExitCode, True));
+  AssertEquals('exit 0', 0, ExitCode);
+  AssertTrue('leak header', Pos('Blaise leak report', Output) >= 0);
+  AssertTrue('enumerator class reported', Pos('TListEnumerator', Output) >= 0);
+  AssertTrue('defining unit in report, got: ' + Output,
+    Pos(' at Generics.Collections:', Output) >= 0);
+  AssertTrue('instantiating program NOT in report, got: ' + Output,
+    Pos(' at LeakGen:', Output) < 0);
 end;
 
 procedure TE2ELeakCheckTests.TestDebug_NoLeak_NoReport;

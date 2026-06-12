@@ -2932,6 +2932,7 @@ var
   GI:   TGenericInstance;
   GRI:  TGenericRecordInstance;
   Decl: TMethodDecl;
+  SavedUnit: string;
 begin
   for I := 0 to ATypeDecls.Count - 1 do
   begin
@@ -2958,9 +2959,17 @@ begin
     end;
   end;
 
+  { Generic instance method bodies are template clones: their Line fields
+    refer to the unit that DECLARES the template, so allocation-site
+    tracking must report that unit, not the instantiating one. }
+  SavedUnit := FCurrentUnitName;
   for I := 0 to AGenericInstances.Count - 1 do
   begin
     GI := TGenericInstance(AGenericInstances.Items[I]);
+    if GI.DefUnitName <> '' then
+      FCurrentUnitName := GI.DefUnitName
+    else
+      FCurrentUnitName := SavedUnit;
     for J := 0 to GI.ClassDef.Methods.Count - 1 do
     begin
       Decl := TMethodDecl(GI.ClassDef.Methods.Items[J]);
@@ -2968,6 +2977,7 @@ begin
       Self.EmitFunctionDef(Decl);
     end;
   end;
+  FCurrentUnitName := SavedUnit;
 
   for I := 0 to AGenericRecordInstances.Count - 1 do
   begin
