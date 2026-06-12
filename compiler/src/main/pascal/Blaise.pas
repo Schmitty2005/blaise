@@ -23,13 +23,19 @@ program Blaise;
 uses
   SysUtils, Classes, Process, contnrs,
   uLexer, uParser, uAST, uSemantic, blaise.codegen, blaise.codegen.qbe,
-  blaise.codegen.target, blaise.codegen.native, uToolchain,
+  blaise.codegen.target, uToolchain,
+  blaise.codegen.driver,
+  blaise.codegen.qbe.driver,
+  blaise.codegen.native.driver,
   uUnitLoader, uDebugOPDF, uUnitInterface, uSemanticExport, uSemanticImport,
   uUnitInterfaceIO, uIfaceObject, uASTDump,
   uStrCompat, uConfig, blaise.assembler.x86_64;
 
 type
-  TBackend = (bkQBE, bkNative);
+  { Alias so existing signatures (ParseArgs out param, locals) read
+    unchanged.  The underlying enum lives in blaise.codegen.driver and
+    is shared with every consumer of the driver registry. }
+  TBackend = TBackendKind;
 
 const
   Version = '0.11.0-SNAPSHOT';
@@ -691,9 +697,9 @@ var
                                 so the link-step dispatch can still
                                 see them. }
   Semantic:  TSemanticAnalyser;
-  NativeCG:  TCodeGenNative;
   CG:        ICodeGen;
-  UnitCG:    TCodeGenQBE;    { scratch codegen for --incremental per-unit pass }
+  Driver:    TBackendDriver;  { resolved backend driver for top-program codegen }
+  Opts:      TBackendOpts;    { flag bag passed through Driver.CreateCodeGen }
   OE:        TOPDFEmitter;
   Loader:   TUnitLoader;
   Units:    TObjectList;
@@ -778,6 +784,22 @@ begin
 
   if (UnitCacheDir <> '') and (SearchPaths.IndexOf(UnitCacheDir) < 0) then
     SearchPaths.Add(UnitCacheDir);
+
+  { Build the cross-cutting opts bag once, up front.  Both the
+    incremental worker dispatch and the top-program codegen construction
+    read it; building it here keeps the two in sync.  ARC-managed —
+    released at program exit. }
+  Opts := TBackendOpts.Create();
+  Opts.Target := Target;
+  Opts.DebugMode := DebugMode;
+  Opts.OPDFEnabled := OPDFEnabled;
+  Opts.EmitAsm := EmitAsm;
+  Opts.OPDFAsmFile := OPDFAsmFile;
+
+  { Resolve the top-program driver once.  All backend-selection policy
+    lives in PickTopDriver; everything downstream dispatches through
+    the driver. }
+  Driver := PickTopDriver(Backend, EmitIR, EmitAsm);
 
   if not FileExists(SourceFile) then
   begin
@@ -992,21 +1014,12 @@ begin
     end;
 
     try
-      { CG is an ICodeGen (ARC-managed) — no manual Free.  Backend selection:
-        --emit-ir ALWAYS uses the QBE backend (fixpoint + RTL Makefile depend
-        on byte-identical QBE IR), so the native backend is engaged only for
-        actual native output.  --emit-asm implies --backend native.
-        Otherwise --backend native selects TCodeGenNative for the configured target. }
-      if ((Backend = bkNative) or EmitAsm) and not EmitIR then
-      begin
-        NativeCG := TCodeGenNative.Create();
-        NativeCG.SetTarget(Target);
-        CG := NativeCG;
-      end
-      else
-        CG := TCodeGenQBE.Create();
-      CG.SetDebugMode(DebugMode);
-      CG.SetOpdfMode(OPDFEnabled);
+      { CG is an ICodeGen (ARC-managed) — no manual Free.  Backend
+        selection policy lives in PickTopDriver (--emit-ir always forces
+        QBE for fixpoint / RTL Makefile compatibility; --emit-asm implies
+        native); the per-backend construction details — class to
+        instantiate, knobs to wire — live behind Driver.CreateCodeGen. }
+      CG := Driver.CreateCodeGen(Opts);
       if IsUnitMode then
       begin
         { Unit-as-top-level: emit just the unit's bodies, no program wrapping, no @main. }
