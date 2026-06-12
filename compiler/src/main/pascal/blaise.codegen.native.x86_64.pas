@@ -5589,6 +5589,52 @@ begin
     Exit;
   end;
 
+  { String field subscript read: R.Field[I] (0-based char access).
+    Same receiver ladder as the array path, then load the string data
+    pointer from the field slot and read byte I. }
+  if (AExpr is TFieldAccessExpr) and
+     TFieldAccessExpr(AExpr).IsCharAccess and
+     (TFieldAccessExpr(AExpr).FieldInfo <> nil) then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    if FAE.Base <> nil then
+    begin
+      Self.EmitExprToEax(FAE.Base);
+      Self.Emit(#9'movq %rax, %rcx');
+    end
+    else if FAE.IsImplicitSelf then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+      if (FAE.ImplicitBaseInfo <> nil) and (FAE.ImplicitBaseInfo.Offset > 0) then
+        Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.ImplicitBaseInfo.Offset]));
+      if FAE.IsClassAccess then
+        Self.Emit(#9'movq (%rcx), %rcx');
+    end
+    else if FAE.IsClassAccess or FAE.IsVarParam then
+    begin
+      if Self.IsLocal(FAE.RecordName) then
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
+      else
+        Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FAE.RecordName]));
+      if FAE.IsClassAccess and FAE.IsVarParam then
+        { var-param class: slot -> caller var -> instance }
+        Self.Emit(#9'movq (%rcx), %rcx');
+    end
+    else if Self.IsLocal(FAE.RecordName) then
+      Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
+    else
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FAE.RecordName]));
+    if FAE.FieldInfo.Offset > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.FieldInfo.Offset]));
+    Self.Emit(#9'movq (%rcx), %rcx');      { string data pointer }
+    Self.Emit(#9'pushq %rcx');
+    Self.EmitExprToEax(FAE.PropIndexExpr);
+    Self.Emit(#9'popq %rcx');
+    Self.Emit(#9'addq %rcx, %rax');
+    Self.Emit(#9'movzbq (%rax), %rax');
+    Exit;
+  end;
+
   { Array field subscript read: R.Arr[I] where Arr is an array-typed field.
     Compute the record base address, add FieldInfo.Offset to reach the array
     field, then index into the array (static, dynamic, or open). }

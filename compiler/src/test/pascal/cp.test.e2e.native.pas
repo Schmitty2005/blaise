@@ -370,6 +370,10 @@ type
     { Record value assigned into a record-typed field of the sret Result
       must be a full ARC-aware copy, not an 8-byte pointer store. }
     procedure TestRun_Native_SretResult_NestedRecordFieldAssign;
+    { Subscripting a string-typed FIELD (Rec.S[I] / Obj.Data[I]) must be
+      0-based like every other Blaise subscript (regression: QBE
+      subtracted 1, native read garbage through the unhandled path). }
+    procedure TestRun_Native_StringFieldCharRead;
   end;
 
 implementation
@@ -1323,6 +1327,47 @@ const
       WriteLn(L.N);
     end.
     ''';
+
+const
+  SrcStringFieldCharRead = '''
+    program Prg;
+    type
+      TRec = record
+        S: string;
+      end;
+      TBox = class
+      public
+        Data: string;
+        function At(I: Integer): Integer;
+      end;
+    function TBox.At(I: Integer): Integer;
+    begin
+      Result := Data[I];
+    end;
+    var
+      R: TRec;
+      B: TBox;
+      I: Integer;
+    begin
+      R.S := 'record';
+      B := TBox.Create;
+      B.Data := 'ABCDEF';
+      I := 2;
+      WriteLn(R.S[0]);
+      WriteLn(B.Data[4]);
+      WriteLn(B.Data[I + 2]);
+      WriteLn(B.At(1));
+      B.Free;
+    end.
+    ''';
+
+procedure TE2ENativeTests.TestRun_Native_StringFieldCharRead;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcStringFieldCharRead,
+    IntToStr(Ord('r')) + LE + IntToStr(Ord('E')) + LE
+    + IntToStr(Ord('E')) + LE + IntToStr(Ord('B')) + LE, 0);
+end;
 
 procedure TE2ENativeTests.TestRun_Native_SretCall_VarParamArg;
 begin

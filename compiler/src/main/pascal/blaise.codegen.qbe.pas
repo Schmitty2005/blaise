@@ -10562,28 +10562,59 @@ begin
     end
     else if FldAccess.IsCharAccess then
     begin
-      { String field subscript: Rec.Field[N] (1-based) — load field, then read byte at N-1. }
+      { String field subscript: Rec.Field[N] — 0-based, like every other
+        Blaise subscript.  The receiver base follows the same ladder as
+        the array path: class/var-param slots hold a POINTER (load it),
+        implicit Self starts from the Self pointer, inline records use
+        the slot address directly. }
       L := AllocTemp();
-      EmitLine(Format('  %s =l loadl %s', [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+      if FldAccess.IsImplicitSelf then
+      begin
+        EmitLine(Format('  %s =l loadl %%_var_Self', [L]));
+        if (FldAccess.ImplicitBaseInfo <> nil) and
+           (FldAccess.ImplicitBaseInfo.Offset > 0) then
+        begin
+          T := AllocTemp();
+          EmitLine(Format('  %s =l add %s, %d',
+            [T, L, FldAccess.ImplicitBaseInfo.Offset]));
+          L := T;
+        end;
+        if FldAccess.IsClassAccess then
+        begin
+          T := AllocTemp();
+          EmitLine(Format('  %s =l loadl %s', [T, L]));
+          L := T;
+        end;
+      end
+      else if FldAccess.IsClassAccess or FldAccess.IsVarParam then
+      begin
+        EmitLine(Format('  %s =l loadl %s', [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
+        if FldAccess.IsClassAccess and FldAccess.IsVarParam then
+        begin
+          { var-param class: slot -> caller var -> instance. }
+          T := AllocTemp();
+          EmitLine(Format('  %s =l loadl %s', [T, L]));
+          L := T;
+        end;
+      end
+      else
+        EmitLine(Format('  %s =l copy %s', [L, VarRef(FldAccess.RecordName, FldAccess.IsGlobal)]));
       if FldAccess.FieldInfo.Offset > 0 then
       begin
         Ptr := AllocTemp();
         EmitLine(Format('  %s =l add %s, %d', [Ptr, L, FldAccess.FieldInfo.Offset]));
         L := Ptr;
       end;
-      { Load the string pointer (the field value) }
+      { Load the string pointer (the field value) and read byte N. }
       Ptr := AllocTemp();
       EmitLine(Format('  %s =l loadl %s', [Ptr, L]));
-      { Compute 0-based byte offset: idx - 1 }
       T := EmitExpr(FldAccess.PropIndexExpr);
       IdxTemp := AllocTemp();
       EmitLine(Format('  %s =l extsw %s', [IdxTemp, T]));
-      Ptr2    := AllocTemp();
-      EmitLine(Format('  %s =l sub %s, 1', [Ptr2, IdxTemp]));
-      IdxTemp := AllocTemp();
-      EmitLine(Format('  %s =l add %s, %s', [IdxTemp, Ptr, Ptr2]));
+      Ptr2 := AllocTemp();
+      EmitLine(Format('  %s =l add %s, %s', [Ptr2, Ptr, IdxTemp]));
       T := AllocTemp();
-      EmitLine(Format('  %s =w loadub %s', [T, IdxTemp]));
+      EmitLine(Format('  %s =w loadub %s', [T, Ptr2]));
       Result := T;
     end
     else if FldAccess.IsArrayAccess then
