@@ -15,14 +15,16 @@ program Blaise;
     blaise --source Hello.pas --emit-ir
     blaise --source Hello.pas --output hello --target linux-x86_64
 
-  Generates QBE IR, then shells out to qbe + cc to produce the final
-  binary. With --emit-ir, the IR is written to stdout and no binary
-  is produced.
+  Backend-specific work (codegen construction, IR lowering, linking)
+  is dispatched through the TBackendDriver registry
+  (blaise.codegen.driver); this file owns the shared pipeline only.
+  With --emit-ir / --emit-asm, the backend's IR text is written to
+  stdout and no binary is produced.
 }
 
 uses
   SysUtils, Classes, contnrs,
-  uLexer, uParser, uAST, uSemantic, blaise.codegen, blaise.codegen.qbe,
+  uLexer, uParser, uAST, uSemantic, blaise.codegen,
   blaise.codegen.target,
   blaise.codegen.driver,
   blaise.codegen.qbe.driver,
@@ -41,6 +43,32 @@ const
   Version = '0.11.0-SNAPSHOT';
   CompilerName = 'Blaise';
 
+{ Build the --backend usage fragment from the registered drivers, with
+  the default (bkQBE) entry marked.  Keeps the flag parser and the usage
+  text from drifting out of sync with the registry when a backend is
+  added. }
+function BackendUsageLine: string;
+var
+  Names: TStringList;
+  I: Integer;
+  K: TBackendKind;
+begin
+  Result := '';
+  Names := RegisteredBackendNames();
+  try
+    for I := 0 to Names.Count - 1 do
+    begin
+      if I > 0 then
+        Result := Result + ' | ';
+      Result := Result + Names.Strings[I];
+      if ParseBackendName(Names.Strings[I], K) and (K = bkQBE) then
+        Result := Result + ' (default)';
+    end;
+  finally
+    Names.Free();
+  end;
+end;
+
 procedure PrintUsage;
 begin
   WriteLn('Blaise Compiler v', Version);
@@ -54,7 +82,7 @@ begin
   WriteLn('  --source <path>     Pascal source file');
   WriteLn('  --output <path>     Output binary path');
   WriteLn('  --unit-path <dir>   Add directory to unit search path (repeatable)');
-  WriteLn('  --backend <id>      qbe (default) | native');
+  WriteLn('  --backend <id>      ', BackendUsageLine());
   WriteLn('  --target <os>-<cpu> linux-x86_64 (default), linux-i386, linux-arm64,');
   WriteLn('                      freebsd-x86_64, windows-x86_64, macos-arm64');
   WriteLn('  --emit-ir           Print QBE IR to stdout and exit');
@@ -291,13 +319,10 @@ begin
     else if (Arg = '--backend') and (I < ParamCount()) then
     begin
       Inc(I);
-      if ParamStr(I) = 'qbe' then
-        Backend := bkQBE
-      else if ParamStr(I) = 'native' then
-        Backend := bkNative
-      else
+      if not ParseBackendName(ParamStr(I), Backend) then
       begin
-        WriteLn(StdErr, 'Error: --backend must be ''qbe'' or ''native''');
+        WriteLn(StdErr, 'Error: --backend ', ParamStr(I),
+          ' is not a registered backend (', BackendUsageLine(), ')');
         SearchPaths.Free();
         Exit;
       end;
@@ -400,6 +425,7 @@ type
     SymTable: TSymbolTable;
     OPath: string;
     Error: string;
+    Driver: TBackendDriver;   { set by dispatcher; supplies CreateUnitCodeGen + lowering }
     Opts: TBackendOpts;       { shared read-only opts bag, set by dispatcher }
   protected
     procedure Execute; override;
@@ -407,7 +433,7 @@ type
 
 procedure TCompileWorker.Execute;
 var
-  WCG: TCodeGenQBE;
+  WCG: ICodeGen;
   WIR: string;
   WIRFile: string;
   WBifFile: string;
@@ -415,17 +441,21 @@ var
 begin
   Self.Error := '';
   try
-    WCG := TCodeGenQBE.Create();
-    try
-      WCG.SetSymbolTable(Self.SymTable);
-      WCG.SetExportAll(True);
-      WCG.AppendUnit(Self.WorkUnit);
-      WIR := WCG.GetOutput();
-    finally
-      WCG.Free();
+    WCG := Self.Driver.CreateUnitCodeGen(Self.Opts);
+    if WCG = nil then
+    begin
+      { The dispatcher only hands out drivers whose SupportsIncremental
+        is True; a nil codegen here is a driver-contract violation. }
+      Self.Error := Self.Driver.Name() +
+        ' driver claims incremental support but CreateUnitCodeGen returned nil';
+      Exit;
     end;
+    WCG.SetSymbolTable(Self.SymTable);
+    WCG.AppendUnit(Self.WorkUnit);
+    WIR := WCG.GetOutput();
+    WCG := nil;  { release the ARC handle so codegen memory is freed before lowering }
 
-    WIRFile := Self.OPath + '.ssa.tmp';
+    WIRFile := Self.OPath + Self.Driver.IRFileExt() + '.tmp';
     WSource := TStringList.Create();
     try
       WSource.Text := WIR;
@@ -437,7 +467,7 @@ begin
     WBifFile := Self.OPath + '.bif.tmp';
     WriteUnitInterfaceToFile(Self.Iface, WBifFile);
 
-    Self.Error := CompileUnitToObjectSafe(GetDriver(bkQBE),
+    Self.Error := CompileUnitToObjectSafe(Self.Driver,
       WIRFile, Self.OPath, WBifFile, Self.Opts);
 
     DeleteFile(WIRFile);
@@ -487,6 +517,8 @@ var
   CG:        ICodeGen;
   Driver:    TBackendDriver;  { resolved backend driver for top-program codegen }
   Opts:      TBackendOpts;    { flag bag passed through Driver.CreateCodeGen }
+  ToolErr:   string;          { CheckToolchain result ('' on success) }
+  WorkerDriver: TBackendDriver;  { driver for the --incremental worker pool }
   OE:        TOPDFEmitter;
   Loader:   TUnitLoader;
   Units:    TObjectList;
@@ -583,6 +615,21 @@ begin
     lives in PickTopDriver; everything downstream dispatches through
     the driver. }
   Driver := PickTopDriver(Backend, EmitIR, EmitAsm);
+
+  { Pre-flight the backend toolchain before the front-end runs, so a
+    missing tool surfaces immediately rather than after a full parse +
+    semantic pass.  Stdout-only modes (--emit-ir / --emit-asm /
+    --dump-ast) produce no binary and need no external tools — they must
+    never be blocked by a toolchain probe. }
+  if not (EmitIR or EmitAsm or DumpAST) then
+  begin
+    ToolErr := Driver.CheckToolchain(Opts);
+    if ToolErr <> '' then
+    begin
+      WriteLn(StdErr, ToolErr);
+      Halt(1);
+    end;
+  end;
 
   if not FileExists(SourceFile) then
   begin
@@ -757,6 +804,13 @@ begin
       (semantic analysis is complete), so concurrent reads are safe. }
     if Incremental and (Units <> nil) and (Units.Count > 0) then
     begin
+      { Pick a driver for the workers.  Prefer the top-program backend
+        when it supports per-unit emission; otherwise fall back to QBE —
+        QBE-emitted .o files link cleanly alongside any backend's
+        top-program object, so the cache stays usable. }
+      WorkerDriver := GetDriver(Backend);
+      if not WorkerDriver.SupportsIncremental() then
+        WorkerDriver := GetDriver(bkQBE);
       Workers := TObjectList.Create(True);
       try
         for I := 0 to Units.Count - 1 do
@@ -776,6 +830,7 @@ begin
           Worker.Iface := TUnitInterface(UnitIfaces.Items[I]);
           Worker.SymTable := Prog.SymbolTable;
           Worker.OPath := UnitOPath;
+          Worker.Driver := WorkerDriver;
           Worker.Opts := Opts;
           Workers.Add(Worker);
           PrebuiltObjPaths.Add(UnitOPath);
