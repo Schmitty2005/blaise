@@ -57,12 +57,13 @@ end;
 
 function TSepCompileTests.BlaisePath(): string;
 var
-  Root: string;
+  ProjectRoot: string;
 begin
-  Root := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
-  if Root = '' then
-    Root := GetCurrentDir();
-  Result := IncludeTrailingPathDelimiter(Root) + 'compiler/target/blaise'
+  ProjectRoot := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
+  if ProjectRoot <> '' then
+    Result := IncludeTrailingPathDelimiter(ProjectRoot) + 'compiler/target/blaise'
+  else
+    Result := ExtractFilePath(ParamStr(0)) + 'blaise'
 end;
 
 function TSepCompileTests.RunBlaise(const AArgs: array of string;
