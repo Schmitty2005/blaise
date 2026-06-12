@@ -6928,9 +6928,21 @@ begin
     end
     else
     begin
-      { Other built-ins (WriteLn/Write/etc.) — just analyse arg expressions }
+      { Other built-ins (WriteLn/Write/etc.) — analyse args, then for
+        Write/WriteLn specifically reject types that have no text representation. }
       for I := 0 to ACall.Args.Count - 1 do
-        AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+      begin
+        ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+        if SameText(ACall.Name, 'WriteLn') or SameText(ACall.Name, 'Write') then
+          if (ArgType <> nil) and
+             (ArgType.Kind in [tyProcedural, tyRecord, tyClass, tyInterface,
+                               tyMetaClass, tyStaticArray, tyDynArray,
+                               tyOpenArray, tyPointer, tyNil]) then
+            SemanticError(
+              Format('Cannot pass a value of type ''%s'' to ''%s''',
+                [ArgType.Name, ACall.Name]),
+              ACall.Line, ACall.Col);
+      end;
     end;
   end;
 end;

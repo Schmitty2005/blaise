@@ -66,6 +66,7 @@ type
     procedure TestProcCall_WriteLn_NoArgs_OK;
     procedure TestProcCall_WriteLn_StringArg_OK;
     procedure TestProcCall_WriteLn_IntArg_OK;
+    procedure TestProcCall_WriteLn_ProceduralArg_RaisesError;
     procedure TestProcCall_UndeclaredProc_RaisesError;
 
     { Full program analysis }
@@ -419,6 +420,21 @@ end;
 procedure TSemanticTests.TestProcCall_WriteLn_IntArg_OK;
 begin
   Analyse('program P; begin WriteLn(99) end.').Free();
+end;
+
+procedure TSemanticTests.TestProcCall_WriteLn_ProceduralArg_RaisesError;
+begin
+  AnalyseExpectError(
+    '''
+    program TestProc;
+    type TProc = procedure(A, B: Integer);
+    procedure Dummy(A, B: Integer); begin end;
+    var V: TProc;
+    begin
+      V := @Dummy;
+      WriteLn(V)
+    end.
+    ''');
 end;
 
 procedure TSemanticTests.TestProcCall_UndeclaredProc_RaisesError;
