@@ -67,6 +67,7 @@ type
     procedure TestProcCall_WriteLn_StringArg_OK;
     procedure TestProcCall_WriteLn_IntArg_OK;
     procedure TestProcCall_WriteLn_ProceduralArg_RaisesError;
+    procedure TestProcCall_WriteLn_ProcCallResult_RaisesError;
     procedure TestProcCall_UndeclaredProc_RaisesError;
 
     { Full program analysis }
@@ -433,6 +434,23 @@ begin
     begin
       V := @Dummy;
       WriteLn(V)
+    end.
+    ''');
+end;
+
+procedure TSemanticTests.TestProcCall_WriteLn_ProcCallResult_RaisesError;
+begin
+  { writeln(proce(2,3)) where proce is a procedure variable — the call
+    returns no value, so passing its result to WriteLn must be an error. }
+  AnalyseExpectError(
+    '''
+    program TestProc;
+    type TProc = procedure(A, B: Integer);
+    procedure Dummy(A, B: Integer); begin end;
+    var V: TProc;
+    begin
+      V := @Dummy;
+      WriteLn(V(1, 2))
     end.
     ''');
 end;

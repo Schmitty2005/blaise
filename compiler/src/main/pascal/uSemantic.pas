@@ -6934,14 +6934,22 @@ begin
       begin
         ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
         if SameText(ACall.Name, 'WriteLn') or SameText(ACall.Name, 'Write') then
-          if (ArgType <> nil) and
-             (ArgType.Kind in [tyProcedural, tyRecord, tyClass, tyInterface,
-                               tyMetaClass, tyStaticArray, tyDynArray,
-                               tyOpenArray, tyPointer, tyNil]) then
+        begin
+          if (ArgType = nil) or (ArgType.Kind = tyVoid) then
+            SemanticError(
+              Format('Cannot pass a procedure call result (no return value) to ''%s''',
+                [ACall.Name]),
+              TASTExpr(ACall.Args.Items[I]).Line,
+              TASTExpr(ACall.Args.Items[I]).Col)
+          else if ArgType.Kind in [tyProcedural, tyRecord, tyClass, tyInterface,
+                                   tyMetaClass, tyStaticArray, tyDynArray,
+                                   tyOpenArray, tyPointer, tyNil] then
             SemanticError(
               Format('Cannot pass a value of type ''%s'' to ''%s''',
                 [ArgType.Name, ACall.Name]),
-              ACall.Line, ACall.Col);
+              TASTExpr(ACall.Args.Items[I]).Line,
+              TASTExpr(ACall.Args.Items[I]).Col);
+        end;
       end;
     end;
   end;
