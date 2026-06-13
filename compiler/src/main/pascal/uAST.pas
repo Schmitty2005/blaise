@@ -518,6 +518,59 @@ type
   {  Declarations                                                       }
   { ------------------------------------------------------------------ }
 
+  { Constant declaration: const Name = Value; or const Name: Type = Value;
+    or const Name: array[IndexType] of ElemType = (v0, v1, ...).
+    Also carries a variable initialiser (var G: T = value) — see
+    TVarDecl.InitConst — which is why it is declared ahead of TVarDecl. }
+  TConstDecl = class(TASTNode)
+  public
+    Name:           string;
+    TypeName:       string;   { non-empty when a type annotation was written }
+    IntVal:         Int64;    { used when kind = integer }
+    StrVal:         string;   { used when IsString = True or IsFloat = True (raw text) }
+    IsString:       Boolean;
+    IsFloat:        Boolean;  { set when the rhs is a float literal }
+    ConstParts:     TStringList; { non-nil when const expr has ident refs;
+                                   Objects[i] = nil → string literal,
+                                   Objects[i] <> nil → ident reference }
+    { Array-typed constants — set when TypeName starts with 'array' }
+    IsArrayConst:   Boolean;
+    ArrayIndexType: string;   { enum type name used as index, e.g. 'TWeather' }
+    ArrayElemType:  string;   { element type name, e.g. 'string', 'Integer' }
+    ArrayElements:  TStringList; { ordered list of raw element values (strings or int literals) }
+    ArrayIsRangeIndexed: Boolean; { True when index is Low..High integer range }
+    ArrayLowBound:  Integer;
+    ArrayHighBound: Integer;
+    { Integer bit-op expression in the value position — non-nil when the
+      RHS was a chain like 'FG_BLUE or 8' that couldn't be folded at
+      parse time (because it references named constants).  Tokens are
+      stored alternating operand/operator: tokens[0,2,4,...] are operands
+      (Objects[i] = nil → integer literal, the string is the int;
+      Objects[i] <> nil → ident reference); tokens[1,3,5,...] are
+      operator names (one of 'or'/'and'/'xor'/'shl'/'shr').  Semantic
+      resolves idents and folds to CD.IntVal. }
+    IntExprTokens:  TStringList;
+    { Parallel to ArrayElements — each non-nil entry is an IntExprTokens-
+      shaped TStringList describing the bit-op expression for that
+      element.  Semantic folds it and overwrites ArrayElements[i] with
+      the resolved integer.  Nil indicates the matching ArrayElements[i]
+      is already a final scalar (literal, typecast, or ident). }
+    ArrayElementParts: TObjectList;
+    { Set-valued constant — set when the RHS is a set literal '[a, b, ...]'.
+      SetElements holds the member identifier names (empty for '[]').
+      Semantic resolves each to its enum ordinal, ORs (1 shl ord) into IntVal
+      (the bitmask), and gives the symbol a tySet type — either CD.TypeName's
+      declared set type or the set type inferred from the members' enum. }
+    IsSet:       Boolean;
+    SetElements: TStringList;   { non-nil when IsSet; member ident names }
+    { Canonical QBE data-label for an array const, set by uSemantic.  Mangled
+      to a unique symbol so identically-named consts in different scopes (and
+      RTL-internal consts) do not collide at link time.  Empty for non-array
+      consts. }
+    ResolvedQbeName: string;
+    destructor Destroy; override;
+  end;
+
   TVarDecl = class(TASTNode)
   public
     Names:        TStringList;  { owned — one or more names: x, y: Integer }
@@ -536,6 +589,12 @@ type
                                   registry.  See TFieldInfo.IsUnretained. }
     IsGlobal:     Boolean;      { set by uSemantic when this is a program-level global variable }
     IsThreadVar:  Boolean;      { set by parser when declared in a threadvar section }
+    InitConst:    TConstDecl;   { owned — optional initialiser for an initialised
+                                  variable (var G: T = value).  nil when the
+                                  declaration has no initialiser.  Reuses the
+                                  const value/fold/data-emit pipeline; semantic
+                                  type-checks it against ResolvedType and (for
+                                  aggregates) mints InitConst.ResolvedQbeName. }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -830,57 +889,6 @@ type
   public
     Name: string;
     Def:  TASTTypeDef;  { owned }
-    destructor Destroy; override;
-  end;
-
-  { Constant declaration: const Name = Value; or const Name: Type = Value;
-    or const Name: array[IndexType] of ElemType = (v0, v1, ...); }
-  TConstDecl = class(TASTNode)
-  public
-    Name:           string;
-    TypeName:       string;   { non-empty when a type annotation was written }
-    IntVal:         Int64;    { used when kind = integer }
-    StrVal:         string;   { used when IsString = True or IsFloat = True (raw text) }
-    IsString:       Boolean;
-    IsFloat:        Boolean;  { set when the rhs is a float literal }
-    ConstParts:     TStringList; { non-nil when const expr has ident refs;
-                                   Objects[i] = nil → string literal,
-                                   Objects[i] <> nil → ident reference }
-    { Array-typed constants — set when TypeName starts with 'array' }
-    IsArrayConst:   Boolean;
-    ArrayIndexType: string;   { enum type name used as index, e.g. 'TWeather' }
-    ArrayElemType:  string;   { element type name, e.g. 'string', 'Integer' }
-    ArrayElements:  TStringList; { ordered list of raw element values (strings or int literals) }
-    ArrayIsRangeIndexed: Boolean; { True when index is Low..High integer range }
-    ArrayLowBound:  Integer;
-    ArrayHighBound: Integer;
-    { Integer bit-op expression in the value position — non-nil when the
-      RHS was a chain like 'FG_BLUE or 8' that couldn't be folded at
-      parse time (because it references named constants).  Tokens are
-      stored alternating operand/operator: tokens[0,2,4,...] are operands
-      (Objects[i] = nil → integer literal, the string is the int;
-      Objects[i] <> nil → ident reference); tokens[1,3,5,...] are
-      operator names (one of 'or'/'and'/'xor'/'shl'/'shr').  Semantic
-      resolves idents and folds to CD.IntVal. }
-    IntExprTokens:  TStringList;
-    { Parallel to ArrayElements — each non-nil entry is an IntExprTokens-
-      shaped TStringList describing the bit-op expression for that
-      element.  Semantic folds it and overwrites ArrayElements[i] with
-      the resolved integer.  Nil indicates the matching ArrayElements[i]
-      is already a final scalar (literal, typecast, or ident). }
-    ArrayElementParts: TObjectList;
-    { Set-valued constant — set when the RHS is a set literal '[a, b, ...]'.
-      SetElements holds the member identifier names (empty for '[]').
-      Semantic resolves each to its enum ordinal, ORs (1 shl ord) into IntVal
-      (the bitmask), and gives the symbol a tySet type — either CD.TypeName's
-      declared set type or the set type inferred from the members' enum. }
-    IsSet:       Boolean;
-    SetElements: TStringList;   { non-nil when IsSet; member ident names }
-    { Canonical QBE data-label for an array const, set by uSemantic.  Mangled
-      to a unique symbol so identically-named consts in different scopes (and
-      RTL-internal consts) do not collide at link time.  Empty for non-array
-      consts. }
-    ResolvedQbeName: string;
     destructor Destroy; override;
   end;
 
@@ -2042,6 +2050,8 @@ begin
     Result.Names.Add(ASrc.Names.Strings[I]);
   for I := 0 to ASrc.Attributes.Count - 1 do
     Result.Attributes.Add(ASrc.Attributes.Strings[I]);
+  if ASrc.InitConst <> nil then
+    Result.InitConst := CloneConstDecl(ASrc.InitConst);
 end;
 
 function CloneFieldDecl(ASrc: TFieldDecl): TFieldDecl;

@@ -531,8 +531,13 @@ ThreadVarSection
  * copy of the variable, zero-initialised on thread creation.  Syntactically
  * identical to VarSection except for the keyword. *)
 
+(* A variable declaration may carry an initialiser ( = ConstValue ).  The
+ * initialiser uses the same value grammar as a typed constant (scalar,
+ * string, set, or parenthesised aggregate list) and is folded at compile
+ * time, then emitted into the data section.  An initialised declaration may
+ * declare only a single name (IdentList must be one IDENT). *)
 VarDecl
-    = IdentList COLON TypeName SEMICOLON
+    = IdentList COLON TypeName [ EQUALS ConstValue ] SEMICOLON
     ;
 
 

@@ -161,6 +161,7 @@ type
     function  AssignmentTargetsParameter(const AName: string;
                                           const ADecl: TMethodDecl): Boolean;
     procedure AnalyseVarDecls(ABlock: TBlock);
+    procedure AnalyseVarInitializer(ADecl: TVarDecl);
     procedure AnalyseStmts(ABlock: TBlock);
     procedure AnalyseStmt(AStmt: TASTStmt);
     procedure AnalyseAssignment(AAssign: TAssignment);
@@ -945,6 +946,8 @@ begin
             TVarDecl(AUnit.IntfBlock.Decls.Items[I]).Col);
         end;
       end;
+      if TVarDecl(AUnit.IntfBlock.Decls.Items[I]).InitConst <> nil then
+        Self.AnalyseVarInitializer(TVarDecl(AUnit.IntfBlock.Decls.Items[I]));
     end;
 
     { Register interface forward declaration signatures }
@@ -1032,6 +1035,8 @@ begin
             TVarDecl(AUnit.ImplBlock.Decls.Items[I]).Col);
         end;
       end;
+      if TVarDecl(AUnit.ImplBlock.Decls.Items[I]).InitConst <> nil then
+        Self.AnalyseVarInitializer(TVarDecl(AUnit.ImplBlock.Decls.Items[I]));
     end;
 
     { Process implementation declarations — skip generic class method impls
@@ -4945,6 +4950,116 @@ begin
           Decl.Line, Decl.Col);
       end;
     end;
+    if Decl.InitConst <> nil then
+      Self.AnalyseVarInitializer(Decl);
+  end;
+end;
+
+{ Analyse and fold a variable initialiser (var G: T = value).  The initialiser
+  is carried as a TConstDecl (Decl.InitConst) reusing the const value pipeline.
+  Scalar/string values are folded and type-checked against the declared type;
+  array values derive their element type and bounds from the declared static
+  array type, fold their elements, and mint a data label.  Record initialisers
+  are not yet supported (no record-const machinery). }
+procedure TSemanticAnalyser.AnalyseVarInitializer(ADecl: TVarDecl);
+var
+  CD:     TConstDecl;
+  Typ:    TTypeDesc;
+  SAT:    TStaticArrayTypeDesc;
+  J:      Integer;
+begin
+  CD  := ADecl.InitConst;
+  Typ := ADecl.ResolvedType;
+  if Typ = nil then Exit;
+
+  { Initialisers are only meaningful for global storage — locals are zeroed and
+    assigned in the body.  Initialised locals could be supported later (emit the
+    assignment at scope entry); reject for now to keep the data-section path the
+    single source of truth. }
+  if not ADecl.IsGlobal then
+    SemanticError(
+      'Variable initialisers are only supported on global variables',
+      CD.Line, CD.Col);
+
+  { Aggregate (array) initialiser: derive element type + bounds from the
+    declared static array type, then drive the array-const folding. }
+  if CD.IsArrayConst then
+  begin
+    if Typ.Kind <> tyStaticArray then
+      SemanticError(Format(
+        'Parenthesised initialiser requires a static array type, not ''%s''',
+        [ADecl.TypeName]), CD.Line, CD.Col);
+    SAT := TStaticArrayTypeDesc(Typ);
+    if SAT.ElementType.Kind = tyStaticArray then
+      SemanticError(
+        'Initialisers for multi-dimensional arrays are not yet supported',
+        CD.Line, CD.Col);
+    CD.ArrayElemType := SAT.ElementType.Name;
+    CD.ArrayLowBound := SAT.LowBound;
+    CD.ArrayHighBound := SAT.HighBound;
+    CD.ArrayIsRangeIndexed := True;
+    if CD.ArrayElements.Count <> (SAT.HighBound - SAT.LowBound + 1) then
+      SemanticError(Format(
+        'Initialiser for ''%s'' has %d element(s) but the array needs %d',
+        [ADecl.Names.Strings[0], CD.ArrayElements.Count,
+         SAT.HighBound - SAT.LowBound + 1]), CD.Line, CD.Col);
+    { Fold any deferred bit-op element expressions to integer strings. }
+    if CD.ArrayElementParts <> nil then
+      for J := 0 to CD.ArrayElementParts.Count - 1 do
+        if (CD.ArrayElementParts.Items[J] <> nil) and
+           (J < CD.ArrayElements.Count) then
+          CD.ArrayElements.Put(J, IntToStr(FoldConstBitOpExpr(
+            TStringList(CD.ArrayElementParts.Items[J]), CD.Line, CD.Col)));
+    if CD.ResolvedQbeName = '' then
+      CD.ResolvedQbeName := Self.NewArrayConstLabel(CD.Name);
+    Exit;
+  end;
+
+  if Typ.Kind = tyRecord then
+    SemanticError(
+      'Record variable initialisers are not yet supported',
+      CD.Line, CD.Col);
+
+  { Set initialiser: not yet supported on variables (AnalyseSetConstDecl also
+    defines a const symbol, which would clash with the variable symbol).  Use a
+    named set constant for now. }
+  if CD.IsSet then
+    SemanticError(
+      'Set variable initialisers are not yet supported; use a named constant',
+      CD.Line, CD.Col);
+
+  { Scalar / string initialiser. }
+  if CD.IsString and (CD.ConstParts <> nil) then
+    SemanticError(
+      'Named-constant string initialisers are not yet supported on variables',
+      CD.Line, CD.Col);
+  if CD.IntExprTokens <> nil then
+    CD.IntVal := FoldConstBitOpExpr(CD.IntExprTokens, CD.Line, CD.Col);
+
+  { Type compatibility check between the folded value kind and the declared
+    type — catches 'var N: Integer = ''text''' and similar. }
+  if CD.IsString then
+  begin
+    if not Typ.IsString() then
+      SemanticError(Format(
+        'String initialiser is incompatible with type ''%s''', [ADecl.TypeName]),
+        CD.Line, CD.Col);
+  end
+  else if CD.IsFloat then
+  begin
+    if not (Typ.Kind in [tyDouble, tySingle]) then
+      SemanticError(Format(
+        'Real initialiser is incompatible with type ''%s''', [ADecl.TypeName]),
+        CD.Line, CD.Col);
+  end
+  else
+  begin
+    { Integer/boolean/enum-ordinal initialiser. }
+    if not (Typ.IsNumeric() or (Typ.Kind in [tyBoolean, tyEnum,
+            tyPointer, tyPChar])) then
+      SemanticError(Format(
+        'Numeric initialiser is incompatible with type ''%s''', [ADecl.TypeName]),
+        CD.Line, CD.Col);
   end;
 end;
 

@@ -237,6 +237,8 @@ type
     procedure EmitExcFrameAllocs(ABlock: TBlock);
     procedure CollectThreadVarNames(ABlock: TBlock);
     procedure EmitGlobalVarData(ABlock: TBlock);
+    procedure EmitGlobalVarInit(const AVarName: string; AType: TTypeDesc;
+                                CD: TConstDecl; const APrefix: string);
     procedure EmitArrayConstData(CD: TConstDecl; const APrefix: string);
     procedure EmitClassConstData(AClassDef: TClassTypeDef; const AClassName: string);
     procedure EmitGlobalConstData(ABlock: TBlock);
@@ -1824,6 +1826,15 @@ begin
       VarName := Decl.Names.Strings[J];
       if Decl.IsThreadVar then
         FThreadVarNames.Add(VarName);
+      { Initialised global: emit the folded value into the data section instead
+        of a zero slot.  threadvars cannot carry a non-zero static initialiser
+        (they live in .tbss), so the parser/semantic restrict initialisers to
+        non-threadvar globals — assert by falling through to the zero path. }
+      if (Decl.InitConst <> nil) and not Decl.IsThreadVar then
+      begin
+        Self.EmitGlobalVarInit(VarName, Decl.ResolvedType, Decl.InitConst, Pfx);
+        Continue;
+      end;
       case Decl.ResolvedType.Kind of
         tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum:
           EmitLine(Format('%s $%s = { w 0 }', [Pfx, VarName]));
@@ -1873,6 +1884,92 @@ begin
         EmitLine(Format('%s $%s = { l 0 }', [Pfx, VarName]));
       end;
     end;
+  end;
+end;
+
+{ Emit an initialised global variable's data slot from its folded const value.
+  Scalar/string/enum/boolean/real values become a single typed field; static
+  array values become an inline element list (same layout as array consts).
+  APrefix is the QBE storage prefix ('export data' / 'export thread data'). }
+procedure TCodeGenQBE.EmitGlobalVarInit(const AVarName: string; AType: TTypeDesc;
+  CD: TConstDecl; const APrefix: string);
+var
+  J:          Integer;
+  Parts:      string;
+  StrIdx:     Integer;
+  IsStrArray: Boolean;
+  ElemKind:   TTypeKind;
+  ElemSig:    string;
+  SAT:        TStaticArrayTypeDesc;
+begin
+  { Static array initialiser: inline element list. }
+  if (AType.Kind = tyStaticArray) and CD.IsArrayConst then
+  begin
+    SAT := TStaticArrayTypeDesc(AType);
+    ElemKind := SAT.ElementType.Kind;
+    IsStrArray := ElemKind = tyString;
+    if IsStrArray then
+    begin
+      for J := 0 to CD.ArrayElements.Count - 1 do
+        if FStrLits.IndexOf(CD.ArrayElements[J]) < 0 then
+          FStrLits.Add(CD.ArrayElements[J]);
+      EmitPendingStrLits();
+    end;
+    { Per-element QBE field sigil by element width. }
+    case ElemKind of
+      tyByte, tyBoolean:           ElemSig := 'b';
+      tySmallInt, tyWord:          ElemSig := 'h';
+      tyInteger, tyUInt32, tyEnum: ElemSig := 'w';
+      tyInt64, tyUInt64, tyString, tyPointer, tyPChar: ElemSig := 'l';
+      tyDouble:                    ElemSig := 'd';
+      tySingle:                    ElemSig := 's';
+    else
+      ElemSig := 'w';
+    end;
+    Parts := '';
+    for J := 0 to CD.ArrayElements.Count - 1 do
+    begin
+      if J > 0 then Parts := Parts + ', ';
+      if IsStrArray then
+      begin
+        StrIdx := FStrLits.IndexOf(CD.ArrayElements[J]);
+        Parts := Parts + Format('l $__s%d + 12', [StrIdx]);
+      end
+      else
+        Parts := Parts + Format('%s %s', [ElemSig, CD.ArrayElements[J]]);
+    end;
+    EmitLine(Format('%s $%s = { %s }', [APrefix, AVarName, Parts]));
+    Exit;
+  end;
+
+  { String scalar: point at an immortal static string header ($__sN + 12). }
+  if AType.IsString() then
+  begin
+    if FStrLits.IndexOf(CD.StrVal) < 0 then
+      FStrLits.Add(CD.StrVal);
+    EmitPendingStrLits();
+    StrIdx := FStrLits.IndexOf(CD.StrVal);
+    EmitLine(Format('%s $%s = { l $__s%d + 12 }', [APrefix, AVarName, StrIdx]));
+    Exit;
+  end;
+
+  { Scalar numeric / boolean / enum / real. }
+  case AType.Kind of
+    tyInteger, tyUInt32, tyBoolean, tyByte, tyEnum:
+      EmitLine(Format('%s $%s = { w %d }', [APrefix, AVarName, CD.IntVal]));
+    tySmallInt, tyWord:
+      EmitLine(Format('%s $%s = { h %d }', [APrefix, AVarName, CD.IntVal]));
+    tyInt64, tyUInt64:
+      EmitLine(Format('%s $%s = { l %d }', [APrefix, AVarName, CD.IntVal]));
+    tyPointer, tyPChar:
+      EmitLine(Format('%s $%s = { l %d }', [APrefix, AVarName, CD.IntVal]));
+    tyDouble:
+      EmitLine(Format('%s $%s = { d d_%s }', [APrefix, AVarName, CD.StrVal]));
+    tySingle:
+      EmitLine(Format('%s $%s = { s s_%s }', [APrefix, AVarName, CD.StrVal]));
+  else
+    { Unsupported kinds are rejected in semantic; emit a zero slot defensively. }
+    EmitLine(Format('%s $%s = { l 0 }', [APrefix, AVarName]));
   end;
 end;
 

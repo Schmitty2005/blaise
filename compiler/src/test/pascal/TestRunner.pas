@@ -76,6 +76,8 @@ uses
   cp.test.process,
   cp.test.openarray,
   cp.test.staticarray,
+  cp.test.varinit,
+  cp.test.e2e.varinit,
   cp.test.e2e.base,
   cp.test.bif_coverage,
   cp.test.e2e.exceptions,

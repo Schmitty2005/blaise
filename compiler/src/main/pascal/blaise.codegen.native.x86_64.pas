@@ -82,6 +82,7 @@ type
       is the slot's static type so loads, stores, and the .data directive all
       pick the right width and signedness. }
     FDataGlobals: TOrderedDictionary<string, TTypeDesc>;
+    FGlobalInits: TDictionary<string, TConstDecl>;  { global name → initialiser (var G: T = value) }
     FThreadVarGlobals: TDictionary<string, Boolean>;
     FWeakGlobals:      TDictionary<string, Boolean>;
     { Class-name string blobs already emitted to avoid duplicate label errors.
@@ -206,6 +207,10 @@ type
     { Emit a leaq __sN+12(%rip), %rax for the string literal AValue,
       registering a new .rodata blob if not yet seen. }
     procedure EmitStrLitAddr(const AValue: string);
+    { Emit an initialised global's data slot from its folded const value
+      (var G: T = value).  Called from EmitDataSection inside the .data pass. }
+    procedure EmitGlobalInitData(const AName: string; AType: TTypeDesc;
+                                 CD: TConstDecl);
     { Emit string literal blobs in .rodata. Called from EmitDataSection. }
     procedure EmitStrLitSection;
     { Emit an immortal class-name string blob in the data section and return
@@ -687,6 +692,7 @@ begin
   inherited Create(ATarget);
   FLabelCount          := 0;
   FDataGlobals         := TOrderedDictionary<string, TTypeDesc>.Create();
+  FGlobalInits         := TDictionary<string, TConstDecl>.Create();
   FThreadVarGlobals    := TDictionary<string, Boolean>.Create();
   FWeakGlobals         := TDictionary<string, Boolean>.Create();
   FClassNameEmitted    := TDictionary<string, Boolean>.Create();
@@ -730,6 +736,7 @@ begin
   FStrLits.Free();
   FWeakGlobals.Free();
   FThreadVarGlobals.Free();
+  FGlobalInits.Free();
   FDataGlobals.Free();
   inherited Destroy();
 end;
@@ -785,6 +792,7 @@ var
   Directive: string;
   IsTls:    Boolean;
   HasData, HasTbss: Boolean;
+  InitCD:   TConstDecl;
 begin
   if (FDataGlobals.Count = 0) and (FProgExcFrameCount = 0) then
   begin
@@ -809,6 +817,13 @@ begin
     Name  := FDataGlobals.Keys[I];
     IsTls := Self.IsThreadVarGlobal(Name);
     if IsTls then Continue;
+    { Initialised global (var G: T = value): emit the folded value.  threadvars
+      are excluded (they live in .tbss / always zero). }
+    if FGlobalInits.TryGetValue(Name, InitCD) then
+    begin
+      Self.EmitGlobalInitData(Name, Self.GlobalType(Name), InitCD);
+      Continue;
+    end;
     { Method pointers (of-object): 16-byte Code+Data block, zero-initialised. }
     if (Self.GlobalType(Name) <> nil) and
        (Self.GlobalType(Name).Kind = tyProcedural) and
@@ -917,6 +932,110 @@ begin
     end;
   end;
   Self.EmitStrLitSection();
+end;
+
+procedure TX86_64Backend.EmitGlobalInitData(const AName: string;
+  AType: TTypeDesc; CD: TConstDecl);
+var
+  J:        Integer;
+  ElemKind: TTypeKind;
+  ElemDir:  string;
+  Idx:      Integer;
+  SAT:      TStaticArrayTypeDesc;
+begin
+  { Static array initialiser: inline element list. }
+  if (AType.Kind = tyStaticArray) and CD.IsArrayConst then
+  begin
+    SAT := TStaticArrayTypeDesc(AType);
+    ElemKind := SAT.ElementType.Kind;
+    Self.Emit('.balign 8');
+    if Copy(AName, 0, 2) <> '.L' then
+      Self.Emit('.globl ' + AName);
+    Self.Emit(AName + ':');
+    if ElemKind = tyString then
+    begin
+      for J := 0 to CD.ArrayElements.Count - 1 do
+        if FStrLits.IndexOf(CD.ArrayElements[J]) < 0 then
+          FStrLits.Add(CD.ArrayElements[J]);
+      for J := 0 to CD.ArrayElements.Count - 1 do
+      begin
+        Idx := FStrLits.IndexOf(CD.ArrayElements[J]);
+        Self.Emit(Format(#9'.quad __s%d + 12', [Idx]));
+      end;
+      Exit;
+    end;
+    case ElemKind of
+      tyByte, tyBoolean:           ElemDir := #9'.byte ';
+      tySmallInt, tyWord:          ElemDir := #9'.word ';
+      tyInt64, tyUInt64, tyPointer, tyPChar: ElemDir := #9'.quad ';
+      tyDouble:                    ElemDir := #9'.double ';
+      tySingle:                    ElemDir := #9'.float ';
+    else
+      ElemDir := #9'.long ';
+    end;
+    for J := 0 to CD.ArrayElements.Count - 1 do
+      Self.Emit(ElemDir + CD.ArrayElements[J]);
+    Exit;
+  end;
+
+  { String scalar: point at an immortal static string header (__sN + 12). }
+  if AType.IsString() then
+  begin
+    if FStrLits.IndexOf(CD.StrVal) < 0 then
+      FStrLits.Add(CD.StrVal);
+    Idx := FStrLits.IndexOf(CD.StrVal);
+    Self.Emit('.balign 8');
+    if Copy(AName, 0, 2) <> '.L' then
+      Self.Emit('.globl ' + AName);
+    Self.Emit(AName + ':');
+    Self.Emit(Format(#9'.quad __s%d + 12', [Idx]));
+    Exit;
+  end;
+
+  { Scalar numeric / boolean / enum / real. }
+  case AType.Kind of
+    tyDouble:
+      begin
+        Self.Emit('.balign 8');
+        if Copy(AName, 0, 2) <> '.L' then Self.Emit('.globl ' + AName);
+        Self.Emit(AName + ':');
+        Self.Emit(Format(#9'.double %s', [CD.StrVal]));
+      end;
+    tySingle:
+      begin
+        Self.Emit('.balign 4');
+        if Copy(AName, 0, 2) <> '.L' then Self.Emit('.globl ' + AName);
+        Self.Emit(AName + ':');
+        Self.Emit(Format(#9'.float %s', [CD.StrVal]));
+      end;
+    tyByte, tyBoolean:
+      begin
+        Self.Emit('.balign 1');
+        if Copy(AName, 0, 2) <> '.L' then Self.Emit('.globl ' + AName);
+        Self.Emit(AName + ':');
+        Self.Emit(Format(#9'.byte %d', [CD.IntVal]));
+      end;
+    tySmallInt, tyWord:
+      begin
+        Self.Emit('.balign 2');
+        if Copy(AName, 0, 2) <> '.L' then Self.Emit('.globl ' + AName);
+        Self.Emit(AName + ':');
+        Self.Emit(Format(#9'.word %d', [CD.IntVal]));
+      end;
+    tyInt64, tyUInt64, tyPointer, tyPChar:
+      begin
+        Self.Emit('.balign 8');
+        if Copy(AName, 0, 2) <> '.L' then Self.Emit('.globl ' + AName);
+        Self.Emit(AName + ':');
+        Self.Emit(Format(#9'.quad %d', [CD.IntVal]));
+      end;
+  else
+    { Integer / UInt32 / enum — 32-bit. }
+    Self.Emit('.balign 4');
+    if Copy(AName, 0, 2) <> '.L' then Self.Emit('.globl ' + AName);
+    Self.Emit(AName + ':');
+    Self.Emit(Format(#9'.long %d', [CD.IntVal]));
+  end;
 end;
 
 { ------------------------------------------------------------------ }
@@ -13279,6 +13398,8 @@ begin
           Self.MarkThreadVar(VD.Names.Strings[J]);
         if VD.IsWeak then
           Self.MarkWeakGlobal(VD.Names.Strings[J]);
+        if VD.InitConst <> nil then
+          FGlobalInits.Add(VD.Names.Strings[J], VD.InitConst);
       end;
   end;
 
@@ -13397,6 +13518,8 @@ begin
         Self.AddGlobal(VD.Names.Strings[J], VD.ResolvedType);
         if VD.IsThreadVar then
           Self.MarkThreadVar(VD.Names.Strings[J]);
+        if VD.InitConst <> nil then
+          FGlobalInits.Add(VD.Names.Strings[J], VD.InitConst);
       end;
   end;
   for I := 0 to AUnit.ImplBlock.Decls.Count - 1 do
@@ -13412,6 +13535,8 @@ begin
         Self.AddGlobal(VD.Names.Strings[J], VD.ResolvedType);
         if VD.IsThreadVar then
           Self.MarkThreadVar(VD.Names.Strings[J]);
+        if VD.InitConst <> nil then
+          FGlobalInits.Add(VD.Names.Strings[J], VD.InitConst);
       end;
   end;
 

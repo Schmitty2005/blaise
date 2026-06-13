@@ -66,6 +66,7 @@ type
     procedure ParseTypeSection(ABlock: TBlock);
     procedure ParseTypeDecl(ABlock: TBlock);
     procedure ParseConstBlock(AList: TObjectList);
+    procedure ParseConstValue(CD: TConstDecl);
     function  TryParseConstIntTypecast(out AValue: Int64): Boolean;
     function  CurrentIsConstBitOp: Boolean;
     function  ConsumeConstBitOpName: string;
@@ -777,9 +778,6 @@ end;
 procedure TParser.ParseConstBlock(AList: TObjectList);
 var
   CD:          TConstDecl;
-  CastVal:     Int64;
-  FirstOperand: string;
-  FirstIsIdent: Boolean;
 begin
   Expect(tkConst);
   while Check(tkIdent) do
@@ -842,6 +840,22 @@ begin
           [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
     end;
     Expect(tkEquals);
+    Self.ParseConstValue(CD);
+    Expect(tkSemicolon);
+    AList.Add(CD);
+  end;
+end;
+
+{ Parse a constant value (everything after '=', up to but excluding the
+  terminating ';') into CD.  CD.IsArrayConst / CD.TypeName must already be set
+  by the caller when they were declared.  Shared by const declarations and
+  initialised variable declarations (var G: T = value). }
+procedure TParser.ParseConstValue(CD: TConstDecl);
+var
+  CastVal:      Int64;
+  FirstOperand: string;
+  FirstIsIdent: Boolean;
+begin
     { Array const value list: (elem, elem, ...) }
     if CD.IsArrayConst then
     begin
@@ -932,9 +946,7 @@ begin
           Break;
       end;
       Expect(tkRParen);
-      Expect(tkSemicolon);
-      AList.Add(CD);
-      Continue;
+      Exit;
     end;
     if Check(tkMinus) then
     begin
@@ -1083,9 +1095,6 @@ begin
       raise EParseError.Create(Format(
         'Expected numeric or string constant at line %d col %d in %s',
         [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-    Expect(tkSemicolon);
-    AList.Add(CD);
-  end;
 end;
 
 function TParser.ParseEnumDef: TEnumTypeDef;
@@ -1892,6 +1901,26 @@ begin
     end;
     Expect(tkColon);
     Decl.TypeName := ParseTypeName();
+    { Optional initialiser: var G: T = value.  Parsed via the shared const
+      value scanner; semantic folds it and codegen emits it into the data
+      section.  An aggregate (array/record) type takes a parenthesised value
+      list, so mark the carrier IsArrayConst for the array branch. }
+    if Check(tkEquals) then
+    begin
+      if Decl.Names.Count <> 1 then
+        raise EParseError.Create(Format(
+          'An initialised variable declaration may declare only one name at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      Advance();  { consume '=' }
+      Decl.InitConst := TConstDecl.Create();
+      Decl.InitConst.Line := Decl.Line;
+      Decl.InitConst.Col  := Decl.Col;
+      Decl.InitConst.Name := Decl.Names.Strings[0];
+      Decl.InitConst.TypeName := Decl.TypeName;
+      if Copy(Decl.TypeName, 0, 6) = 'array[' then
+        Decl.InitConst.IsArrayConst := True;
+      Self.ParseConstValue(Decl.InitConst);
+    end;
     Expect(tkSemicolon);
     ABlock.Decls.Add(Decl);
   except
