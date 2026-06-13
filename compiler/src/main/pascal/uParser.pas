@@ -999,6 +999,22 @@ begin
       CD.IntExprTokens := CollectConstBitOpExpr(FirstOperand, True);
       CD.IsString := False;
     end
+    else if Check(tkIdent)
+         and (SameText(FCurrent.Value, 'True') or SameText(FCurrent.Value, 'False'))
+         and not (PeekKind() in [tkPlus, tkOr, tkAnd, tkXor, tkShl, tkShr]) then
+    begin
+      { Boolean literal constant: const Enabled = True;  True/False are plain
+        identifiers (no dedicated token), so catch them here before the generic
+        ident-as-string path treats them as a string constant.  TypeName is set
+        to Boolean so the debug emitter can type it (renders True/False, not 1/0). }
+      CD.IsString := False;
+      CD.TypeName := 'Boolean';
+      if SameText(FCurrent.Value, 'True') then
+        CD.IntVal := 1
+      else
+        CD.IntVal := 0;
+      Advance();
+    end
     else if Check(tkLBracket) then
     begin
       { Set-valued constant: const Name [: SetType] = [member, member, ...]

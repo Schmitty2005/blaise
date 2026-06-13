@@ -65,6 +65,8 @@ type
     procedure TestOPDF_Constant_OrdRecord;
     procedure TestOPDF_Constant_OrdValue;
     procedure TestOPDF_Constant_StrRecord;
+    procedure TestOPDF_Constant_BooleanTyped;
+    procedure TestOPDF_Constant_Real;
     procedure TestOPDF_UnitDir_Present;
     procedure TestOPDF_UnitDir_UnitCount;
   end;
@@ -653,6 +655,40 @@ begin
         begin end.
         ''');
   AssertTrue('recConstant for string', Contains(IR, '# recConstant: Greeting'));
+end;
+
+procedure TOPDFTests.TestOPDF_Constant_BooleanTyped;
+var
+  IR: string;
+begin
+  { A Boolean const (True/False) must emit as an ordinal (ckOrd) with value 1/0
+    and a Boolean TypeID — not as an empty string constant (the pre-fix bug). }
+  IR := GenOPDF(
+    '''
+        program P;
+        const Enabled = True;
+        begin end.
+        ''');
+  AssertTrue('recConstant for Boolean', Contains(IR, '# recConstant: Enabled'));
+  AssertTrue('Boolean const is ckOrd', Contains(IR, '.byte 0  # ConstKind: ckOrd'));
+  AssertTrue('Boolean const value is 1', Contains(IR, '.quad 1  # Value'));
+end;
+
+procedure TOPDFTests.TestOPDF_Constant_Real;
+var
+  IR: string;
+begin
+  { A real const must emit as ckReal with the IEEE-754 Double via .double —
+    not as an all-zero ordinal (the pre-fix bug). }
+  IR := GenOPDF(
+    '''
+        program P;
+        const PiApprox = 3.14159;
+        begin end.
+        ''');
+  AssertTrue('recConstant for real', Contains(IR, '# recConstant: PiApprox'));
+  AssertTrue('real const is ckReal', Contains(IR, '.byte 2  # ConstKind: ckReal'));
+  AssertTrue('real const emits .double', Contains(IR, '.double 3.14159  # Value'));
 end;
 
 procedure TOPDFTests.TestOPDF_UnitDir_Present;

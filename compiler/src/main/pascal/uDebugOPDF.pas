@@ -132,6 +132,7 @@ const
 
   CK_ORD    = 0;  { constant kind: ordinal (Int64) }
   CK_STRING = 1;  { constant kind: string bytes }
+  CK_REAL   = 2;  { constant kind: floating-point (Double, 8 bytes) }
 
 constructor TOPDFEmitter.Create(AProgram: TProgram; const ASourceFile: string);
 begin
@@ -1000,7 +1001,24 @@ begin
   for I := 0 to FProgram.Block.ConstDecls.Count - 1 do
   begin
     C := TConstDecl(FProgram.Block.ConstDecls.Items[I]);
-    if C.IsString then
+    if C.IsFloat then
+    begin
+      { Floating-point constant: emit the 8-byte IEEE-754 Double via GAS
+        .double (StrVal holds the raw literal text).  The debugger decodes
+        ckReal as a Double. }
+      TypeID  := GetOrAllocTypeID('Double');
+      RecSize := 17 + Length(C.Name);  { 9 fixed + 8 (Double value) + name }
+      L('');
+      L('    # recConstant: ' + C.Name);
+      EmitRecHdr(REC_CONSTANT, RecSize);
+      L('    .int  ' + IntToStr(TypeID) + '  # TypeID');
+      L('    .byte ' + IntToStr(CK_REAL) + '  # ConstKind: ckReal');
+      L('    .word 8  # ValueLen');
+      EmitNameLen(C.Name);
+      L('    .double ' + C.StrVal + '  # Value');
+      EmitNameData(C.Name);
+    end
+    else if C.IsString then
     begin
       TypeID  := GetOrAllocTypeID('AnsiString');
       RecSize := 9 + Length(C.StrVal) + Length(C.Name);
@@ -1017,7 +1035,13 @@ begin
     end
     else
     begin
-      TypeID  := 0;  { untyped integer constant }
+      { Ordinal constant.  A typed ordinal (e.g. Boolean) carries its type so
+        the debugger renders it symbolically (True/False); untyped integers
+        use TypeID 0. }
+      if (C.TypeName <> '') and HasBeenEmitted(C.TypeName) then
+        TypeID := GetOrAllocTypeID(C.TypeName)
+      else
+        TypeID := 0;
       RecSize := 17 + Length(C.Name);  { 9 fixed + 8 (Int64 value) + name }
       L('');
       L('    # recConstant: ' + C.Name);
