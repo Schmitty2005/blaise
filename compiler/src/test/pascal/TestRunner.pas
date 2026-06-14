@@ -72,6 +72,8 @@ uses
   cp.test.defaultargs,
   cp.test.caseenum,
   cp.test.sets,
+  cp.test.jumboset,
+  cp.test.e2e.jumboset,
   cp.test.selfhosting,
   cp.test.process,
   cp.test.openarray,

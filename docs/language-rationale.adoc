@@ -1280,15 +1280,44 @@ bitmask in which bit N is set when the enum member with ordinal N is included.
 
 ==== Storage model
 
-- ≤ 32 enum members: stored as a single QBE `w` (32-bit word).
-- 33–64 members: stored as a single QBE `l` (64-bit long).
-- More than 64 members: rejected by the semantic analyser.  QBE has no 128-bit
-  integer type, so supporting 65–256 elements would require a byte-array
-  representation — deferred until a real use case arises.  FPC/Delphi support
-  up to 256 with a 32-byte fixed-size set, but 64 covers the vast majority of
-  real-world enum sets.
+Storage scales with the enum member count, so the common small-set case stays a
+single fast machine register and larger sets remain correct:
 
+- ≤ 32 enum members: a single QBE `w` (32-bit word) register bitmask.
+- 33–64 members: a single QBE `l` (64-bit long) register bitmask.
+- 65–256 members ("jumbo" sets): an inline byte-array bitmap of `ceil(N/8)`
+  bytes (≤ 32 for the 256-member ceiling).  QBE has no integer type wider than
+  `l`, so a jumbo set cannot live in one register; it is treated as a value
+  aggregate (like a record or static array) — passed by reference, returned via
+  sret, zero-initialised with `memset`, copied with `memcpy` — and its
+  operations (`in`, `+`, `-`, `*`, `=`, `<>`, `Include`, `Exclude`, `for..in`)
+  are performed by the `_Set*` RTL helpers in `blaise_set.pas` rather than
+  inline register instructions.
+- More than 256 members: rejected by the semantic analyser.  256 is the classic
+  Pascal maximum — a byte-indexed set covering ordinals 0..255 — matching FPC's
+  32-byte fixed-size set.
+
+In every form, member ordinal N occupies bit `N mod 8` of byte `N div 8`, so
+the bitmap layout is identical whether the set lives in a register or memory.
 Sets are value types (copied on assignment), not heap-allocated.
+
+The Java `EnumSet` design is the closest analogue: ≤ 64 members use a single
+machine word (`RegularEnumSet`), and a wider universe transparently switches to
+a multi-word bitmap (`JumboEnumSet`) with the same operations applied across the
+words.
+
+==== Set literal sizing (`X in [a, b, c]`)
+
+The anonymous set type synthesised for an `in`-literal is sized to the **largest
+ordinal actually listed** (when every element is a compile-time constant), not
+the base enum's full member count.  So `Token in [tkBegin, tkEnd]` over an
+86-member token enum stays a fast register set, and only widens to a jumbo set
+if a listed member's own ordinal is ≥ 64.  The register membership test carries
+a range guard so that testing an element whose ordinal exceeds the set's width
+correctly yields `False` (rather than relying on an out-of-range shift).  This
+keeps the compiler's own pervasive `Kind in [...]` token tests off the jumbo
+path and avoids a latent miscompile that the old fixed-`l` representation hid
+(any listed ordinal ≥ 64 was silently dropped).
 
 ==== Set literals and disambiguation
 

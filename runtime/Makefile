@@ -34,6 +34,7 @@ ASM_OBJS = $(OBJ_DIR)/blaise_setjmp_x86_64.o \
 # Pascal RTL units compiled via the Blaise compiler.
 PAS_OBJS = $(OBJ_DIR)/blaise_mem.o \
            $(OBJ_DIR)/blaise_str.o \
+           $(OBJ_DIR)/blaise_set.o \
            $(OBJ_DIR)/blaise_arc.o \
            $(OBJ_DIR)/blaise_weak.o \
            $(OBJ_DIR)/blaise_float.o \
@@ -61,6 +62,10 @@ $(OBJ_DIR)/blaise_mem.o: $(PAS_SRC_DIR)/blaise_mem.pas
 	$(BLAISE) --source $< --unit-path $(PAS_SRC_DIR) --output $@
 
 $(OBJ_DIR)/blaise_str.o: $(PAS_SRC_DIR)/blaise_str.pas
+	@mkdir -p $(OBJ_DIR)
+	$(BLAISE) --source $< --unit-path $(PAS_SRC_DIR) --output $@
+
+$(OBJ_DIR)/blaise_set.o: $(PAS_SRC_DIR)/blaise_set.pas
 	@mkdir -p $(OBJ_DIR)
 	$(BLAISE) --source $< --unit-path $(PAS_SRC_DIR) --output $@
 

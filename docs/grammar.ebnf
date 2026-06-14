@@ -647,11 +647,16 @@ SetType
     = SET OF ( IDENT | EnumDef )
     ;
 
-(* The base enumeration must have at most 64 members.  Sets with up to 32
- * members occupy 4 bytes (QBE 'w'); sets with 33–64 members occupy 8 bytes
- * (QBE 'l').  Each member ordinal N maps to bit (1 shl N) in the bitmask.
- * Enumerations with more than 64 members are rejected by the semantic
- * analyser — extending to 256 (byte-array sets) is a future goal. *)
+(* The base enumeration must have at most 256 members.  Storage scales with the
+ * member count:
+ *   <= 32 members : 4 bytes, a QBE 'w' register bitmask
+ *   <= 64 members : 8 bytes, a QBE 'l' register bitmask
+ *   <= 256 members: an inline byte-array bitmap of ceil(N/8) bytes (a "jumbo"
+ *                   set), operated on via the _Set* RTL helpers like an
+ *                   aggregate (record/static array)
+ * Member ordinal N maps to bit (N mod 8) of byte (N div 8) in all forms.
+ * Enumerations with more than 256 members are rejected by the semantic
+ * analyser (256 is the classic Pascal maximum, matching a byte-indexed set). *)
 
 (* Procedural type — bare or method pointer.
  *

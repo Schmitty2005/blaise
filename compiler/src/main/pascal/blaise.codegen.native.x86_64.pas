@@ -157,6 +157,10 @@ type
     { Number of exc frame global slots to emit for the program main body.
       Zero when no try stmts appear in the top-level program statements. }
     FProgExcFrameCount: Integer;
+    { True when the program-main body uses jumbo sets: two scratch bitmap
+      buffers (_jset_scratch_0/1) are emitted as .bss globals (main has no
+      frame, so set-op result/literal buffers live in static storage). }
+    FProgHasJumboSet: Boolean;
     { Whole-program multi-unit guard: the system-class (TObject /
       TCustomAttribute) class-name strings, typeinfo, vtables and field-cleanup
       stubs are emitted by the FIRST class section that runs (the first unit
@@ -631,7 +635,9 @@ begin
     tyDouble:                                   Result := 8;
     tySingle:                                   Result := 4;
     tySet:
-      if TSetTypeDesc(AType).BitCount > 32 then
+      if TSetTypeDesc(AType).IsJumbo() then
+        Result := TSetTypeDesc(AType).RawSize()   { inline byte-array bitmap }
+      else if TSetTypeDesc(AType).BitCount > 32 then
         Result := 8
       else
         Result := 4;
@@ -644,6 +650,21 @@ end;
 function IsFloatFamily(AType: TTypeDesc): Boolean;
 begin
   Result := (AType <> nil) and (AType.Kind in [tyDouble, tySingle]);
+end;
+
+{ True for a JUMBO (>64-member) set: an inline byte-array bitmap aggregate
+  (like a record / static array), operated on via the _Set* RTL helpers and
+  passed/returned by pointer.  Sets of 64 members or fewer stay register-sized. }
+function IsJumboSet(AType: TTypeDesc): Boolean;
+begin
+  Result := (AType <> nil) and (AType.Kind = tySet) and
+            TSetTypeDesc(AType).IsJumbo();
+end;
+
+{ Bitmap byte count of a jumbo set (= ceil(BitCount/8), <= 32). }
+function JumboSetNBytes(AType: TTypeDesc): Integer;
+begin
+  Result := TSetTypeDesc(AType).RawByteSize();
 end;
 
 { SysV AMD64 XMM argument registers, in order. }
@@ -795,7 +816,8 @@ var
   HasData, HasTbss: Boolean;
   InitCD:   TConstDecl;
 begin
-  if (FDataGlobals.Count = 0) and (FProgExcFrameCount = 0) then
+  if (FDataGlobals.Count = 0) and (FProgExcFrameCount = 0) and
+     (not FProgHasJumboSet) then
   begin
     Self.EmitStrLitSection();
     Exit;
@@ -810,6 +832,7 @@ begin
       HasData := True;
   end;
   if FProgExcFrameCount > 0 then HasData := True;
+  if FProgHasJumboSet then HasData := True;
   { Two passes: first .data globals, then .tbss threadvars. }
   if HasData then
     Self.Emit('.data');
@@ -854,7 +877,8 @@ begin
       Continue;
     end;
     if (Self.GlobalType(Name) <> nil) and
-       (Self.GlobalType(Name).Kind in [tyRecord, tyStaticArray]) then
+       (IsJumboSet(Self.GlobalType(Name)) or
+          (Self.GlobalType(Name).Kind in [tyRecord, tyStaticArray])) then
     begin
       Sz := Self.GlobalType(Name).RawSize();
       Self.Emit('.balign 8');
@@ -904,6 +928,17 @@ begin
     Self.Emit('_exc_frame_' + IntToStr(I) + ':');
     Self.Emit(#9'.skip 512');
   end;
+  { Jumbo-set scratch buffers for the program-main body (32 bytes each, the
+    256-member maximum). }
+  if FProgHasJumboSet then
+  begin
+    Self.Emit('.balign 8');
+    Self.Emit('_jset_scratch_0:');
+    Self.Emit(#9'.skip 32');
+    Self.Emit('.balign 8');
+    Self.Emit('_jset_scratch_1:');
+    Self.Emit(#9'.skip 32');
+  end;
   { Threadvar globals: emit in .tbss (zero-initialised thread-local storage). }
   if HasTbss then
   begin
@@ -913,7 +948,8 @@ begin
       Name := FDataGlobals.Keys[I];
       if not Self.IsThreadVarGlobal(Name) then Continue;
       if (Self.GlobalType(Name) <> nil) and
-         (Self.GlobalType(Name).Kind in [tyRecord, tyStaticArray]) then
+         (IsJumboSet(Self.GlobalType(Name)) or
+          (Self.GlobalType(Name).Kind in [tyRecord, tyStaticArray])) then
         Sz := Self.GlobalType(Name).RawSize()
       else if (Self.GlobalType(Name) <> nil) and
               (Self.GlobalType(Name).Kind = tyDouble) then
@@ -1157,6 +1193,25 @@ begin
   for I := 0 to ABlock.ConstDecls.Count - 1 do
   begin
     CD := TConstDecl(ABlock.ConstDecls.Items[I]);
+    { Jumbo set constant: emit the bitmap as a byte blob under the mangled
+      label (shares the const-data pass with array consts). }
+    if (CD.ConstSetBytes <> nil) and (CD.ConstSetBytes.Count > 0) then
+    begin
+      if APrefix <> '' then
+        Lbl := APrefix + '_' + CD.Name
+      else if CD.ResolvedSetQbeName <> '' then
+        Lbl := NativeMangle(CD.ResolvedSetQbeName)
+      else
+        Lbl := CD.Name;
+      Self.Emit('.data');
+      Self.Emit('.balign 8');
+      if Copy(Lbl, 1, 2) <> '.L' then
+        Self.Emit('.globl ' + Lbl);
+      Self.Emit(Lbl + ':');
+      for J := 0 to CD.ConstSetBytes.Count - 1 do
+        Self.Emit(Format(#9'.byte %s', [CD.ConstSetBytes[J]]));
+      Continue;
+    end;
     if not CD.IsArrayConst then Continue;
     if (CD.ArrayElements = nil) or (CD.ArrayElements.Count = 0) then Continue;
     if APrefix <> '' then
@@ -3254,8 +3309,9 @@ procedure TX86_64Backend.AddSlot(const AName: string; AType: TTypeDesc;
 var
   Sz: Integer;
 begin
-  if (AType <> nil) and (AType.Kind in [tyRecord, tyStaticArray]) then
-    Sz := (AType.RawSize() + 7) and (-8)
+  if ((AType <> nil) and (AType.Kind in [tyRecord, tyStaticArray])) or
+     IsJumboSet(AType) then
+    Sz := (AType.RawSize() + 7) and (-8)   { full inline aggregate slot }
   else if (AType <> nil) and (AType.Kind = tyInterface) then
     Sz := 16   { fat pointer: obj slot (+0) then itab slot (+8) }
   else if (AType <> nil) and (AType.Kind = tyProcedural) and
@@ -3274,6 +3330,7 @@ var
   I, J, K, Offset, StackOff, TryCount, IntIdx2: Integer;
   P:    TMethodParam;
   VD:   TVarDecl;
+  HasJumbo: Boolean;
 begin
   Self.ClearFrame();
   FFrame      := TDictionary<string, Integer>.Create();
@@ -3352,7 +3409,8 @@ begin
         Inc(IntIdx2);
       end
       else if (P.ResolvedType <> nil) and
-              (P.ResolvedType.Kind in [tyRecord, tyStaticArray]) and
+              ((P.ResolvedType.Kind in [tyRecord, tyStaticArray]) or
+               IsJumboSet(P.ResolvedType)) and
               not P.IsVarParam then
       begin
         if IntIdx2 < 6 then
@@ -3395,8 +3453,11 @@ begin
     buffer and the epilogue loads it into rax/rdx/xmm0/xmm1. }
   if ADecl.ResolvedReturnType <> nil then
   begin
-    if ADecl.ResolvedReturnType.Kind = tyInterface then
+    if (ADecl.ResolvedReturnType.Kind = tyInterface) or
+       IsJumboSet(ADecl.ResolvedReturnType) then
     begin
+      { Interface and jumbo-set returns are sret: a hidden pointer arg; the
+        Result slot holds that pointer. }
       FSretFunc := True;
       Self.AddSlot('Result', nil, Offset);
     end
@@ -3454,6 +3515,26 @@ begin
       TryCount := TryCount + Self.CountForStmts(TASTStmt(ADecl.Body.Stmts.Items[K]));
     for K := 0 to TryCount - 1 do
       Self.AddSlot('_for_end_' + IntToStr(K), nil, Offset);
+  end;
+  { Jumbo-set scratch slots: a jumbo set literal, union, intersection, or
+    difference produces a new bitmap that must live somewhere addressable.
+    Such a value can appear deep inside any expression (e.g. 'X in [members]'
+    over a >64-member enum, which is common in the compiler's own token tests),
+    so rather than walk the whole body we reserve the two 32-byte scratch slots
+    in every function frame.  The cost is 64 bytes per frame; correctness and
+    self-host stability outweigh it.  HasJumbo is retained for future
+    refinement to a body-walk-gated reservation. }
+  HasJumbo := True;
+  if HasJumbo then
+  begin
+    Inc(Offset, 32);
+    Offset := (Offset + 7) and (-8);
+    FFrame.Add('_jset_scratch_0', -Offset);
+    FFrameTypes.Add('_jset_scratch_0', nil);
+    Inc(Offset, 32);
+    Offset := (Offset + 7) and (-8);
+    FFrame.Add('_jset_scratch_1', -Offset);
+    FFrameTypes.Add('_jset_scratch_1', nil);
   end;
   { Round the reserved size up to a 16-byte multiple (SysV alignment).
     -16 is the bitmask not(15) in two's complement (Blaise `not` is Boolean). }
@@ -4631,7 +4712,8 @@ begin
         Self.Emit(Format(#9'addq $%d, %%rcx',
           [TFieldInfo(TIdentExpr(AExpr).ImplicitFieldInfo).Offset]));
       if (TIdentExpr(AExpr).ResolvedType <> nil) and
-         (TIdentExpr(AExpr).ResolvedType.Kind in [tyRecord, tyStaticArray]) then
+         (IsJumboSet(TIdentExpr(AExpr).ResolvedType) or
+          (TIdentExpr(AExpr).ResolvedType.Kind in [tyRecord, tyStaticArray])) then
         Self.Emit(#9'movq %rcx, %rax')
       else if (TIdentExpr(AExpr).ResolvedType <> nil) and
               (TIdentExpr(AExpr).ResolvedType.Kind = tyClass) then
@@ -4641,7 +4723,8 @@ begin
       Exit;
     end;
     if (TIdentExpr(AExpr).ResolvedType <> nil) and
-       (TIdentExpr(AExpr).ResolvedType.Kind in [tyRecord, tyStaticArray]) then
+       (IsJumboSet(TIdentExpr(AExpr).ResolvedType) or
+          (TIdentExpr(AExpr).ResolvedType.Kind in [tyRecord, tyStaticArray])) then
     begin
       if FSretFunc and (TIdentExpr(AExpr).Name = 'Result') then
         Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Result')]))
@@ -5733,8 +5816,20 @@ begin
        (BE.Right.ResolvedType <> nil) and
        (BE.Right.ResolvedType.Kind = tySet) then
     begin
+      if IsJumboSet(BE.Right.ResolvedType) then
+      begin
+        { Jumbo: evaluate ordinal, save it, get the set's bitmap address, then
+          _SetIn(rdi=set, esi=ord). }
+        Self.EmitExprToEax(BE.Left);
+        Self.Emit(#9'pushq %rax');           { ordinal }
+        Self.EmitExprToEax(BE.Right);        { set bitmap addr -> %rax }
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(#9'popq %rsi');
+        Self.Emit(#9'callq _SetIn');
+        Exit;
+      end;
       Self.EmitExprToEax(BE.Left);
-      Self.Emit(#9'movl %eax, %ecx');
+      Self.Emit(#9'movl %eax, %ecx');       { ordinal in %ecx (and %cl) }
       Self.EmitExprToEax(BE.Right);
       if TSetTypeDesc(BE.Right.ResolvedType).BitCount > 32 then
       begin
@@ -5746,13 +5841,64 @@ begin
         Self.Emit(#9'shrl %cl, %eax');
         Self.Emit(#9'andl $1, %eax');
       end;
+      { Range guard: force 0 when the ordinal is >= the set width.  The set may
+        be sized to a literal's max ordinal (X in [low members]) while the
+        tested element's ordinal is larger; x86 shift counts wrap mod 32/64, so
+        the raw shift result for an out-of-range ordinal is meaningless and
+        must be masked out.  %edx = (ord < BitCount) ? 1 : 0. }
+      Self.Emit(Format(#9'cmpl $%d, %%ecx',
+        [TSetTypeDesc(BE.Right.ResolvedType).BitCount]));
+      Self.Emit(#9'setl %dl');
+      Self.Emit(#9'movzbl %dl, %edx');
+      Self.Emit(#9'andl %edx, %eax');
       Exit;
     end;
-    { Set arithmetic: union (+), difference (-), intersection (*) }
+    { Set arithmetic: union (+), difference (-), intersection (*), equality. }
     if (BE.Left.ResolvedType <> nil) and
        (BE.Left.ResolvedType.Kind = tySet) and
        (BE.Op in [boAdd, boSub, boMul, boEQ, boNE]) then
     begin
+      if IsJumboSet(BE.Left.ResolvedType) then
+      begin
+        { Equality compares two bitmap addresses via _SetEqual. }
+        if BE.Op in [boEQ, boNE] then
+        begin
+          Self.EmitExprToEax(BE.Left);
+          Self.Emit(#9'pushq %rax');
+          Self.EmitExprToEax(BE.Right);
+          Self.Emit(#9'movq %rax, %rsi');
+          Self.Emit(#9'popq %rdi');
+          Self.Emit(Format(#9'movl $%d, %%edx',
+            [JumboSetNBytes(BE.Left.ResolvedType)]));
+          Self.Emit(#9'callq _SetEqual');
+          if BE.Op = boNE then
+            Self.Emit(#9'xorl $1, %eax');
+          Exit;
+        end;
+        { Union/intersection/difference: write the result into a frame scratch
+          slot and return its address.  The _Set helper takes rdi=dest,
+          rsi=A, rdx=B, ecx=nbytes. %r12/%r13 are callee-saved across the two
+          operand evaluations and the helper call. }
+        Self.EmitExprToEax(BE.Left);
+        Self.Emit(#9'pushq %r12');
+        Self.Emit(#9'pushq %r13');
+        Self.Emit(#9'movq %rax, %r12');         { A addr }
+        Self.EmitExprToEax(BE.Right);
+        Self.Emit(#9'movq %rax, %r13');         { B addr }
+        Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand('_jset_scratch_0')]));
+        Self.Emit(#9'movq %r12, %rsi');
+        Self.Emit(#9'movq %r13, %rdx');
+        Self.Emit(Format(#9'movl $%d, %%ecx', [JumboSetNBytes(BE.Left.ResolvedType)]));
+        case BE.Op of
+          boAdd: Self.Emit(#9'callq _SetUnion');
+          boMul: Self.Emit(#9'callq _SetInter');
+          boSub: Self.Emit(#9'callq _SetDiff');
+        end;
+        Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand('_jset_scratch_0')]));
+        Self.Emit(#9'popq %r13');
+        Self.Emit(#9'popq %r12');
+        Exit;
+      end;
       Self.EmitExprToEax(BE.Left);
       Self.Emit(#9'pushq %rax');
       Self.EmitExprToEax(BE.Right);
@@ -6215,7 +6361,8 @@ begin
     Self.Emit(#9'movq %rax, %rcx');
     if FAE.FieldInfo.Offset > 0 then
       Self.Emit(Format(#9'leaq %d(%%rcx), %%rcx', [FAE.FieldInfo.Offset]));
-    if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+    if (IsJumboSet(FAE.FieldInfo.TypeDesc) or
+         (FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray])) then
       Self.Emit(#9'movq %rcx, %rax')
     else
       Self.EmitLoadVar('(%rcx)', FAE.FieldInfo.TypeDesc);
@@ -6238,7 +6385,8 @@ begin
         Self.Emit(Format(#9'addq $%d, %%rcx', [FAE.ImplicitBaseInfo.Offset]));
       if FAE.IsClassAccess then
         Self.Emit(#9'movq (%rcx), %rcx');
-      if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      if (IsJumboSet(FAE.FieldInfo.TypeDesc) or
+         (FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray])) then
         Self.Emit(Format(#9'leaq %d(%%rcx), %%rax', [FAE.FieldInfo.Offset]))
       else
         Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
@@ -6253,7 +6401,8 @@ begin
       if FAE.IsVarParam then
         { var-param class: slot -> caller var -> instance }
         Self.Emit(#9'movq (%rcx), %rcx');
-      if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      if (IsJumboSet(FAE.FieldInfo.TypeDesc) or
+         (FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray])) then
         Self.Emit(Format(#9'leaq %d(%%rcx), %%rax', [FAE.FieldInfo.Offset]))
       else
         Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
@@ -6265,7 +6414,8 @@ begin
         Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]))
       else
         Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FAE.RecordName]));
-      if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      if (IsJumboSet(FAE.FieldInfo.TypeDesc) or
+         (FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray])) then
         Self.Emit(Format(#9'leaq %d(%%rcx), %%rax', [FAE.FieldInfo.Offset]))
       else
         Self.EmitLoadVar(Format('%d(%%rcx)', [FAE.FieldInfo.Offset]),
@@ -6273,7 +6423,8 @@ begin
     end
     else if Self.IsLocal(FAE.RecordName) then
     begin
-      if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      if (IsJumboSet(FAE.FieldInfo.TypeDesc) or
+         (FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray])) then
       begin
         Self.Emit(Format(#9'leaq %s, %%rcx', [Self.VarOperand(FAE.RecordName)]));
         if FAE.FieldInfo.Offset = 0 then
@@ -6292,7 +6443,8 @@ begin
     end
     else
     begin
-      if FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      if (IsJumboSet(FAE.FieldInfo.TypeDesc) or
+         (FAE.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray])) then
       begin
         Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FAE.RecordName]));
         if FAE.FieldInfo.Offset = 0 then
@@ -6605,6 +6757,27 @@ begin
   if (AExpr is TArrayLiteralExpr) and
      (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tySet) then
   begin
+    { Jumbo set literal: build the bitmap in the scratch_1 slot — memset 0,
+      then _SetInclude per element (elements may be non-constant).  Return the
+      buffer address.  scratch_1 (not scratch_0) so a surrounding set-op
+      assignment, which uses scratch_0, is not clobbered. }
+    if IsJumboSet(AExpr.ResolvedType) then
+    begin
+      Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand('_jset_scratch_1')]));
+      Self.Emit(#9'xorl %esi, %esi');
+      Self.Emit(Format(#9'movl $%d, %%edx', [TSetTypeDesc(AExpr.ResolvedType).RawSize()]));
+      Self.Emit(#9'callq memset');
+      for SetI := 0 to TArrayLiteralExpr(AExpr).Elements.Count - 1 do
+      begin
+        SetElem := TASTExpr(TArrayLiteralExpr(AExpr).Elements.Items[SetI]);
+        Self.EmitExprToEax(SetElem);
+        Self.Emit(#9'movl %eax, %esi');     { ordinal }
+        Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand('_jset_scratch_1')]));
+        Self.Emit(#9'callq _SetInclude');
+      end;
+      Self.Emit(Format(#9'leaq %s, %%rax', [Self.VarOperand('_jset_scratch_1')]));
+      Exit;
+    end;
     SetMask := 0;
     for SetI := 0 to TArrayLiteralExpr(AExpr).Elements.Count - 1 do
     begin
@@ -6623,7 +6796,8 @@ begin
   begin
     Self.EmitExprToEax(TDerefExpr(AExpr).Expr);
     if (AExpr.ResolvedType <> nil) and
-       (AExpr.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
+       (IsJumboSet(AExpr.ResolvedType) or
+       (AExpr.ResolvedType.Kind in [tyRecord, tyStaticArray])) then
     begin
       { Pointer-to-record/array: the pointer value IS the record address.
         Callers (field access, assignment) work with addresses for records. }
@@ -8123,8 +8297,16 @@ begin
     Self.Emit(#9'jmp ' + LEnd);
 
     Self.Emit(LBody + ':');
-    { Test bit: (mask >> idx) & 1 }
-    if AStmt.SetBitCount > 32 then
+    { Test bit: jumbo via _SetIn(set_addr, idx); else (mask >> idx) & 1 }
+    if AStmt.SetIsJumbo then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rdi',
+        [Self.VarOperand(AStmt.SetMaskVarName)]));   { set bitmap addr }
+      Self.Emit(Format(#9'movl %s, %%esi', [IdxOp]));
+      Self.Emit(#9'callq _SetIn');
+      Self.Emit(#9'testl %eax, %eax');
+    end
+    else if AStmt.SetBitCount > 32 then
     begin
       Self.Emit(Format(#9'movq %s, %%rax',
         [Self.VarOperand(AStmt.SetMaskVarName)]));
@@ -8843,6 +9025,21 @@ begin
           '(%rbx)', False);
         Self.Emit(#9'popq %rbx');
       end
+      else if IsJumboSet(Asgn.ResolvedLhsType) then
+      begin
+        { Jumbo set into an implicit-Self field: plain bitmap memcpy (a set has
+          no managed fields, so no retain/release). }
+        Self.EmitExprToEax(Asgn.Expr);
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(#9'movq %rax, %rbx');         { source bitmap addr }
+        Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand('Self')]));
+        if ISFld.Offset > 0 then
+          Self.Emit(Format(#9'addq $%d, %%rdi', [ISFld.Offset]));
+        Self.Emit(#9'movq %rbx, %rsi');
+        Self.Emit(Format(#9'movq $%d, %%rdx', [Asgn.ResolvedLhsType.RawSize()]));
+        Self.Emit(#9'callq memcpy');
+        Self.Emit(#9'popq %rbx');
+      end
       else if (Asgn.ResolvedLhsType.Kind in [tyRecord, tyStaticArray]) then
       begin
         Self.EmitExprToEax(Asgn.Expr);
@@ -8955,15 +9152,19 @@ begin
       Self.Emit(#9'callq memcpy');
       Exit;
     end;
-    { sret assignment: LHS is a record variable; RHS is a record-returning call.
-      Pass the destination buffer address as the hidden first arg (%rdi). }
+    { sret assignment: LHS is a record (or jumbo set) variable; RHS is a
+      record/jumbo-set-returning call.  Pass the destination buffer address as
+      the hidden first arg (%rdi). }
     if (Asgn.ResolvedLhsType <> nil) and
-       (Asgn.ResolvedLhsType.Kind = tyRecord) and
+       ((Asgn.ResolvedLhsType.Kind = tyRecord) or IsJumboSet(Asgn.ResolvedLhsType)) and
        (Asgn.Expr is TFuncCallExpr) and
        (TFuncCallExpr(Asgn.Expr).ResolvedDecl <> nil) and
        (TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl).ResolvedReturnType <> nil) and
-       (TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl).ResolvedReturnType.Kind = tyRecord) then
+       ((TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl).ResolvedReturnType.Kind = tyRecord) or
+        IsJumboSet(TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl).ResolvedReturnType)) then
     begin
+      { For a local jumbo set the dest is leaq'd; EmitSretCall's caller passes
+        the operand and a 'by-ref' flag.  Mirror the record dispatch below. }
       if FSretFunc and SameText(Asgn.Name, 'Result') then
         Self.EmitSretCall(
           FuncSymbolOf(TFuncCallExpr(Asgn.Expr)),
@@ -8983,21 +9184,25 @@ begin
           TFuncCallExpr(Asgn.Expr).Args,
           Self.VarOperand(Asgn.Name), False)
       else
+      begin
+        Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
         Self.EmitSretCall(
           FuncSymbolOf(TFuncCallExpr(Asgn.Expr)),
           TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl),
           TFuncCallExpr(Asgn.Expr).Args,
           Asgn.Name + '(%rip)', False);
+      end;
       Exit;
     end;
-    { sret assignment: method call returning a record.
+    { sret assignment: method call returning a record (or jumbo set).
       %rdi = sret ptr, %rsi = Self, %rdx.. = user args. }
     if (Asgn.ResolvedLhsType <> nil) and
-       (Asgn.ResolvedLhsType.Kind = tyRecord) and
+       ((Asgn.ResolvedLhsType.Kind = tyRecord) or IsJumboSet(Asgn.ResolvedLhsType)) and
        (Asgn.Expr is TMethodCallExpr) and
        (TMethodCallExpr(Asgn.Expr).ResolvedMethod <> nil) and
        (TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType <> nil) and
-       (TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType.Kind = tyRecord) then
+       ((TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType.Kind = tyRecord) or
+        IsJumboSet(TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType)) then
     begin
       if FSretFunc and SameText(Asgn.Name, 'Result') then
         Self.EmitMethodSretCall(TMethodCallExpr(Asgn.Expr),
@@ -9009,8 +9214,11 @@ begin
         Self.EmitMethodSretCall(TMethodCallExpr(Asgn.Expr),
           Self.VarOperand(Asgn.Name), False)
       else
+      begin
+        Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
         Self.EmitMethodSretCall(TMethodCallExpr(Asgn.Expr),
           Asgn.Name + '(%rip)', False);
+      end;
       Exit;
     end;
     if IsFloatFamily(Asgn.ResolvedLhsType) then
@@ -9206,7 +9414,8 @@ begin
       end;
     end
     else if (Asgn.ResolvedLhsType <> nil) and
-            (Asgn.ResolvedLhsType.Kind in [tyRecord, tyStaticArray]) then
+            (IsJumboSet(Asgn.ResolvedLhsType) or
+             (Asgn.ResolvedLhsType.Kind in [tyRecord, tyStaticArray])) then
     begin
       Self.EmitExprToEax(Asgn.Expr);
       Self.Emit(#9'movq %rax, %rsi');
@@ -9444,6 +9653,18 @@ begin
     { Include(S, elem): S := S or (1 shl ord(elem)) }
     if SameText(PC.Name, 'Include') and (PC.Args.Count = 2) then
     begin
+      { Jumbo set: address of the set, ordinal, then _SetInclude. Handles any
+        lvalue shape (var, field, element), not just a bare ident. }
+      if IsJumboSet(TASTExpr(PC.Args.Items[0]).ResolvedType) then
+      begin
+        Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
+        Self.Emit(#9'pushq %rax');           { ordinal }
+        Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));  { set addr -> %rax }
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(#9'popq %rsi');
+        Self.Emit(#9'callq _SetInclude');
+        Exit;
+      end;
       Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
       Self.Emit(#9'movl %eax, %ecx');
       FDynArgName := TIdentExpr(TASTExpr(PC.Args.Items[0])).Name;
@@ -9473,6 +9694,17 @@ begin
     { Exclude(S, elem): S := S and (not (1 shl ord(elem))) }
     if SameText(PC.Name, 'Exclude') and (PC.Args.Count = 2) then
     begin
+      { Jumbo set: address of the set, ordinal, then _SetExclude. }
+      if IsJumboSet(TASTExpr(PC.Args.Items[0]).ResolvedType) then
+      begin
+        Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
+        Self.Emit(#9'pushq %rax');
+        Self.EmitExprToEax(TASTExpr(PC.Args.Items[0]));
+        Self.Emit(#9'movq %rax, %rdi');
+        Self.Emit(#9'popq %rsi');
+        Self.Emit(#9'callq _SetExclude');
+        Exit;
+      end;
       Self.EmitExprToEax(TASTExpr(PC.Args.Items[1]));
       Self.Emit(#9'movl %eax, %ecx');
       FDynArgName := TIdentExpr(TASTExpr(PC.Args.Items[0])).Name;
@@ -12194,13 +12426,14 @@ begin
     Self.Emit(Format(#9'leaq %s, %%rax', [ASretAddr]));
   Self.Emit(#9'pushq %rax');
   { Zero the destination buffer via memset(dest, 0, size), mirroring the QBE
-    backend.  ADecl.ResolvedReturnType.Kind = tyRecord here. }
+    backend.  The return type is a record or a jumbo set here; RawSize covers
+    both (TotalSize for a record, the bitmap byte count for a jumbo set). }
   if (ADecl <> nil) and (ADecl.ResolvedReturnType <> nil) then
   begin
     Self.Emit(#9'movq (%rsp), %rdi');
     Self.Emit(#9'xorl %esi, %esi');
     Self.Emit(Format(#9'movq $%d, %%rdx',
-      [TRecordTypeDesc(ADecl.ResolvedReturnType).TotalSize()]));
+      [ADecl.ResolvedReturnType.RawSize()]));
     Self.Emit(#9'callq memset');
   end;
   HD := TList<Integer>.Create();
@@ -12377,7 +12610,7 @@ begin
     Self.Emit(#9'movq (%rsp), %rdi');
     Self.Emit(#9'xorl %esi, %esi');
     Self.Emit(Format(#9'movq $%d, %%rdx',
-      [TRecordTypeDesc(MD.ResolvedReturnType).TotalSize()]));
+      [MD.ResolvedReturnType.RawSize()]));
     Self.Emit(#9'callq memset');
   end;
 
@@ -13220,7 +13453,8 @@ begin
       end;
     end
     else if (P.ResolvedType <> nil) and
-            (P.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
+            ((P.ResolvedType.Kind in [tyRecord, tyStaticArray]) or
+             IsJumboSet(P.ResolvedType)) then
     begin
       { Phase 1: spill only the incoming pointer.  The local copy is made
         AFTER every register is spilled — memcpy clobbers the caller-saved
@@ -13250,7 +13484,8 @@ begin
     P := TMethodParam(ADecl.Params.Items[I]);
     if P.IsOpenArray or P.IsVarParam then Continue;
     if (P.ResolvedType = nil) or
-       not (P.ResolvedType.Kind in [tyRecord, tyStaticArray]) then Continue;
+       not ((P.ResolvedType.Kind in [tyRecord, tyStaticArray]) or
+            IsJumboSet(P.ResolvedType)) then Continue;
     Self.Emit(Format(#9'movq %s, %%rsi', [Self.VarOperand(P.ParamName)]));
     Self.Emit(Format(#9'leaq %s, %%rdi',
       [Self.VarOperand(P.ParamName + '_data')]));
@@ -13332,7 +13567,17 @@ begin
 
         tySet:
           for J := 0 to TVarDecl(ADecl.Body.Decls.Items[I]).Names.Count - 1 do
-            if TSetTypeDesc(TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType).BitCount <= 32 then
+            if IsJumboSet(TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType) then
+            begin
+              { Jumbo set: zero the whole inline bitmap via memset. }
+              Self.Emit(Format(#9'leaq %s, %%rdi',
+                [Self.VarOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J])]));
+              Self.Emit(#9'xorl %esi, %esi');
+              Self.Emit(Format(#9'movl $%d, %%edx',
+                [TSetTypeDesc(TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType).RawSize()]));
+              Self.Emit(#9'callq memset');
+            end
+            else if TSetTypeDesc(TVarDecl(ADecl.Body.Decls.Items[I]).ResolvedType).BitCount <= 32 then
               Self.Emit(Format(#9'movl $0, %s',
                 [Self.VarOperand(TVarDecl(ADecl.Body.Decls.Items[I]).Names.Strings[J])]))
             else
@@ -13640,6 +13885,11 @@ begin
   for I := 0 to AProg.Block.Stmts.Count - 1 do
     FProgExcFrameCount := FProgExcFrameCount +
       Self.CountTryStmts(TASTStmt(AProg.Block.Stmts.Items[I]));
+  { Jumbo-set scratch in main: main has no stack frame, so set literal / set-op
+    result buffers live in static .bss.  A jumbo set value can appear in any
+    expression in the program body (e.g. 'X in [members]' over a >64 enum), so
+    always reserve the two scratch buffers. }
+  FProgHasJumboSet := True;
   { Reset per-function state before emitting the program body. }
   FExcDepth     := 0;
   FExcFrameNext := 0;

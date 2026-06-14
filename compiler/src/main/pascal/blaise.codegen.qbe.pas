@@ -197,6 +197,11 @@ type
     procedure EmitFuncDef(ADecl: TMethodDecl; AExported: Boolean);
     procedure EmitBlock(ABlock: TBlock);
     procedure EmitVarAllocs(ABlock: TBlock);
+    { True for inline-aggregate value types whose "value" in QBE is the
+      ADDRESS of their storage (not a loaded register): records, static arrays,
+      and JUMBO (>64-member) sets.  Used at the read/arg/return sites that must
+      return a storage address rather than a loaded scalar. }
+    function  IsAggregateAddrType(AType: TTypeDesc): Boolean;
     { mem2reg helpers }
     { Returns True if AKind is a scalar type promotable to a QBE SSA temp. }
     function  IsPromotableKind(AKind: TTypeKind): Boolean;
@@ -1007,6 +1012,11 @@ function TCodeGenQBE.QbeParamTypeOf(AType: TTypeDesc): string;
 begin
   if (AType <> nil) and (AType.Kind = tyRecord) then
     Result := FFIRecordTypeRef(TRecordTypeDesc(AType))
+  { Jumbo set: passed by pointer to its bitmap (the callee copies it into a
+    local slot for value semantics). }
+  else if (AType <> nil) and (AType.Kind = tySet) and
+          TSetTypeDesc(AType).IsJumbo() then
+    Result := 'l'
   else
     Result := QbeTypeOf(AType);
 end;
@@ -1193,6 +1203,13 @@ end;
 { -----------------------------------------------------------------------
   mem2reg helpers
   ----------------------------------------------------------------------- }
+
+function TCodeGenQBE.IsAggregateAddrType(AType: TTypeDesc): Boolean;
+begin
+  if AType = nil then Exit(False);
+  Result := (AType.Kind in [tyRecord, tyStaticArray]) or
+            ((AType.Kind = tySet) and TSetTypeDesc(AType).IsJumbo());
+end;
 
 function TCodeGenQBE.IsPromotableKind(AKind: TTypeKind): Boolean;
 begin
@@ -1619,6 +1636,12 @@ begin
             { tyProcedural method-pointers are two-slot aggregates — not promotable }
             IsMethodPtr := (Decl.ResolvedType.Kind = tyProcedural) and
                            TProceduralTypeDesc(Decl.ResolvedType).IsMethodPtr;
+            { Jumbo (>64-member) sets are inline byte-array aggregates, not
+              register values — promoting one to a single SSA temp would
+              silently truncate it to 8 bytes. }
+            if (Decl.ResolvedType.Kind = tySet) and
+               TSetTypeDesc(Decl.ResolvedType).IsJumbo() then
+              IsMethodPtr := True;
             if not IsMethodPtr then
             begin
               FPromotedLocals.Add(VarName);
@@ -1741,10 +1764,19 @@ begin
               EmitLine(Format('  %%_var_%s =l alloc4 1', [VarName]));
               EmitLine(Format('  storew 0, %%_var_%s', [VarName]));
             end
-            else
+            else if TSetTypeDesc(Decl.ResolvedType).BitCount <= 64 then
             begin
               EmitLine(Format('  %%_var_%s =l alloc8 1', [VarName]));
               EmitLine(Format('  storel 0, %%_var_%s', [VarName]));
+            end
+            else
+            begin
+              { Jumbo set: inline byte-array bitmap, zero-init via memset (like
+                a static array). }
+              ArrSize := TSetTypeDesc(Decl.ResolvedType).RawSize();
+              EmitLine(Format('  %%_var_%s =l alloc8 %d', [VarName, ArrSize]));
+              EmitLine(Format('  call $memset(l %%_var_%s, w 0, l %d)',
+                [VarName, ArrSize]));
             end;
           end;
 
@@ -1844,8 +1876,12 @@ begin
         tySet:
           if TSetTypeDesc(Decl.ResolvedType).BitCount <= 32 then
             EmitLine(Format('%s $%s = { w 0 }', [Pfx, VarName]))
+          else if TSetTypeDesc(Decl.ResolvedType).BitCount <= 64 then
+            EmitLine(Format('%s $%s = { l 0 }', [Pfx, VarName]))
           else
-            EmitLine(Format('%s $%s = { l 0 }', [Pfx, VarName]));
+            { Jumbo set: zero-filled inline byte-array bitmap. }
+            EmitLine(Format('%s $%s = { z %d }',
+              [Pfx, VarName, TSetTypeDesc(Decl.ResolvedType).RawSize()]));
         tyInt64, tyUInt64:
           EmitLine(Format('%s $%s = { l 0 }', [Pfx, VarName]));
         tyString, tyClass, tyPointer, tyPChar, tyMetaClass:
@@ -1983,6 +2019,28 @@ var
   IsStrArray: Boolean;
   Label_:     string;
 begin
+  { Jumbo set constant: emit the bitmap as a byte blob under the mangled label.
+    Shares the const-data pass with array consts. }
+  if (CD.ConstSetBytes <> nil) and (CD.ConstSetBytes.Count > 0) then
+  begin
+    if APrefix <> '' then
+      Label_ := APrefix + '_' + CD.Name
+    else if CD.ResolvedSetQbeName <> '' then
+      Label_ := CD.ResolvedSetQbeName
+    else
+      Label_ := CD.Name;
+    Parts := '';
+    for J := 0 to CD.ConstSetBytes.Count - 1 do
+    begin
+      if J > 0 then Parts := Parts + ', ';
+      Parts := Parts + Format('b %s', [CD.ConstSetBytes[J]]);
+    end;
+    if APrefix <> '' then
+      EmitLine(Format('export data $%s = { %s }', [Label_, Parts]))
+    else
+      EmitLine(Format('data $%s = { %s }', [Label_, Parts]));
+    Exit;
+  end;
   if not CD.IsArrayConst then Exit;
   if (CD.ArrayElements = nil) or (CD.ArrayElements.Count = 0) then Exit;
   if APrefix <> '' then
@@ -3263,9 +3321,15 @@ begin
       EmitLine(Format('  %s =w copy %s', [IdxW, IdxSlot]))
     else
       EmitLine(Format('  %s =w loadw %s', [IdxW, IdxSlot]));
-    EmitLine(Format('  %s =%s shr %s, %s', [BitT, SetMQT, MaskT, IdxW]));
     CmpT := AllocTemp();
-    EmitLine(Format('  %s =w and %s, 1', [CmpT, BitT]));
+    if AStmt.SetIsJumbo then
+      { Jumbo: MaskT is the set's bitmap address; test membership via _SetIn. }
+      EmitLine(Format('  %s =w call $_SetIn(l %s, w %s)', [CmpT, MaskT, IdxW]))
+    else
+    begin
+      EmitLine(Format('  %s =%s shr %s, %s', [BitT, SetMQT, MaskT, IdxW]));
+      EmitLine(Format('  %s =w and %s, 1', [CmpT, BitT]));
+    end;
     { If bit is 0 skip body, go directly to forin_next }
     EmitLine(Format('  jnz %s, @%s_yes, @%s', [CmpT, LblBody, LblNext]));
     EmitLine('@' + LblBody + '_yes');
@@ -4117,6 +4181,18 @@ begin
       StoreInstr := StoreInstrFor(AAssign.Expr.ResolvedType);
       EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, PtrTemp]));
     end;
+  end
+  else if (AAssign.ResolvedLhsType <> nil) and
+          (AAssign.ResolvedLhsType.Kind = tySet) and
+          TSetTypeDesc(AAssign.ResolvedLhsType).IsJumbo() then
+  begin
+    { Jumbo set assignment: the RHS evaluates to the source bitmap address
+      (a set variable, a set-op result buffer, or a const blob); copy the
+      whole bitmap into the destination slot. }
+    ValTemp := EmitExpr(AAssign.Expr);
+    EmitLine(Format('  call $memcpy(l %s, l %s, l %d)',
+      [VarRef(AAssign.Name, AAssign.IsGlobal), ValTemp,
+       TSetTypeDesc(AAssign.ResolvedLhsType).RawSize()]));
   end
   else if (AAssign.ResolvedLhsType <> nil) and
           (AAssign.ResolvedLhsType.Kind = tyRecord) then
@@ -5160,6 +5236,18 @@ var
   ArgLine, RetT, AggRef: string;
   Sz: Integer;
 begin
+  { Jumbo set returns always use the plain sret path (a hidden dest pointer +
+    void return); they share this call helper with records but must not go
+    through ClassifyRecordReturn (which reads record-specific size fields). }
+  if (ARetType <> nil) and (TTypeDesc(ARetType).Kind = tySet) then
+  begin
+    if AVisibleArgs <> '' then
+      ArgLine := Format('l %s, %s', [ADestAddr, AVisibleArgs])
+    else
+      ArgLine := Format('l %s', [ADestAddr]);
+    EmitLine(Format('  call %s(%s)', [AFuncName, ArgLine]));
+    Exit;
+  end;
   case Self.ClassifyRecordReturn(ARetType) of
     rcSret:
       begin
@@ -6673,8 +6761,18 @@ begin
             [Par.ParamName, Par.ParamName]));
         end;
       tySet:
-        { A set is a w (≤32 members) or l (≤64) bitmask — spill at its width. }
-        if TSetTypeDesc(Par.ResolvedType).BitCount <= 32 then
+        { A small set is a w (<=32) / l (<=64) bitmask spilled at its width.
+          A jumbo set arrives as a pointer to the caller's bitmap; copy it into
+          a fresh local bitmap slot for value semantics. }
+        if TSetTypeDesc(Par.ResolvedType).IsJumbo() then
+        begin
+          EmitLine(Format('  %%_var_%s =l alloc8 %d',
+            [Par.ParamName, TSetTypeDesc(Par.ResolvedType).RawSize()]));
+          EmitLine(Format('  call $memcpy(l %%_var_%s, l %%_par_%s, l %d)',
+            [Par.ParamName, Par.ParamName,
+             TSetTypeDesc(Par.ResolvedType).RawSize()]));
+        end
+        else if TSetTypeDesc(Par.ResolvedType).BitCount <= 32 then
         begin
           EmitLine(Format('  %%_var_%s =l alloc4 1', [Par.ParamName]));
           EmitLine(Format('  storew %%_par_%s, %%_var_%s',
@@ -6748,7 +6846,9 @@ begin
     RC := Self.ClassifyRecordReturn(TRecordTypeDesc(AMethod.ResolvedReturnType));
 
   Sig := 'l %_par_Self';
-  if IsFunc and (AMethod.ResolvedReturnType.Kind = tyInterface) then
+  if IsFunc and ((AMethod.ResolvedReturnType.Kind = tyInterface) or
+     ((AMethod.ResolvedReturnType.Kind = tySet) and
+      TSetTypeDesc(AMethod.ResolvedReturnType).IsJumbo())) then
     Sig := 'l %_par__sret, l %_par_Self'
   else if IsFunc and (AMethod.ResolvedReturnType.Kind = tyRecord) then
     EmitRecordReturnSignature(Sig, RC);
@@ -6776,7 +6876,10 @@ begin
   if IsFunc then
   begin
     RetQType := QbeTypeOf(AMethod.ResolvedReturnType);
-    if AMethod.ResolvedReturnType.Kind = tyInterface then
+    if (AMethod.ResolvedReturnType.Kind = tyInterface) or
+       ((AMethod.ResolvedReturnType.Kind = tySet) and
+        TSetTypeDesc(AMethod.ResolvedReturnType).IsJumbo()) then
+      { sret aggregate return — void function. }
       EmitLine(Format('%sfunction %s(%s) {', [ExportPrefix(), FuncName, Sig]))
     else if AMethod.ResolvedReturnType.Kind = tyRecord then
     begin
@@ -6843,6 +6946,14 @@ begin
   begin
     if AMethod.ResolvedReturnType.Kind = tyRecord then
       EmitRecordReturnPrologue(TRecordTypeDesc(AMethod.ResolvedReturnType), RC)
+    else if (AMethod.ResolvedReturnType.Kind = tySet) and
+            TSetTypeDesc(AMethod.ResolvedReturnType).IsJumbo() then
+    begin
+      { sret: jumbo-set Result aliases the caller's buffer; zero-init it. }
+      EmitLine('  %_var_Result =l copy %_par__sret');
+      EmitLine(Format('  call $memset(l %%_var_Result, w 0, l %d)',
+        [TSetTypeDesc(AMethod.ResolvedReturnType).RawSize()]));
+    end
     else if AMethod.ResolvedReturnType.Kind = tyInterface then
     begin
       { sret: interface Result is a 16-byte fat pointer (obj+itab) in the
@@ -6919,7 +7030,10 @@ begin
   begin
     if AMethod.ResolvedReturnType.Kind = tyRecord then
       EmitRecordReturnEpilogue(TRecordTypeDesc(AMethod.ResolvedReturnType), RC)
-    else if AMethod.ResolvedReturnType.Kind = tyInterface then
+    else if (AMethod.ResolvedReturnType.Kind = tyInterface) or
+            ((AMethod.ResolvedReturnType.Kind = tySet) and
+             TSetTypeDesc(AMethod.ResolvedReturnType).IsJumbo()) then
+      { sret aggregate return — written through %_par__sret; return void. }
       EmitLine('  ret')
     else
     begin
@@ -7629,8 +7743,12 @@ begin
   if IsFunc then
   begin
     RetQType := QbeTypeOf(ADecl.ResolvedReturnType);
-    if ADecl.ResolvedReturnType.Kind = tyInterface then
+    if (ADecl.ResolvedReturnType.Kind = tyInterface) or
+       ((ADecl.ResolvedReturnType.Kind = tySet) and
+        TSetTypeDesc(ADecl.ResolvedReturnType).IsJumbo()) then
     begin
+      { Interface and jumbo-set returns use a hidden sret pointer (the callee
+        writes the aggregate through it) and return void. }
       if Sig <> '' then Sig := 'l %_par__sret, ' + Sig
       else Sig := 'l %_par__sret';
       EmitLine(Format('%sfunction %s(%s) {', [Prefix, FuncName, Sig]));
@@ -7686,8 +7804,17 @@ begin
               [Par.ParamName, Par.ParamName]));
           end;
         tySet:
-          { w (≤32 members) or l (≤64) bitmask — spill at its width. }
-          if TSetTypeDesc(Par.ResolvedType).BitCount <= 32 then
+          { Small set: w (<=32) / l (<=64) bitmask spilled at its width.
+            Jumbo set: arrives as a pointer; copy into a local bitmap slot. }
+          if TSetTypeDesc(Par.ResolvedType).IsJumbo() then
+          begin
+            EmitLine(Format('  %%_var_%s =l alloc8 %d',
+              [Par.ParamName, TSetTypeDesc(Par.ResolvedType).RawSize()]));
+            EmitLine(Format('  call $memcpy(l %%_var_%s, l %%_par_%s, l %d)',
+              [Par.ParamName, Par.ParamName,
+               TSetTypeDesc(Par.ResolvedType).RawSize()]));
+          end
+          else if TSetTypeDesc(Par.ResolvedType).BitCount <= 32 then
           begin
             EmitLine(Format('  %%_var_%s =l alloc4 1', [Par.ParamName]));
             EmitLine(Format('  storew %%_par_%s, %%_var_%s',
@@ -7775,6 +7902,15 @@ begin
   begin
     if ADecl.ResolvedReturnType.Kind = tyRecord then
       EmitRecordReturnPrologue(TRecordTypeDesc(ADecl.ResolvedReturnType), RC)
+    else if (ADecl.ResolvedReturnType.Kind = tySet) and
+            TSetTypeDesc(ADecl.ResolvedReturnType).IsJumbo() then
+    begin
+      { sret: jumbo-set Result aliases the caller's buffer; zero-init it so a
+        partial build (Include before full assignment) starts empty. }
+      EmitLine('  %_var_Result =l copy %_par__sret');
+      EmitLine(Format('  call $memset(l %%_var_Result, w 0, l %d)',
+        [TSetTypeDesc(ADecl.ResolvedReturnType).RawSize()]));
+    end
     else if ADecl.ResolvedReturnType.Kind = tyInterface then
     begin
       { sret: interface Result is a 16-byte fat pointer (obj+itab) in the
@@ -7858,7 +7994,10 @@ begin
   begin
     if ADecl.ResolvedReturnType.Kind = tyRecord then
       EmitRecordReturnEpilogue(TRecordTypeDesc(ADecl.ResolvedReturnType), RC)
-    else if ADecl.ResolvedReturnType.Kind = tyInterface then
+    else if (ADecl.ResolvedReturnType.Kind = tyInterface) or
+            ((ADecl.ResolvedReturnType.Kind = tySet) and
+             TSetTypeDesc(ADecl.ResolvedReturnType).IsJumbo()) then
+      { sret: the aggregate was written through %_par__sret — return void. }
       EmitLine('  ret')
     else
     begin
@@ -8316,37 +8455,61 @@ begin
   end
   else if UCaseName = 'INCLUDE' then
   begin
-    { Include(S, elem): S := S or (1 shl ord(elem)) }
-    SetQT := QbeTypeOf(TASTExpr(ACall.Args.Items[0]).ResolvedType);
-    SetLoad := LoadInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
-    SetStore := StoreInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
-    ArgTemp  := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
-    ArgTemp2 := AllocTemp();
-    EmitLine(Format('  %s =%s %s %s', [ArgTemp2, SetQT, SetLoad, ArgTemp]));
-    SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]));
-    ArgLine  := AllocTemp();
-    EmitLine(Format('  %s =%s shl 1, %s', [ArgLine, SetQT, SizeTemp]));
-    SizeTemp := AllocTemp();
-    EmitLine(Format('  %s =%s or %s, %s', [SizeTemp, SetQT, ArgTemp2, ArgLine]));
-    EmitLine(Format('  %s %s, %s', [SetStore, SizeTemp, ArgTemp]));
+    { Jumbo set: in-place bit set via the RTL helper. }
+    if (TASTExpr(ACall.Args.Items[0]).ResolvedType <> nil) and
+       (TASTExpr(ACall.Args.Items[0]).ResolvedType.Kind = tySet) and
+       TSetTypeDesc(TASTExpr(ACall.Args.Items[0]).ResolvedType).IsJumbo() then
+    begin
+      ArgTemp  := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
+      SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]));
+      EmitLine(Format('  call $_SetInclude(l %s, w %s)', [ArgTemp, SizeTemp]));
+    end
+    else
+    begin
+      { Include(S, elem): S := S or (1 shl ord(elem)) }
+      SetQT := QbeTypeOf(TASTExpr(ACall.Args.Items[0]).ResolvedType);
+      SetLoad := LoadInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
+      SetStore := StoreInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
+      ArgTemp  := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
+      ArgTemp2 := AllocTemp();
+      EmitLine(Format('  %s =%s %s %s', [ArgTemp2, SetQT, SetLoad, ArgTemp]));
+      SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]));
+      ArgLine  := AllocTemp();
+      EmitLine(Format('  %s =%s shl 1, %s', [ArgLine, SetQT, SizeTemp]));
+      SizeTemp := AllocTemp();
+      EmitLine(Format('  %s =%s or %s, %s', [SizeTemp, SetQT, ArgTemp2, ArgLine]));
+      EmitLine(Format('  %s %s, %s', [SetStore, SizeTemp, ArgTemp]));
+    end;
   end
   else if UCaseName = 'EXCLUDE' then
   begin
-    { Exclude(S, elem): S := S and (not (1 shl ord(elem))) }
-    SetQT := QbeTypeOf(TASTExpr(ACall.Args.Items[0]).ResolvedType);
-    SetLoad := LoadInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
-    SetStore := StoreInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
-    ArgTemp  := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
-    ArgTemp2 := AllocTemp();
-    EmitLine(Format('  %s =%s %s %s', [ArgTemp2, SetQT, SetLoad, ArgTemp]));
-    SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]));
-    ArgLine  := AllocTemp();
-    EmitLine(Format('  %s =%s shl 1, %s', [ArgLine, SetQT, SizeTemp]));
-    SizeTemp := AllocTemp();
-    EmitLine(Format('  %s =%s xor %s, -1', [SizeTemp, SetQT, ArgLine]));
-    ArgLine  := AllocTemp();
-    EmitLine(Format('  %s =%s and %s, %s', [ArgLine, SetQT, ArgTemp2, SizeTemp]));
-    EmitLine(Format('  %s %s, %s', [SetStore, ArgLine, ArgTemp]));
+    { Jumbo set: in-place bit clear via the RTL helper. }
+    if (TASTExpr(ACall.Args.Items[0]).ResolvedType <> nil) and
+       (TASTExpr(ACall.Args.Items[0]).ResolvedType.Kind = tySet) and
+       TSetTypeDesc(TASTExpr(ACall.Args.Items[0]).ResolvedType).IsJumbo() then
+    begin
+      ArgTemp  := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
+      SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]));
+      EmitLine(Format('  call $_SetExclude(l %s, w %s)', [ArgTemp, SizeTemp]));
+    end
+    else
+    begin
+      { Exclude(S, elem): S := S and (not (1 shl ord(elem))) }
+      SetQT := QbeTypeOf(TASTExpr(ACall.Args.Items[0]).ResolvedType);
+      SetLoad := LoadInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
+      SetStore := StoreInstrFor(TASTExpr(ACall.Args.Items[0]).ResolvedType);
+      ArgTemp  := EmitLValueAddr(TASTExpr(ACall.Args.Items[0]));
+      ArgTemp2 := AllocTemp();
+      EmitLine(Format('  %s =%s %s %s', [ArgTemp2, SetQT, SetLoad, ArgTemp]));
+      SizeTemp := EmitExpr(TASTExpr(ACall.Args.Items[1]));
+      ArgLine  := AllocTemp();
+      EmitLine(Format('  %s =%s shl 1, %s', [ArgLine, SetQT, SizeTemp]));
+      SizeTemp := AllocTemp();
+      EmitLine(Format('  %s =%s xor %s, -1', [SizeTemp, SetQT, ArgLine]));
+      ArgLine  := AllocTemp();
+      EmitLine(Format('  %s =%s and %s, %s', [ArgLine, SetQT, ArgTemp2, SizeTemp]));
+      EmitLine(Format('  %s %s, %s', [SetStore, ArgLine, ArgTemp]));
+    end;
   end
   else if UCaseName = 'DELETEFILE' then
   begin
@@ -8697,6 +8860,8 @@ var
   DataTemp:     string;
   SQT:          string;
   PMark:        Integer;
+  SetNB:        Integer;   { jumbo set bitmap byte count }
+  SetRS:        Integer;   { jumbo set slot size (RawSize, 8-rounded) }
 begin
   PMark := PendingReleaseMark();
   if AExpr is TFuncCallExpr then
@@ -9856,6 +10021,18 @@ begin
         EmitRecordCallSret(AExpr, SretBuf);
         Exit(SretBuf);
       end;
+      { sret: jumbo-set-returning function — caller allocates a zero-init
+        bitmap buffer and passes its address as the hidden first parameter. }
+      if (MDecl.ResolvedReturnType.Kind = tySet) and
+         TSetTypeDesc(MDecl.ResolvedReturnType).IsJumbo() then
+      begin
+        SetRS   := TSetTypeDesc(MDecl.ResolvedReturnType).RawSize();
+        SretBuf := AllocTemp();
+        EmitLine(Format('  %s =l alloc8 %d', [SretBuf, SetRS]));
+        EmitLine(Format('  call $memset(l %s, w 0, l %d)', [SretBuf, SetRS]));
+        EmitRecordCallSret(AExpr, SretBuf);
+        Exit(SretBuf);
+      end;
       if FC.IsImplicitSelfMethod then
       begin
         ArgTemp := AllocTemp();
@@ -10288,6 +10465,17 @@ begin
       EmitRecordCallSret(AExpr, SretBuf);
       Exit(SretBuf);
     end;
+    { sret: jumbo-set-returning method }
+    if (MDecl.ResolvedReturnType.Kind = tySet) and
+       TSetTypeDesc(MDecl.ResolvedReturnType).IsJumbo() then
+    begin
+      SetRS   := TSetTypeDesc(MDecl.ResolvedReturnType).RawSize();
+      SretBuf := AllocTemp();
+      EmitLine(Format('  %s =l alloc8 %d', [SretBuf, SetRS]));
+      EmitLine(Format('  call $memset(l %s, w 0, l %d)', [SretBuf, SetRS]));
+      EmitRecordCallSret(AExpr, SretBuf);
+      Exit(SretBuf);
+    end;
 
     { Load the object pointer (Self): either from a named variable or from
       evaluating the receiver expression (e.g. a typecast). }
@@ -10675,7 +10863,7 @@ begin
       end
       else
         Ptr := L;
-      if FldAccess.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      if IsAggregateAddrType(FldAccess.FieldInfo.TypeDesc) then
         Exit(Ptr);
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
@@ -10769,7 +10957,7 @@ begin
       begin
         Exit(Ptr);
       end;
-      if FldAccess.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      if IsAggregateAddrType(FldAccess.FieldInfo.TypeDesc) then
         Exit(Ptr);
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
@@ -11192,7 +11380,7 @@ begin
         below; without this, passing a class-field record/array by value emitted
         `loadl` of the field address and passed the first 8 bytes as the
         aggregate, crashing the callee.) }
-      if FldAccess.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      if IsAggregateAddrType(FldAccess.FieldInfo.TypeDesc) then
         Exit(Ptr);
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
@@ -11231,7 +11419,7 @@ begin
       begin
         Exit(Ptr);
       end;
-      if FldAccess.FieldInfo.TypeDesc.Kind in [tyRecord, tyStaticArray] then
+      if IsAggregateAddrType(FldAccess.FieldInfo.TypeDesc) then
         Exit(Ptr);
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
@@ -11337,7 +11525,8 @@ begin
     end
     else if TIdentExpr(AExpr).IsConstant and
             ((AExpr.ResolvedType = nil) or
-             (AExpr.ResolvedType.Kind <> tyStaticArray)) then
+             ((AExpr.ResolvedType.Kind <> tyStaticArray) and
+              not IsAggregateAddrType(AExpr.ResolvedType))) then
     begin
       if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tyString) then
       begin
@@ -11365,7 +11554,7 @@ begin
         from that address (no extra pointer hop). }
       QType := QbeTypeOf(AExpr.ResolvedType);
       if (AExpr.ResolvedType <> nil) and
-         (AExpr.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
+         IsAggregateAddrType(AExpr.ResolvedType) then
       begin
         { Aggregate: %_cap_Name is the storage address — return directly. }
         EmitLine(Format('  %s =l copy %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
@@ -11379,9 +11568,16 @@ begin
         EmitLine(Format('  %s =w loadw %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
       end;
     end
+    else if TIdentExpr(AExpr).ParamMode = pmJumboSetValue then
+    begin
+      { Jumbo set value param: the QBE backend spills it into a local inline
+        bitmap slot (value semantics), so %_var_X IS the bitmap address —
+        return it directly without a load. }
+      Exit(VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal));
+    end
     else if (TIdentExpr(AExpr).ParamMode <> pmNone) and
             (AExpr.ResolvedType <> nil) and
-            (AExpr.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
+            IsAggregateAddrType(AExpr.ResolvedType) then
     begin
       { Var param of aggregate type: the param slot already holds the address
         of the caller's storage — load and return that as the storage address. }
@@ -11406,7 +11602,7 @@ begin
       Exit('$' + TIdentExpr(AExpr).ConstArraySymbol);
     end
     else if (AExpr.ResolvedType <> nil) and
-            (AExpr.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
+            IsAggregateAddrType(AExpr.ResolvedType) then
     begin
       { Aggregate variable — return its storage address directly (no load). }
       Exit(VarRef(TIdentExpr(AExpr).Name, TIdentExpr(AExpr).IsGlobal));
@@ -11577,20 +11773,80 @@ begin
       end;
       Exit(T);
     end;
-    { Set membership: elem in SetVar — (set >> ord(elem)) & 1 }
+    { Set membership: elem in SetVar }
     if BinExpr.Op = boIn then
     begin
+      { Jumbo set: R is the bitmap address, L the ordinal — _SetIn(R, L). }
+      if (BinExpr.Right.ResolvedType <> nil) and
+         (BinExpr.Right.ResolvedType.Kind = tySet) and
+         TSetTypeDesc(BinExpr.Right.ResolvedType).IsJumbo() then
+      begin
+        EmitLine(Format('  %s =w call $_SetIn(l %s, w %s)', [T, R, L]));
+        Exit(T);
+      end;
+      { Small set: ((set >> ord) & 1) AND (ord < BitCount).  The range guard
+        matters when the set is sized to a literal's max ordinal (e.g.
+        'X in [low members]') but the tested element's ordinal may exceed the
+        set width — a shift past the register width is undefined, so the guard
+        forces a 0 result for out-of-range ordinals. }
       SQT := QbeTypeOf(BinExpr.Right.ResolvedType);
       ArgTemp := AllocTemp();
       EmitLine(Format('  %s =%s shr %s, %s', [ArgTemp, SQT, R, L]));
-      EmitLine(Format('  %s =w and %s, 1', [T, ArgTemp]));
+      T2 := AllocTemp();
+      EmitLine(Format('  %s =w and %s, 1', [T2, ArgTemp]));
+      ArgTemp := AllocTemp();
+      EmitLine(Format('  %s =w csltw %s, %d',
+        [ArgTemp, L, TSetTypeDesc(BinExpr.Right.ResolvedType).BitCount]));
+      EmitLine(Format('  %s =w and %s, %s', [T, T2, ArgTemp]));
       Exit(T);
     end;
 
-    { Set arithmetic: union, difference, intersection }
+    { Set arithmetic: union, difference, intersection, equality }
     if (BinExpr.Left.ResolvedType <> nil) and
        (BinExpr.Left.ResolvedType.Kind = tySet) then
     begin
+      { Jumbo set: L and R are bitmap addresses.  Binary set ops write into a
+        fresh result buffer and return its address; equality returns a w 0/1.
+        NBytes is the (compile-time) bitmap length. }
+      if TSetTypeDesc(BinExpr.Left.ResolvedType).IsJumbo() then
+      begin
+        SetNB := TSetTypeDesc(BinExpr.Left.ResolvedType).RawByteSize();
+        SetRS := TSetTypeDesc(BinExpr.Left.ResolvedType).RawSize();
+        case BinExpr.Op of
+          boAdd:
+          begin
+            EmitLine(Format('  %s =l alloc8 %d', [T, SetRS]));
+            EmitLine(Format('  call $_SetUnion(l %s, l %s, l %s, w %d)',
+              [T, L, R, SetNB]));
+          end;
+          boSub:
+          begin
+            EmitLine(Format('  %s =l alloc8 %d', [T, SetRS]));
+            EmitLine(Format('  call $_SetDiff(l %s, l %s, l %s, w %d)',
+              [T, L, R, SetNB]));
+          end;
+          boMul:
+          begin
+            EmitLine(Format('  %s =l alloc8 %d', [T, SetRS]));
+            EmitLine(Format('  call $_SetInter(l %s, l %s, l %s, w %d)',
+              [T, L, R, SetNB]));
+          end;
+          boEQ:
+            EmitLine(Format('  %s =w call $_SetEqual(l %s, l %s, w %d)',
+              [T, L, R, SetNB]));
+          boNE:
+          begin
+            ArgTemp := AllocTemp();
+            EmitLine(Format('  %s =w call $_SetEqual(l %s, l %s, w %d)',
+              [ArgTemp, L, R, SetNB]));
+            EmitLine(Format('  %s =w ceqw %s, 0', [T, ArgTemp]));
+          end;
+        else
+          raise ECodeGenError.Create(Format(
+            'Operator not supported for set types at line %d', [BinExpr.Line]));
+        end;
+        Exit(T);
+      end;
       SQT := QbeTypeOf(BinExpr.Left.ResolvedType);
       case BinExpr.Op of
         boAdd:  { union: or }
@@ -11918,7 +12174,7 @@ begin
       For scalar types, load through T to get the actual value. }
     T := EmitExpr(TDerefExpr(AExpr).Expr);
     if (AExpr.ResolvedType <> nil) and
-       (AExpr.ResolvedType.Kind in [tyRecord, tyStaticArray]) then
+       IsAggregateAddrType(AExpr.ResolvedType) then
     begin
       { P : ^TRecord — T is already the record's address; no further load }
       Result := T;
@@ -13839,13 +14095,34 @@ end;
 
 function TCodeGenQBE.EmitSetLiteralExpr(AExpr: TArrayLiteralExpr): string;
 var
-  Mask:   Int64;
-  I:      Integer;
-  Elem:   TASTExpr;
-  IdExpr: TIdentExpr;
-  Tmp:    string;
-  QT:     string;
+  Mask:    Int64;
+  I:       Integer;
+  Elem:    TASTExpr;
+  IdExpr:  TIdentExpr;
+  Tmp:     string;
+  QT:      string;
+  ElemVal: string;
 begin
+  { Jumbo set literal: build the bitmap in a fresh stack buffer — memset 0,
+    then set each member's bit via _SetInclude.  Elements may be non-constant
+    (evaluated at runtime), unlike the small-set fast path. }
+  if (AExpr.ResolvedType <> nil) and (AExpr.ResolvedType.Kind = tySet) and
+     TSetTypeDesc(AExpr.ResolvedType).IsJumbo() then
+  begin
+    Tmp := AllocTemp();
+    EmitLine(Format('  %s =l alloc8 %d',
+      [Tmp, TSetTypeDesc(AExpr.ResolvedType).RawSize()]));
+    EmitLine(Format('  call $memset(l %s, w 0, l %d)',
+      [Tmp, TSetTypeDesc(AExpr.ResolvedType).RawSize()]));
+    for I := 0 to AExpr.Elements.Count - 1 do
+    begin
+      Elem    := TASTExpr(AExpr.Elements.Items[I]);
+      ElemVal := EmitExpr(Elem);
+      EmitLine(Format('  call $_SetInclude(l %s, w %s)', [Tmp, ElemVal]));
+    end;
+    Exit(Tmp);
+  end;
+
   Mask := 0;
   for I := 0 to AExpr.Elements.Count - 1 do
   begin

@@ -240,6 +240,12 @@ type
     function  AnalyseStringSubscriptExpr(AExpr: TStringSubscriptExpr): TTypeDesc;
     function  AnalyseArrayLiteralExpr(AExpr: TArrayLiteralExpr): TTypeDesc;
     function  AnalyseSetLiteralExpr(AExpr: TArrayLiteralExpr; ASetType: TSetTypeDesc): TTypeDesc;
+    { Width (in bits) needed for the anonymous set type of an 'X in [a,b,c]'
+      literal: largest listed member ordinal + 1 when every element is a
+      compile-time enum constant; otherwise the full base-enum member count
+      (conservative).  Keeps low-ordinal membership tests off the jumbo path. }
+    function  SetLiteralBitCount(AExpr: TArrayLiteralExpr;
+                                 ABaseEnum: TEnumTypeDesc): Integer;
     procedure CoerceToCharOrd(ALit: TStringLiteral);
     procedure AnalysePointerWriteStmt(AStmt: TPointerWriteStmt);
     procedure AnalyseStaticSubscriptAssign(AStmt: TStaticSubscriptAssign);
@@ -1887,9 +1893,9 @@ begin
     end;
     if Members.Count = 0 then
       SemanticError('Empty anonymous enumeration in set type', 0, 0);
-    if Members.Count > 64 then
+    if Members.Count > 256 then
       SemanticError(Format(
-        'Anonymous enumeration has %d members; set types support at most 64',
+        'Anonymous enumeration has %d members; set types support at most 256',
         [Members.Count]), 0, 0);
     { Reuse an already-synthesised identical enum: if the first member is a
       defined enum constant whose enum has exactly these members, return it. }
@@ -2042,9 +2048,9 @@ begin
       BaseType := FindTypeOrInstantiate(BaseName);
     if (BaseType <> nil) and (BaseType.Kind = tyEnum) then
     begin
-      if TEnumTypeDesc(BaseType).Members.Count > 64 then
+      if TEnumTypeDesc(BaseType).Members.Count > 256 then
         SemanticError(Format(
-          'Enumeration ''%s'' has %d members; set types support at most 64',
+          'Enumeration ''%s'' has %d members; set types support at most 256',
           [BaseType.Name, TEnumTypeDesc(BaseType).Members.Count]), 0, 0);
       CanonName := 'set of ' + BaseType.Name;
       Result    := FTable.FindType(CanonName);
@@ -3141,12 +3147,17 @@ var
   CanonName: string;
   ExistTD:   TTypeDesc;
   Sym:       TSymbol;
+  Ords:      TStringList;
+  Ord, BIdx, NB, BVal: Integer;
 begin
   Mask     := 0;
   EnumDesc := nil;
+  Ords     := TStringList.Create();
 
-  { Resolve each member to an enum constant; OR its bit into the mask and
-    pin down the shared base enum. }
+  { Resolve each member to an enum constant; record its ordinal and pin down
+    the shared base enum.  The bitmask (small set) or byte bitmap (jumbo set)
+    is built AFTER the set type is known, so we never `shl` by an ordinal >= 64
+    (undefined) before we know whether the set is jumbo. }
   for I := 0 to ACD.SetElements.Count - 1 do
   begin
     MemName := ACD.SetElements.Strings[I];
@@ -3168,7 +3179,7 @@ begin
         [ACD.Name, EnumDesc.Name, MemSym.TypeDesc.Name]), ACD.Line, ACD.Col);
       Exit;
     end;
-    Mask := Mask or (Int64(1) shl MemSym.ConstValue);
+    Ords.Add(IntToStr(MemSym.ConstValue));
   end;
 
   { Determine the set type descriptor. }
@@ -3196,9 +3207,9 @@ begin
   end
   else if EnumDesc <> nil then
   begin
-    if EnumDesc.Members.Count > 64 then
+    if EnumDesc.Members.Count > 256 then
       SemanticError(
-        Format('Enumeration ''%s'' has %d members; set types support at most 64',
+        Format('Enumeration ''%s'' has %d members; set types support at most 256',
           [EnumDesc.Name, EnumDesc.Members.Count]),
         ACD.Line, ACD.Col);
     { Inferred set type: find or create the canonical 'set of <Enum>'. }
@@ -3221,9 +3232,40 @@ begin
     Exit;
   end;
 
-  ACD.IntVal     := Mask;
-  Sym            := TSymbol.Create(ACD.Name, skConstant, SetDesc);
-  Sym.ConstValue := Mask;
+  Sym := TSymbol.Create(ACD.Name, skConstant, SetDesc);
+  if SetDesc.IsJumbo() then
+  begin
+    { Jumbo set const: build a byte-array bitmap; the mask can't fit in Int64. }
+    NB := SetDesc.RawByteSize();
+    ACD.ConstSetBytes := TStringList.Create();
+    for I := 0 to NB - 1 do
+      ACD.ConstSetBytes.Add('0');
+    for I := 0 to Ords.Count - 1 do
+    begin
+      Ord  := StrToInt(Ords.Strings[I]);
+      BIdx := Ord shr 3;
+      BVal := StrToInt(ACD.ConstSetBytes.Strings[BIdx]) or (1 shl (Ord and 7));
+      ACD.ConstSetBytes.Put(BIdx, IntToStr(BVal));
+    end;
+    Sym.ConstSetBytes := TStringList.Create();
+    for I := 0 to ACD.ConstSetBytes.Count - 1 do
+      Sym.ConstSetBytes.Add(ACD.ConstSetBytes.Strings[I]);
+    { Mangled, file-local data label for the bitmap blob (mirrors array
+      consts), shared by the decl and the symbol so reads resolve to it. }
+    if ACD.ResolvedSetQbeName = '' then
+      ACD.ResolvedSetQbeName := Self.NewArrayConstLabel(ACD.Name);
+    Sym.ConstSetQbe := ACD.ResolvedSetQbeName;
+    ACD.IntVal     := 0;
+    Sym.ConstValue := 0;
+  end
+  else
+  begin
+    { Small set: pack into the Int64 bitmask (existing fast path). }
+    for I := 0 to Ords.Count - 1 do
+      Mask := Mask or (Int64(1) shl StrToInt(Ords.Strings[I]));
+    ACD.IntVal     := Mask;
+    Sym.ConstValue := Mask;
+  end;
   if not FTable.Define(Sym) then
     Sym.Free();   { duplicate — cross-unit shadowing tolerated, like scalar consts }
 end;
@@ -3590,9 +3632,9 @@ begin
         SemanticError(
           Format('Set base type ''%s'' must be an enumeration type', [SetDef.BaseTypeName]),
           TD.Line, TD.Col);
-      if TEnumTypeDesc(BaseSym.TypeDesc).Members.Count > 64 then
+      if TEnumTypeDesc(BaseSym.TypeDesc).Members.Count > 256 then
         SemanticError(
-          Format('Enumeration ''%s'' has %d members; set types support at most 64',
+          Format('Enumeration ''%s'' has %d members; set types support at most 256',
             [SetDef.BaseTypeName, TEnumTypeDesc(BaseSym.TypeDesc).Members.Count]),
           TD.Line, TD.Col);
       SetDesc := FTable.NewSetType(TD.Name, TEnumTypeDesc(BaseSym.TypeDesc));
@@ -5595,6 +5637,7 @@ begin
       ForInS.IsSetIter      := True;
       ForInS.ResolvedVarType := ElemType;
       ForInS.SetBitCount    := TSetTypeDesc(CollType).BitCount;
+      ForInS.SetIsJumbo     := TSetTypeDesc(CollType).IsJumbo();
 
       { Inject synthetic mask slot for the evaluated set value }
       ForInS.SetMaskVarName := '__setmask_' + IntToStr(FForInCounter);
@@ -5605,7 +5648,14 @@ begin
       begin
         SynthDecl := TVarDecl.Create();
         SynthDecl.Names.Add(ForInS.SetMaskVarName);
-        if TSetTypeDesc(CollType).BitCount > 32 then
+        if ForInS.SetIsJumbo then
+        begin
+          { Jumbo: the slot holds the set's ADDRESS (pointer-sized), not a mask;
+            membership is tested per-ordinal via the _SetIn RTL helper. }
+          SynthDecl.TypeName    := 'Int64';
+          SynthDecl.ResolvedType := FTable.TypeInt64;
+        end
+        else if TSetTypeDesc(CollType).BitCount > 32 then
         begin
           SynthDecl.TypeName    := 'Int64';
           SynthDecl.ResolvedType := FTable.TypeInt64;
@@ -8709,6 +8759,9 @@ begin
     else if (Sym.Kind = skParameter) and (Sym.TypeDesc <> nil) and
             (Sym.TypeDesc.Kind = tyStaticArray) then
       TIdentExpr(AExpr).ParamMode := pmStaticArrayValue
+    else if (Sym.Kind = skParameter) and (Sym.TypeDesc <> nil) and
+            (Sym.TypeDesc.Kind = tySet) and TSetTypeDesc(Sym.TypeDesc).IsJumbo() then
+      TIdentExpr(AExpr).ParamMode := pmJumboSetValue
     else
       TIdentExpr(AExpr).ParamMode := pmNone;
     TIdentExpr(AExpr).IsGlobal    := Sym.IsGlobal;
@@ -8723,6 +8776,10 @@ begin
       not $Name, to avoid link collisions. }
     if (Sym.ConstArray <> nil) and (Sym.ConstArrayQbe <> '') then
       TIdentExpr(AExpr).ConstArraySymbol := Sym.ConstArrayQbe;
+    { Jumbo set const referenced bare: same mangled-label mechanism — the read
+      resolves to the bitmap blob's address via the aggregate-read path. }
+    if (Sym.ConstSetBytes <> nil) and (Sym.ConstSetQbe <> '') then
+      TIdentExpr(AExpr).ConstArraySymbol := Sym.ConstSetQbe;
     { Bare class type identifier used as a value: metaclass reference.
       The result type is 'class of TFoo'; codegen emits the typeinfo
       address.  Compatibility with untyped Pointer (so 'Pointer(EError)'
@@ -9315,11 +9372,19 @@ begin
   if ABin.Op = boIn then
   begin
     { Coerce array literal [a, b, c] to an anonymous set type when the left
-      operand is an enum — handles the common 'x in [A, B, C]' idiom. }
+      operand is an enum — handles the common 'x in [A, B, C]' idiom.
+      Size the anonymous set by the largest ORDINAL actually listed (when all
+      elements are compile-time enum constants), not the full enum's member
+      count.  This keeps 'Kind in [low members]' on the fast <=64-bit register
+      path even when the base enum has more than 64 members, and only widens to
+      a jumbo set when a listed member's ordinal is itself >= 64.  Elements that
+      are not constant fall back to the full enum size (conservative). }
     if (ABin.Right is TArrayLiteralExpr) and (LType.Kind = tyEnum) then
     begin
       TmpSet := FTable.NewSetType('', TEnumTypeDesc(LType));
       RType := AnalyseSetLiteralExpr(TArrayLiteralExpr(ABin.Right), TmpSet);
+      TmpSet.BitCount := SetLiteralBitCount(TArrayLiteralExpr(ABin.Right),
+        TEnumTypeDesc(LType));
     end;
     if RType.Kind <> tySet then
       SemanticError(
@@ -10120,6 +10185,33 @@ begin
   else
     Result := FTable.NewOpenArrayType(ElemType);
   AExpr.ResolvedType := Result;
+end;
+
+function TSemanticAnalyser.SetLiteralBitCount(AExpr: TArrayLiteralExpr;
+  ABaseEnum: TEnumTypeDesc): Integer;
+var
+  I, MaxOrd: Integer;
+  Elem: TASTExpr;
+begin
+  MaxOrd := -1;
+  for I := 0 to AExpr.Elements.Count - 1 do
+  begin
+    Elem := TASTExpr(AExpr.Elements.Items[I]);
+    { Only compile-time enum constants have a known ordinal.  Any non-constant
+      element forces the conservative full-enum width. }
+    if (Elem is TIdentExpr) and TIdentExpr(Elem).IsConstant then
+    begin
+      if TIdentExpr(Elem).ConstValue > MaxOrd then
+        MaxOrd := TIdentExpr(Elem).ConstValue;
+    end
+    else
+      Exit(ABaseEnum.Members.Count);
+  end;
+  { Empty literal -> width 1 (a single zero byte fits any small set). }
+  if MaxOrd < 0 then
+    Result := 1
+  else
+    Result := MaxOrd + 1;
 end;
 
 function TSemanticAnalyser.AnalyseSetLiteralExpr(AExpr: TArrayLiteralExpr;

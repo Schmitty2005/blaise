@@ -124,12 +124,25 @@ type
   end;
 
   { Set type descriptor.  BaseType is the element enum; BitCount is the number
-    of bits required (= BaseType.Members.Count).  Stored as QBE 'w' for ≤32
-    members, 'l' for 33–64.  Each member ordinal N maps to bit (1 shl N). }
+    of bits required (= BaseType.Members.Count).  Each member ordinal N maps to
+    bit N of the bitmap.  Representation depends on BitCount:
+      BitCount <= 32  -> QBE 'w' (32-bit register), bit (1 shl N)
+      BitCount <= 64  -> QBE 'l' (64-bit register), bit (1 shl N)
+      BitCount  > 64  -> JUMBO: an inline byte-array bitmap of RawByteSize
+                          bytes, treated as an aggregate (like a record): bit N
+                          lives at byte (N shr 3), mask (1 shl (N and 7)).
+                          Operated on via the _Set* RTL helpers, never a single
+                          register.  Max 256 members -> 32 bytes. }
   TSetTypeDesc = class(TTypeDesc)
   public
     [Unretained] BaseType: TEnumTypeDesc;  { not owned }
     BitCount: Integer;        { = BaseType.Members.Count }
+    { True when this set is too wide for a single 64-bit register and must use
+      the inline byte-array (aggregate) representation + _Set* RTL helpers. }
+    function IsJumbo: Boolean;
+    { Number of bitmap bytes for the jumbo representation = ceil(BitCount/8).
+      Only meaningful when IsJumbo; <= 32 for the 256-member ceiling. }
+    function RawByteSize: Integer;
   end;
 
   { One parameter of a procedural type signature. }
@@ -336,6 +349,12 @@ type
     ConstArray:  TStringList; { owned; non-nil for array-typed const; raw element values }
     ConstArrayQbe: string;    { canonical QBE data-label for an array const; mangled
                                 to avoid collisions across scopes and with the RTL }
+    ConstSetBytes: TStringList; { owned; non-nil for a JUMBO (>64-member) set
+                                  const; one decimal byte value per bitmap byte
+                                  (RawByteSize entries).  Small sets keep using
+                                  ConstValue (the Int64 mask) instead. }
+    ConstSetQbe: string;      { canonical, mangled QBE data-label for a jumbo set
+                                const's byte blob (mirrors ConstArrayQbe) }
     IsWeak:     Boolean;      { true for variables declared [Weak]; codegen
                                 keys off this to emit _WeakAssign instead
                                 of the strong addref/release pattern. }
@@ -627,6 +646,16 @@ begin
   Result := Kind = tyRecord;
 end;
 
+function TSetTypeDesc.IsJumbo: Boolean;
+begin
+  Result := BitCount > 64;
+end;
+
+function TSetTypeDesc.RawByteSize: Integer;
+begin
+  Result := (BitCount + 7) div 8;
+end;
+
 function TTypeDesc.RawSize: Integer;
 begin
   case Kind of
@@ -636,7 +665,10 @@ begin
     tyInt64, tyUInt64, tyString, tyClass, tyPointer, tyNil, tyDouble: Result := 8;
     tySingle: Result := 4;
     tyRecord: Result := TRecordTypeDesc(Self).TotalSize();
-    tySet: if TSetTypeDesc(Self).BitCount <= 32 then Result := 4 else Result := 8;
+    tySet:
+      if TSetTypeDesc(Self).BitCount <= 32 then Result := 4
+      else if TSetTypeDesc(Self).BitCount <= 64 then Result := 8
+      else Result := (TSetTypeDesc(Self).RawByteSize() + 7) and (not 7);
     tyStaticArray:
       Result := (TStaticArrayTypeDesc(Self).HighBound -
                  TStaticArrayTypeDesc(Self).LowBound + 1) *
@@ -662,7 +694,10 @@ begin
     tyNil:               Result := 8;
     tyDouble:            Result := 8;
     tySingle:            Result := 4;
-    tySet: if TSetTypeDesc(Self).BitCount <= 32 then Result := 4 else Result := 8;
+    tySet:
+      if TSetTypeDesc(Self).BitCount <= 32 then Result := 4
+      else if TSetTypeDesc(Self).BitCount <= 64 then Result := 8
+      else Result := (TSetTypeDesc(Self).RawByteSize() + 7) and (not 7);
     tyStaticArray:
       Result := (TStaticArrayTypeDesc(Self).HighBound -
                  TStaticArrayTypeDesc(Self).LowBound + 1) *
@@ -685,6 +720,8 @@ begin
     tySingle:            Result := 4;
     tyInt64, tyUInt64, tyString:   Result := 8;
     tyRecord:            Result := TRecordTypeDesc(Self).MaxAlign();
+    { Sets: 4-byte alignment for the 32-bit register form, else 8 (the 64-bit
+      register form and the jumbo byte-array, which we keep 8-aligned). }
     tySet: if TSetTypeDesc(Self).BitCount <= 32 then Result := 4 else Result := 8;
     tyStaticArray: Result := TStaticArrayTypeDesc(Self).ElementType.AllocAlign();
   else

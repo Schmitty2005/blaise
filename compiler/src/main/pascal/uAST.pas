@@ -77,7 +77,8 @@ type
     pmNone,
     pmVar,
     pmRecordValue,
-    pmStaticArrayValue
+    pmStaticArrayValue,
+    pmJumboSetValue       { by-value jumbo (>64) set param: by-ref aggregate ABI }
   );
 
   TIdentExpr = class(TASTExpr)
@@ -271,7 +272,11 @@ type
     { Set iteration path (IsSetIter = True) }
     IsSetIter:            Boolean;
     SetBitCount:          Integer;   { number of bits in the set (= enum member count) }
-    SetMaskVarName:       string;    { synthetic slot holding the evaluated set mask }
+    SetMaskVarName:       string;    { synthetic slot: holds the evaluated set mask
+                                       (small set), or the set's ADDRESS (jumbo) }
+    SetIsJumbo:           Boolean;   { True when the set is >64 members: the slot
+                                       holds a pointer and membership is tested via
+                                       the _SetIn RTL helper, not a register shift }
     destructor Destroy; override;
   end;
 
@@ -585,11 +590,19 @@ type
       declared set type or the set type inferred from the members' enum. }
     IsSet:       Boolean;
     SetElements: TStringList;   { non-nil when IsSet; member ident names }
+    { JUMBO (>64-member) set constant: the bitmap as one decimal byte value per
+      bitmap byte (RawByteSize entries).  Set by uSemantic when IsSet and the
+      set type is jumbo, because the bitmask no longer fits in IntVal (Int64).
+      Nil for small sets (which keep using IntVal). }
+    ConstSetBytes: TStringList;
     { Canonical QBE data-label for an array const, set by uSemantic.  Mangled
       to a unique symbol so identically-named consts in different scopes (and
       RTL-internal consts) do not collide at link time.  Empty for non-array
       consts. }
     ResolvedQbeName: string;
+    { Canonical, mangled QBE data-label for a JUMBO set const's byte blob
+      (mirrors ResolvedQbeName for array consts). Empty otherwise. }
+    ResolvedSetQbeName: string;
     destructor Destroy; override;
   end;
 
@@ -2164,6 +2177,20 @@ begin
   end;
   if ASrc.IntValueExpr <> nil then
     Result.IntValueExpr := CloneExpr(ASrc.IntValueExpr);
+  Result.IsSet := ASrc.IsSet;
+  if ASrc.SetElements <> nil then
+  begin
+    Result.SetElements := TStringList.Create();
+    for I := 0 to ASrc.SetElements.Count - 1 do
+      Result.SetElements.Add(ASrc.SetElements.Strings[I]);
+  end;
+  if ASrc.ConstSetBytes <> nil then
+  begin
+    Result.ConstSetBytes := TStringList.Create();
+    for I := 0 to ASrc.ConstSetBytes.Count - 1 do
+      Result.ConstSetBytes.Add(ASrc.ConstSetBytes.Strings[I]);
+  end;
+  Result.ResolvedSetQbeName := ASrc.ResolvedSetQbeName;
 end;
 
 function CloneMethodParam(ASrc: TMethodParam): TMethodParam;
