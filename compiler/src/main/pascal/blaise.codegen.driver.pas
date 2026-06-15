@@ -70,7 +70,6 @@ type
     Target: TTargetDesc;
     DebugMode: Boolean;       { codegen debug / leak tracking }
     OPDFEnabled: Boolean;     { OPDF code shaping }
-    EmitAsm: Boolean;         { native --emit-asm }
     OPDFAsmFile: string;      { OPDF sidecar path, if any }
     UseInternalAsm: Boolean;  { --assembler internal (native backend) }
   end;

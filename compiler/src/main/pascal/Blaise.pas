@@ -31,7 +31,7 @@ uses
   blaise.codegen.native.driver,
   uUnitLoader, uDebugOPDF, uUnitInterface, uSemanticExport, uSemanticImport,
   uUnitInterfaceIO, uIfaceObject, uASTDump,
-  uConfig;
+  blaise.frontend.opts, uConfig;
 
 type
   { Alias so existing signatures (ParseArgs out param, locals) read
@@ -101,42 +101,33 @@ begin
   WriteLn('  per line). Searched next to the binary, then ~/.blaise.cfg.');
 end;
 
-function ParseArgs(
-  out SourceFile:     string;
-  out OutputFile:     string;
-  out EmitIR:         Boolean;
-  out EmitAsm:        Boolean;
-  out DumpAST:        Boolean;
-  out OPDFEnabled:    Boolean;
-  out DebugMode:      Boolean;
-  out Backend:        TBackend;
-  out Target:         TTargetDesc;
-  out SearchPaths:    TStringList;
-  out SkipDepCodegen: Boolean;
-  out EmitIfaceDir:   string;
-  out Incremental:    Boolean;
-  out UnitCacheDir:   string;
-  out UseInternalAsm: Boolean): Boolean;
+{ Populate the two caller-constructed opts objects from the command line.
+  AFront carries front-end-only state (paths, separate-compilation flags,
+  the EmitIR/EmitAsm output-mode policy flags, and the requested Backend
+  kind that is the input to driver selection); AOpts carries the
+  cross-cutting knobs a backend driver reads (Target, OPDFEnabled,
+  DebugMode, UseInternalAsm).  Returns False (and writes a diagnostic) on a
+  bad flag; the caller owns and frees both objects regardless. }
+function ParseArgs(AFront: TFrontEndOpts; AOpts: TBackendOpts): Boolean;
 var
   I: Integer;
   Arg: string;
 begin
-  Result         := False;
-  SourceFile     := '';
-  OutputFile     := '';
-  EmitIR         := False;
-  EmitAsm        := False;
-  DumpAST        := False;
-  OPDFEnabled    := False;
-  DebugMode      := False;
-  Backend        := bkQBE;
-  Target         := HostTarget();
-  SkipDepCodegen := False;
-  EmitIfaceDir   := '';
-  Incremental    := False;
-  UnitCacheDir   := '';
-  UseInternalAsm := False;
-  SearchPaths    := TStringList.Create();
+  Result := False;
+  AFront.SourceFile     := '';
+  AFront.OutputFile     := '';
+  AFront.EmitIR         := False;
+  AFront.EmitAsm        := False;
+  AFront.DumpAST        := False;
+  AFront.Backend        := bkQBE;
+  AFront.SkipDepCodegen := False;
+  AFront.EmitIfaceDir   := '';
+  AFront.Incremental    := False;
+  AFront.UnitCacheDir   := '';
+  AOpts.OPDFEnabled     := False;
+  AOpts.DebugMode       := False;
+  AOpts.Target          := HostTarget();
+  AOpts.UseInternalAsm  := False;
 
   I := 1;
   while I <= ParamCount() do
@@ -145,29 +136,29 @@ begin
     if (Arg = '--source') and (I < ParamCount()) then
     begin
       Inc(I);
-      SourceFile := ParamStr(I);
+      AFront.SourceFile := ParamStr(I);
     end
     else if (Arg = '--output') and (I < ParamCount()) then
     begin
       Inc(I);
-      OutputFile := ParamStr(I);
+      AFront.OutputFile := ParamStr(I);
     end
     else if (Arg = '--unit-path') and (I < ParamCount()) then
     begin
       Inc(I);
-      SearchPaths.Add(ParamStr(I));
+      AFront.SearchPaths.Add(ParamStr(I));
     end
     else if Arg = '--skip-dep-codegen' then
       { Omit dep unit bodies from the main codegen pass — every cross-
         unit call becomes an extern reference.  Caller is responsible
         for linking pre-built dep object files at link time. }
-      SkipDepCodegen := True
+      AFront.SkipDepCodegen := True
     else if (Arg = '--emit-iface') and (I < ParamCount()) then
     begin
       { Write each compiled unit's TUnitInterface as <Dir>/<Unit>.bif
         for later use as a separate-compilation cache. }
       Inc(I);
-      EmitIfaceDir := ParamStr(I);
+      AFront.EmitIfaceDir := ParamStr(I);
     end
     else if Arg = '--incremental' then
       { Phase 6c-H: compile each source-loaded dep to a stand-alone
@@ -176,30 +167,29 @@ begin
         are not inlined; they're linked from the per-unit .o
         files instead).  Next compile auto-discovers the .o's
         and skips parsing the .pas entirely. }
-      Incremental := True
+      AFront.Incremental := True
     else if (Arg = '--unit-cache') and (I < ParamCount()) then
     begin
       Inc(I);
-      UnitCacheDir := ParamStr(I);
+      AFront.UnitCacheDir := ParamStr(I);
     end
     else if Arg = '--emit-ir' then
-      EmitIR := True
+      AFront.EmitIR := True
     else if Arg = '--emit-asm' then
-      EmitAsm := True
+      AFront.EmitAsm := True
     else if Arg = '--dump-ast' then
-      DumpAST := True
+      AFront.DumpAST := True
     else if Arg = '--debug' then
-      DebugMode := True
+      AOpts.DebugMode := True
     else if Arg = '--debug-opdf' then
-      OPDFEnabled := True
+      AOpts.OPDFEnabled := True
     else if (Arg = '--backend') and (I < ParamCount()) then
     begin
       Inc(I);
-      if not ParseBackendName(ParamStr(I), Backend) then
+      if not ParseBackendName(ParamStr(I), AFront.Backend) then
       begin
         WriteLn(StdErr, 'Error: --backend ', ParamStr(I),
           ' is not a registered backend (', BackendUsageLine(), ')');
-        SearchPaths.Free();
         Exit;
       end;
     end
@@ -207,26 +197,24 @@ begin
     begin
       Inc(I);
       if ParamStr(I) = 'internal' then
-        UseInternalAsm := True
+        AOpts.UseInternalAsm := True
       else if ParamStr(I) = 'external' then
-        UseInternalAsm := False
+        AOpts.UseInternalAsm := False
       else
       begin
         WriteLn(StdErr, 'Error: --assembler must be ''internal'' or ''external''');
-        SearchPaths.Free();
         Exit;
       end;
     end
     else if (Arg = '--target') and (I < ParamCount()) then
     begin
       Inc(I);
-      if not ParseTargetName(ParamStr(I), Target) then
+      if not ParseTargetName(ParamStr(I), AOpts.Target) then
       begin
         WriteLn(StdErr, 'Error: unknown --target ''', ParamStr(I), '''');
-        SearchPaths.Free();
         Exit;
       end;
-      GTarget := Target;
+      GTarget := AOpts.Target;
     end
     else if (Arg = '--help') or (Arg = '-h') then
     begin
@@ -236,22 +224,20 @@ begin
     else
     begin
       WriteLn(StdErr, 'Unknown flag: ', Arg);
-      SearchPaths.Free();
       Exit;
     end;
     Inc(I);
   end;
 
-  if SourceFile = '' then
+  if AFront.SourceFile = '' then
   begin
     WriteLn(StdErr, 'Error: --source is required');
-    SearchPaths.Free();
     Exit;
   end;
-  if (not EmitIR) and (not EmitAsm) and (not DumpAST) and (OutputFile = '') then
+  if (not AFront.EmitIR) and (not AFront.EmitAsm) and (not AFront.DumpAST) and
+     (AFront.OutputFile = '') then
   begin
     WriteLn(StdErr, 'Error: --output is required (or use --emit-ir / --emit-asm / --dump-ast)');
-    SearchPaths.Free();
     Exit;
   end;
 
@@ -393,6 +379,7 @@ var
   CG:        ICodeGen;
   Driver:    TBackendDriver;  { resolved backend driver for top-program codegen }
   Opts:      TBackendOpts;    { flag bag passed through Driver.CreateCodeGen }
+  Front:     TFrontEndOpts;   { front-end-only flag bag, populated by ParseArgs }
   ToolErr:   string;          { CheckToolchain result ('' on success) }
   WorkerDriver: TBackendDriver;  { driver for the --incremental worker pool }
   OE:        TOPDFEmitter;
@@ -418,24 +405,42 @@ var
   Worker:   TCompileWorker;
 
 begin
-  SearchPaths    := nil;
-  OPDFEnabled    := False;
-  DebugMode      := False;
   OPDFAsmFile    := '';
-  SkipDepCodegen := False;
-  EmitIfaceDir   := '';
-  Incremental    := False;
-  UnitCacheDir   := '';
   TopUnit        := nil;
   IsUnitMode     := False;
-  if not ParseArgs(SourceFile, OutputFile, EmitIR, EmitAsm, DumpAST,
-                   OPDFEnabled, DebugMode,
-                   Backend, Target, SearchPaths, SkipDepCodegen, EmitIfaceDir,
-                   Incremental, UnitCacheDir, UseInternalAsm) then
+
+  { Parse the command line into the two opts objects.  ParseArgs populates
+    both (front-end state into Front, cross-cutting backend knobs into
+    Opts); the caller owns and frees them.  Built up front so the
+    incremental worker dispatch and the top-program codegen construction
+    read one shared Opts.  ARC-managed — released at program exit. }
+  Front := TFrontEndOpts.Create();
+  Opts := TBackendOpts.Create();
+  if not ParseArgs(Front, Opts) then
   begin
     PrintUsage();
     Halt(1);
   end;
+
+  { Seed the working locals from the opts objects.  Keeping the locals lets
+    the (large) main body read them unchanged; the parser owns the objects.
+    SearchPaths is the object's owned list (not copied) so config-path
+    insertion below mutates the canonical list. }
+  SourceFile     := Front.SourceFile;
+  OutputFile     := Front.OutputFile;
+  EmitIR         := Front.EmitIR;
+  EmitAsm        := Front.EmitAsm;
+  DumpAST        := Front.DumpAST;
+  Backend        := Front.Backend;
+  SearchPaths    := Front.SearchPaths;
+  SkipDepCodegen := Front.SkipDepCodegen;
+  EmitIfaceDir   := Front.EmitIfaceDir;
+  Incremental    := Front.Incremental;
+  UnitCacheDir   := Front.UnitCacheDir;
+  OPDFEnabled    := Opts.OPDFEnabled;
+  DebugMode      := Opts.DebugMode;
+  Target         := Opts.Target;
+  UseInternalAsm := Opts.UseInternalAsm;
 
   ConfigPaths := TStringList.Create();
   try
@@ -448,18 +453,6 @@ begin
 
   if (UnitCacheDir <> '') and (SearchPaths.IndexOf(UnitCacheDir) < 0) then
     SearchPaths.Add(UnitCacheDir);
-
-  { Build the cross-cutting opts bag once, up front.  Both the
-    incremental worker dispatch and the top-program codegen construction
-    read it; building it here keeps the two in sync.  ARC-managed —
-    released at program exit. }
-  Opts := TBackendOpts.Create();
-  Opts.Target := Target;
-  Opts.DebugMode := DebugMode;
-  Opts.OPDFEnabled := OPDFEnabled;
-  Opts.EmitAsm := EmitAsm;
-  Opts.OPDFAsmFile := OPDFAsmFile;
-  Opts.UseInternalAsm := UseInternalAsm;
 
   { Resolve the top-program driver once.  All backend-selection policy
     lives in PickTopDriver; everything downstream dispatches through
