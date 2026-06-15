@@ -70,6 +70,11 @@ begin
 end;
 
 procedure PrintUsage;
+var
+  DriverLines: TStringList;
+  K: TBackendKind;
+  D: TBackendDriver;
+  I: Integer;
 begin
   WriteLn('Blaise Compiler v', Version);
   WriteLn('Copyright (c) 2026 Graeme Geldenhuys');
@@ -79,22 +84,47 @@ begin
   WriteLn('  blaise --source <file.pas> --emit-ir');
   WriteLn('');
   WriteLn('Flags:');
-  WriteLn('  --source <path>     Pascal source file');
-  WriteLn('  --output <path>     Output binary path');
-  WriteLn('  --unit-path <dir>   Add directory to unit search path (repeatable)');
-  WriteLn('  --backend <id>      ', BackendUsageLine());
-  WriteLn('  --target <os>-<cpu> linux-x86_64 (default), linux-i386, linux-arm64,');
-  WriteLn('                      freebsd-x86_64, windows-x86_64, macos-arm64');
-  WriteLn('  --emit-ir           Print QBE IR to stdout and exit');
-  WriteLn('  --emit-asm          Print native assembly to stdout (requires --backend native)');
-  WriteLn('  --assembler <id>    internal | external (default: external)');
-  WriteLn('  --emit-iface <dir>  Write each unit''s TUnitInterface as <dir>/<unit>.bif');
-  WriteLn('  --skip-dep-codegen  Omit dep unit bodies from emitted IR (separate-compilation path)');
-  WriteLn('  --incremental       Compile each dep to its own .o as a side effect');
-  WriteLn('  --unit-cache <dir>  Where --incremental writes per-unit .o (default: alongside output)');
-  WriteLn('  --dump-ast          Print the resolved AST to stdout after semantic analysis');
-  WriteLn('  --debug             Enable runtime memory leak reporting on exit');
-  WriteLn('  --debug-opdf        Emit OPDF debug info (.opdf.s companion file)');
+  WriteLn(FormatFlagLine('--source <path>', 'Pascal source file'));
+  WriteLn(FormatFlagLine('--output <path>', 'Output binary path'));
+  WriteLn(FormatFlagLine('--unit-path <dir>',
+    'Add directory to unit search path (repeatable)'));
+  WriteLn(FormatFlagLine('--backend <id>', BackendUsageLine()));
+  WriteLn(FormatFlagLine('--target <os>-<cpu>',
+    'linux-x86_64 (default), linux-i386, linux-arm64,'));
+  WriteLn(FormatFlagLine('', 'freebsd-x86_64, windows-x86_64, macos-arm64'));
+  WriteLn(FormatFlagLine('--emit-ir', 'Print QBE IR to stdout and exit'));
+  WriteLn(FormatFlagLine('--emit-asm',
+    'Print native assembly to stdout (requires --backend native)'));
+  { Backend-private flags: each registered driver contributes its own
+    lines (already column-formatted via FormatFlagLine) so this block does
+    not hard-code per-backend flags like --assembler. }
+  DriverLines := TStringList.Create();
+  try
+    for K := bkQBE to bkNative do
+    begin
+      D := GetDriver(K);
+      if D <> nil then
+        D.DescribeOptions(DriverLines);
+    end;
+    for I := 0 to DriverLines.Count - 1 do
+      WriteLn(DriverLines.Strings[I]);
+  finally
+    DriverLines.Free();
+  end;
+  WriteLn(FormatFlagLine('--emit-iface <dir>',
+    'Write each unit''s TUnitInterface as <dir>/<unit>.bif'));
+  WriteLn(FormatFlagLine('--skip-dep-codegen',
+    'Omit dep unit bodies from emitted IR (separate-compilation path)'));
+  WriteLn(FormatFlagLine('--incremental',
+    'Compile each dep to its own .o as a side effect'));
+  WriteLn(FormatFlagLine('--unit-cache <dir>',
+    'Where --incremental writes per-unit .o (default: alongside output)'));
+  WriteLn(FormatFlagLine('--dump-ast',
+    'Print the resolved AST to stdout after semantic analysis'));
+  WriteLn(FormatFlagLine('--debug',
+    'Enable runtime memory leak reporting on exit'));
+  WriteLn(FormatFlagLine('--debug-opdf',
+    'Emit OPDF debug info (.opdf.s companion file)'));
   WriteLn('');
   WriteLn('Configuration:');
   WriteLn('  Unit search paths can also be set in blaise.cfg (one unit-path=<dir>');
@@ -108,10 +138,11 @@ end;
   cross-cutting knobs a backend driver reads (Target, OPDFEnabled,
   DebugMode, UseInternalAsm).  Returns False (and writes a diagnostic) on a
   bad flag; the caller owns and frees both objects regardless. }
-function ParseArgs(AFront: TFrontEndOpts; AOpts: TBackendOpts): Boolean;
+function ParseArgs(AFront: TFrontEndOpts; AOpts: TBackendOpts;
+  APendingFlags, APendingArgs: TStringList): Boolean;
 var
   I: Integer;
-  Arg: string;
+  Arg, NextArg: string;
 begin
   Result := False;
   AFront.SourceFile     := '';
@@ -193,19 +224,6 @@ begin
         Exit;
       end;
     end
-    else if (Arg = '--assembler') and (I < ParamCount()) then
-    begin
-      Inc(I);
-      if ParamStr(I) = 'internal' then
-        AOpts.UseInternalAsm := True
-      else if ParamStr(I) = 'external' then
-        AOpts.UseInternalAsm := False
-      else
-      begin
-        WriteLn(StdErr, 'Error: --assembler must be ''internal'' or ''external''');
-        Exit;
-      end;
-    end
     else if (Arg = '--target') and (I < ParamCount()) then
     begin
       Inc(I);
@@ -223,8 +241,25 @@ begin
     end
     else
     begin
-      WriteLn(StdErr, 'Unknown flag: ', Arg);
-      Exit;
+      { Not a shared/front-end flag.  Defer it: the parser does not yet
+        know which driver will be selected, nor whether the flag takes a
+        value.  Append (flag, lookahead) where lookahead is the next token
+        iff it exists and does not itself begin with '--' (so it is a
+        plausible value, not the next flag).  The post-loop drain offers
+        each pending flag to the resolved driver and only then decides
+        whether the lookahead was consumed as a value or is a standalone
+        unknown flag. }
+      APendingFlags.Add(Arg);
+      if (I < ParamCount()) then
+      begin
+        NextArg := ParamStr(I + 1);
+        if (Length(NextArg) >= 2) and (Copy(NextArg, 0, 2) = '--') then
+          APendingArgs.Add('')
+        else
+          APendingArgs.Add(NextArg);
+      end
+      else
+        APendingArgs.Add('');
     end;
     Inc(I);
   end;
@@ -381,6 +416,11 @@ var
   Opts:      TBackendOpts;    { flag bag passed through Driver.CreateCodeGen }
   Front:     TFrontEndOpts;   { front-end-only flag bag, populated by ParseArgs }
   ToolErr:   string;          { CheckToolchain result ('' on success) }
+  ValidErr:  string;          { Driver.ValidateOptions result ('' on success) }
+  PendingFlags: TStringList;  { deferred unknown flags (driver-private) }
+  PendingArgs:  TStringList;  { lookahead token per pending flag ('' if none) }
+  PendIdx:   Integer;         { drain cursor over the pending lists }
+  PendFlag:  string;
   WorkerDriver: TBackendDriver;  { driver for the --incremental worker pool }
   OE:        TOPDFEmitter;
   Loader:   TUnitLoader;
@@ -400,7 +440,6 @@ var
   IRFile:   string;
   LinkErr:  string;      { Driver.LinkProgram result ('' on success) }
   UnitOPath:   string;   { per-dep .o output path in --incremental mode }
-  UseInternalAsm: Boolean;
   Workers:  TObjectList; { TCompileWorker threads for parallel incremental }
   Worker:   TCompileWorker;
 
@@ -416,7 +455,9 @@ begin
     read one shared Opts.  ARC-managed — released at program exit. }
   Front := TFrontEndOpts.Create();
   Opts := TBackendOpts.Create();
-  if not ParseArgs(Front, Opts) then
+  PendingFlags := TStringList.Create();
+  PendingArgs := TStringList.Create();
+  if not ParseArgs(Front, Opts, PendingFlags, PendingArgs) then
   begin
     PrintUsage();
     Halt(1);
@@ -440,7 +481,10 @@ begin
   OPDFEnabled    := Opts.OPDFEnabled;
   DebugMode      := Opts.DebugMode;
   Target         := Opts.Target;
-  UseInternalAsm := Opts.UseInternalAsm;
+  { UseInternalAsm is not seeded here: --assembler now flows through the
+    driver's AcceptOption during the post-PickTopDriver drain, which writes
+    Opts.UseInternalAsm.  Downstream link code reads Opts.UseInternalAsm
+    directly. }
 
   ConfigPaths := TStringList.Create();
   try
@@ -458,6 +502,51 @@ begin
     lives in PickTopDriver; everything downstream dispatches through
     the driver. }
   Driver := PickTopDriver(Backend, EmitIR, EmitAsm);
+
+  { Drain the deferred backend-private flags (Chain of Responsibility).
+    Each pending flag is offered to the resolved driver.  When the driver
+    consumes a VALUE (oaConsumedValue), the loop will also have appended
+    that value token as its OWN pending entry (the parse loop did not yet
+    know the flag took a value), so skip the next entry when it matches
+    the consumed token.  An oaUnknown flag is a genuine unknown flag and
+    fails with the historical message and exit code. }
+  PendIdx := 0;
+  while PendIdx < PendingFlags.Count do
+  begin
+    PendFlag := PendingFlags.Strings[PendIdx];
+    case Driver.AcceptOption(PendFlag, PendingArgs.Strings[PendIdx], Opts) of
+      oaConsumedValue:
+        begin
+          { The lookahead token was this flag's value.  If the next
+            pending entry is that same token (appended standalone by the
+            parse loop), skip it so it is not re-reported as unknown. }
+          if (PendIdx + 1 < PendingFlags.Count) and
+             (PendingArgs.Strings[PendIdx] <> '') and
+             (PendingFlags.Strings[PendIdx + 1] = PendingArgs.Strings[PendIdx]) then
+            Inc(PendIdx);
+        end;
+      oaConsumedFlag:
+        ; { mine, no value taken }
+      oaUnknown:
+        begin
+          WriteLn(StdErr, 'Unknown flag: ', PendFlag);
+          Halt(1);
+        end;
+    end;
+    Inc(PendIdx);
+  end;
+
+  { Post-parse validation with the resolved driver and opts visible
+    (Template Method seam).  Runs UNCONDITIONALLY — these are flag-
+    combination rules (e.g. a bad --assembler value, OPDF-vs-LLVM), not
+    toolchain-reachability checks, so they must fire even in the
+    stdout-only modes that skip the toolchain probe below. }
+  ValidErr := Driver.ValidateOptions(Opts);
+  if ValidErr <> '' then
+  begin
+    WriteLn(StdErr, 'Error: ', ValidErr);
+    Halt(1);
+  end;
 
   { Pre-flight the backend toolchain before the front-end runs, so a
     missing tool surfaces immediately rather than after a full parse +

@@ -51,6 +51,15 @@ type
     procedure TestHelpStillWorks;
     procedure TestNormalCompileStillWorks;
     procedure TestFPCVersionProbeGone;
+    { ---- Steps 2-5: driver option contract surfacing through the CLI ----
+      These prove the drain -> ValidateOptions -> error -> exit-1 wiring in
+      Blaise.pas, which is not unit-testable (ParseArgs is a non-exported
+      program local). }
+    procedure TestAssemblerInternalAccepted;
+    procedure TestAssemblerBogusRejected;          { ValidateOptions surfaces }
+    procedure TestWrongBackendAssemblerRejected;   { addendum 2: qbe + --assembler }
+    procedure TestEmitIrStillValidatesAssembler;   { addendum 1: validate runs in stdout mode }
+    procedure TestAssemblerLineInHelp;             { DescribeOptions drives --help }
   end;
 
 implementation
@@ -198,6 +207,145 @@ begin
   AssertTrue('-iV must not return FPC version 3.2.2',
     Pos('3.2.2', Out_) < 0);
   AssertTrue('-iV must be rejected (non-zero exit)', EC <> 0);
+end;
+
+{ ---- Steps 2-5: driver option contract ---- }
+
+procedure TCLIContractTests.TestAssemblerInternalAccepted;
+var
+  Src, Out_: string;
+  EC: Integer;
+begin
+  if not CompilerAvailable() then
+  begin
+    Ignore('<toolchain-missing>');
+    Exit;
+  end;
+  { --backend native --assembler internal flows through the native driver's
+    AcceptOption (drain) and compiles successfully. }
+  Src := WriteScratchSource(
+    'program cli_asm;' + LineEnding +
+    'begin' + LineEnding +
+    '  WriteLn(1)' + LineEnding +
+    'end.');
+  EC := RunCompiler([
+    '--source', Src,
+    '--unit-path', FRTLPath,
+    '--unit-path', FStdlibPath,
+    '--backend', 'native',
+    '--assembler', 'internal',
+    '--output', FScratch + 'cli_asm_bin'
+  ], Out_);
+  AssertEquals('--assembler internal must compile: ' + Out_, 0, EC);
+end;
+
+procedure TCLIContractTests.TestAssemblerBogusRejected;
+var
+  Src, Out_: string;
+  EC: Integer;
+begin
+  if not CompilerAvailable() then
+  begin
+    Ignore('<toolchain-missing>');
+    Exit;
+  end;
+  { Bad --assembler value: accepted by AcceptOption, rejected by the native
+    driver's ValidateOptions with the exact legacy message.  Proves the
+    drain -> ValidateOptions -> error -> exit-1 wiring. }
+  Src := WriteScratchSource(
+    'program cli_bad;' + LineEnding +
+    'begin' + LineEnding +
+    '  WriteLn(1)' + LineEnding +
+    'end.');
+  EC := RunCompiler([
+    '--source', Src,
+    '--unit-path', FRTLPath,
+    '--unit-path', FStdlibPath,
+    '--backend', 'native',
+    '--assembler', 'bogus',
+    '--output', FScratch + 'cli_bad_bin'
+  ], Out_);
+  AssertTrue('bad --assembler value must be rejected', EC <> 0);
+  AssertTrue('diagnostic must mention internal/external: ' + Out_,
+    Pos('internal', Out_) >= 0);
+end;
+
+procedure TCLIContractTests.TestWrongBackendAssemblerRejected;
+var
+  Src, Out_: string;
+  EC: Integer;
+begin
+  if not CompilerAvailable() then
+  begin
+    Ignore('<toolchain-missing>');
+    Exit;
+  end;
+  { Addendum 2 (intentional behaviour change): --assembler is native-only.
+    Under --backend qbe the QBE driver returns oaUnknown for it, so the drain
+    reports it as an unknown flag and fails (previously silently accepted). }
+  Src := WriteScratchSource(
+    'program cli_wb;' + LineEnding +
+    'begin' + LineEnding +
+    '  WriteLn(1)' + LineEnding +
+    'end.');
+  EC := RunCompiler([
+    '--source', Src,
+    '--unit-path', FRTLPath,
+    '--unit-path', FStdlibPath,
+    '--backend', 'qbe',
+    '--assembler', 'internal',
+    '--output', FScratch + 'cli_wb_bin'
+  ], Out_);
+  AssertTrue('--assembler under --backend qbe must be rejected', EC <> 0);
+end;
+
+procedure TCLIContractTests.TestEmitIrStillValidatesAssembler;
+var
+  Src, Out_: string;
+  EC: Integer;
+begin
+  if not CompilerAvailable() then
+  begin
+    Ignore('<toolchain-missing>');
+    Exit;
+  end;
+  { Addendum 1: ValidateOptions runs unconditionally, above the stdout-mode
+    toolchain skip.  So a bad --assembler value is rejected even with
+    --emit-ir present (which selects the QBE driver for IR output).  Here the
+    wrong-backend rule fires first (QBE doesn't own --assembler), which is the
+    correct rejection either way — the point is it does NOT silently succeed. }
+  Src := WriteScratchSource(
+    'program cli_eir;' + LineEnding +
+    'begin' + LineEnding +
+    '  WriteLn(1)' + LineEnding +
+    'end.');
+  EC := RunCompiler([
+    '--source', Src,
+    '--unit-path', FRTLPath,
+    '--unit-path', FStdlibPath,
+    '--backend', 'native',
+    '--assembler', 'bogus',
+    '--emit-ir'
+  ], Out_);
+  AssertTrue('bad --assembler must be rejected even with --emit-ir', EC <> 0);
+end;
+
+procedure TCLIContractTests.TestAssemblerLineInHelp;
+var
+  Out_: string;
+  EC: Integer;
+begin
+  if not CompilerAvailable() then
+  begin
+    Ignore('<toolchain-missing>');
+    Exit;
+  end;
+  { The native driver's DescribeOptions contributes the --assembler line to
+    --help; Blaise.pas no longer hard-codes it. }
+  EC := RunCompiler(['--help'], Out_);
+  AssertEquals('--help exits 0', 0, EC);
+  AssertTrue('--help must list --assembler (via DescribeOptions)',
+    Pos('--assembler', Out_) >= 0);
 end;
 
 { ---- Registration ---- }

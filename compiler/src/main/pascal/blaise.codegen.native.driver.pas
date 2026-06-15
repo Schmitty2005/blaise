@@ -47,6 +47,12 @@ type
     function CreateCodeGen(AOpts: TBackendOpts): ICodeGen; override;
     function LinkProgram(const AIRFile, AOutputFile: string;
       AOpts: TBackendOpts; AExtraObjects: TStringList): string; override;
+
+    { --- Option contract: owns --assembler internal|external --- }
+    function AcceptOption(const AFlag, ANextArg: string;
+      AOpts: TBackendOpts): TOptionAccept; override;
+    procedure DescribeOptions(ALines: TStringList); override;
+    function ValidateOptions(AOpts: TBackendOpts): string; override;
   end;
 
 implementation
@@ -117,6 +123,37 @@ begin
       one invocation.  The IR file is owned by the caller — no cleanup
       here. }
     Result := Self.LinkViaToolchain(AIRFile, AOutputFile, AOpts, AExtraObjects);
+end;
+
+function TNativeBackendDriver.AcceptOption(const AFlag, ANextArg: string;
+  AOpts: TBackendOpts): TOptionAccept;
+begin
+  if AFlag = '--assembler' then
+  begin
+    { Accept the value here regardless of content; ValidateOptions
+      rejects an out-of-range value with the exact legacy message so the
+      user-facing diagnostic is unchanged.  internal sets UseInternalAsm;
+      anything else leaves it False (external default). }
+    AOpts.UseInternalAsm := (ANextArg = 'internal');
+    AOpts.AssemblerChoiceBad :=
+      (ANextArg <> 'internal') and (ANextArg <> 'external');
+    Result := oaConsumedValue;
+  end
+  else
+    Result := oaUnknown;
+end;
+
+procedure TNativeBackendDriver.DescribeOptions(ALines: TStringList);
+begin
+  ALines.Add(FormatFlagLine('--assembler <id>',
+    'internal | external (default: external)'));
+end;
+
+function TNativeBackendDriver.ValidateOptions(AOpts: TBackendOpts): string;
+begin
+  Result := '';
+  if AOpts.AssemblerChoiceBad then
+    Result := '--assembler must be ''internal'' or ''external''';
 end;
 
 initialization

@@ -41,6 +41,7 @@ type
       AOpts: TBackendOpts): string; override;
     function LinkProgram(const AIRFile, AOutputFile: string;
       AOpts: TBackendOpts; AExtraObjects: TStringList): string; override;
+    function ClaimsEmitIR: Boolean; override;
   protected
     { qbe AIRFile -> AAsmFile.  Returns '' on success. }
     function LowerToAsm(const AIRFile, AAsmFile: string;
@@ -66,6 +67,13 @@ end;
 function TQBEBackendDriver.IRFileExt: string;
 begin
   Result := '.ssa';
+end;
+
+function TQBEBackendDriver.ClaimsEmitIR: Boolean;
+begin
+  { QBE owns the --emit-ir text: the fixpoint check and the RTL Makefile
+    depend on byte-identical QBE IR. }
+  Result := True;
 end;
 
 function TQBEBackendDriver.SupportsIncremental: Boolean;

@@ -60,6 +60,14 @@ uses
 type
   TBackendKind = (bkQBE, bkNative);
 
+  { Result of offering an unrecognised flag to a driver (Chain of
+    Responsibility). }
+  TOptionAccept = (
+    oaUnknown,        { not my flag — keep trying / report unknown }
+    oaConsumedFlag,   { mine, took no value argument }
+    oaConsumedValue   { mine, consumed the following arg as its value }
+  );
+
   { Cross-cutting flags that affect codegen, lowering, and linking.
     Built once by the Blaise.pas flag parser and shared (read-only) with
     the compile workers.  Adding a new backend knob is a field here plus
@@ -72,6 +80,9 @@ type
     OPDFEnabled: Boolean;     { OPDF code shaping }
     OPDFAsmFile: string;      { OPDF sidecar path, if any }
     UseInternalAsm: Boolean;  { --assembler internal (native backend) }
+    AssemblerChoiceBad: Boolean;  { a --assembler value was given that is
+                                neither 'internal' nor 'external'; the
+                                native driver's ValidateOptions rejects it }
   end;
 
   TBackendDriver = class
@@ -122,6 +133,36 @@ type
     function LinkProgram(const AIRFile, AOutputFile: string;
       AOpts: TBackendOpts; AExtraObjects: TStringList): string; virtual; abstract;
 
+    { --- Option contract (Chain of Responsibility + Template Method) --- }
+
+    { The common parser, on a flag it does not own, offers it here.  The
+      driver writes any parsed state into the shared AOpts (the same
+      TBackendOpts the drivers later read).  Returns oaConsumedValue when
+      it took ANextArg as the flag's value, oaConsumedFlag when the flag
+      stood alone, oaUnknown when the flag is not this driver's.  Default
+      oaUnknown. }
+    function AcceptOption(const AFlag, ANextArg: string;
+      AOpts: TBackendOpts): TOptionAccept; virtual;
+
+    { Contribute this backend's flag lines to --help.  One (flag,
+      description) pair per AddOptionLine call; FormatFlagLine owns the
+      column layout so driver lines never drift from the shared block.
+      Default: nothing. }
+    procedure DescribeOptions(ALines: TStringList); virtual;
+
+    { Post-parse validation with the resolved TBackendOpts visible.
+      Returns '' when valid, else a user-facing message.  THIS is where
+      cross-cutting rules live ("OPDF debug info is not supported by the
+      LLVM backend").  Default ''. }
+    function ValidateOptions(AOpts: TBackendOpts): string; virtual;
+
+    { Selection policy: does this backend produce the IR text that
+      --emit-ir prints?  QBE = True (fixpoint / RTL-Makefile contract on
+      byte-identical QBE IR); native = False (its IR IS assembly, surfaced
+      via --emit-asm).  PickTopDriver asks this instead of hard-coding
+      bkQBE.  Default False. }
+    function ClaimsEmitIR: Boolean; virtual;
+
   protected
     { Shared link line: cc-driver resolved via uToolchain (env overrides
       and target awareness apply), input file, OPDF sidecar, extra
@@ -136,6 +177,14 @@ type
   as well as the main compile path. }
 function RunProcess(const AExe: string; AArgs: TStringList;
   out AOutput: string): Integer;
+
+{ Format one --help flag line with the shared 2-space indent and flag
+  column.  Single source of truth for the column width so the common
+  usage block (Blaise.pas PrintUsage) and each driver's DescribeOptions
+  cannot drift.  Example:
+    FormatFlagLine('--assembler <id>', 'internal | external (default: external)')
+  produces '  --assembler <id>    internal | external (default: external)'. }
+function FormatFlagLine(const AFlag, ADesc: string): string;
 
 { Registry.  Each backend unit registers its singleton in its
   initialization block; consumers fetch by kind.  Looking up an
@@ -191,6 +240,27 @@ begin
   Result := '';
 end;
 
+function TBackendDriver.AcceptOption(const AFlag, ANextArg: string;
+  AOpts: TBackendOpts): TOptionAccept;
+begin
+  Result := oaUnknown;
+end;
+
+procedure TBackendDriver.DescribeOptions(ALines: TStringList);
+begin
+  { No backend-private flags by default. }
+end;
+
+function TBackendDriver.ValidateOptions(AOpts: TBackendOpts): string;
+begin
+  Result := '';
+end;
+
+function TBackendDriver.ClaimsEmitIR: Boolean;
+begin
+  Result := False;
+end;
+
 function TBackendDriver.CreateUnitCodeGen(AOpts: TBackendOpts): ICodeGen;
 begin
   Result := nil;
@@ -238,6 +308,27 @@ begin
   end;
   if ExitCode <> 0 then
     Result := 'link error (exit ' + IntToStr(ExitCode) + '): ' + Msg;
+end;
+
+function FormatFlagLine(const AFlag, ADesc: string): string;
+const
+  { Matches the shared usage block in Blaise.pas PrintUsage: 2-space
+    indent, flag field padded so the description starts at column 20. }
+  Indent = '  ';
+  FlagFieldWidth = 18;
+var
+  Pad: Integer;
+begin
+  Result := Indent + AFlag;
+  Pad := FlagFieldWidth - Length(AFlag);
+  if Pad < 1 then
+    Pad := 1;   { always at least one space before the description }
+  while Pad > 0 do
+  begin
+    Result := Result + ' ';
+    Pad := Pad - 1;
+  end;
+  Result := Result + ADesc;
 end;
 
 function ReadProcessChunk(AProc: TProcess): string;
@@ -310,9 +401,21 @@ end;
 
 function PickTopDriver(ABackend: TBackendKind;
   AEmitIR, AEmitAsm: Boolean): TBackendDriver;
+var
+  I: Integer;
 begin
   if AEmitIR then
-    Result := GetDriver(bkQBE)
+  begin
+    { --emit-ir prints the IR text of whichever backend claims it.  Ask
+      the drivers instead of hard-coding bkQBE, so a future IR-producing
+      backend (LLVM) needs no carve-out here. }
+    for I := 0 to 1 do
+      if (GDrivers[I] <> nil) and GDrivers[I].ClaimsEmitIR() then
+        Exit(GDrivers[I]);
+    { No registered backend claims --emit-ir: fall back to QBE, the
+      historical owner of the byte-identical IR contract. }
+    Result := GetDriver(bkQBE);
+  end
   else if AEmitAsm then
     Result := GetDriver(bkNative)
   else
