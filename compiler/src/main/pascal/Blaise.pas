@@ -31,7 +31,7 @@ uses
   blaise.codegen.native.driver,
   uUnitLoader, uDebugOPDF, uUnitInterface, uSemanticExport, uSemanticImport,
   uUnitInterfaceIO, uIfaceObject, uASTDump,
-  uStrCompat, uConfig;
+  uConfig;
 
 type
   { Alias so existing signatures (ParseArgs out param, locals) read
@@ -99,130 +99,6 @@ begin
   WriteLn('Configuration:');
   WriteLn('  Unit search paths can also be set in blaise.cfg (one unit-path=<dir>');
   WriteLn('  per line). Searched next to the binary, then ~/.blaise.cfg.');
-end;
-
-{ Handle FPC -i query flags: -iV (version), -iTP (target processor), -iTO (target OS).
-  PasBuild probes the compiler with these before invoking a full compile. }
-procedure HandleFPCInfoQuery(const AArg: string);
-var
-  Query: string;
-begin
-  Query := Copy(AArg, 3, MaxInt);  { strip leading '-i' }
-  if Query = 'V' then
-  begin
-    WriteLn('3.2.2');
-    Halt(0);
-  end
-  else if Query = 'TP' then
-  begin
-    WriteLn('x86_64');
-    Halt(0);
-  end
-  else if Query = 'TO' then
-  begin
-    WriteLn('linux');
-    Halt(0);
-  end;
-  { Unknown -i query — ignore silently }
-end;
-
-{ Parse FPC-style arguments emitted by PasBuild when --fpc /path/to/blaise is used.
-  Handles: -iV/-iTP/-iTO, -FE<dir>, -Fu<path>, -FU<path>, -o<name>,
-           -Mobjfpc, -O<n>, -g, -gl, -CX, -d<define>, and the positional source file. }
-function ParseFPCArgs(
-  out SourceFile:   string;
-  out OutputFile:   string;
-  out SearchPaths:  TStringList;
-  out OPDFEnabled:  Boolean): Boolean;
-var
-  I:       Integer;
-  Arg:     string;
-  OutDir:  string;
-  OutName: string;
-begin
-  Result      := False;
-  SourceFile  := '';
-  OutputFile  := '';
-  OPDFEnabled := False;
-  OutDir      := '';
-  OutName     := '';
-  SearchPaths := TStringList.Create();
-
-  I := 1;
-  while I <= ParamCount() do
-  begin
-    Arg := ParamStr(I);
-
-    if StrHead(Arg, 2) = '-i' then
-      HandleFPCInfoQuery(Arg)
-    else if StrHead(Arg, 3) = '-FE' then
-      OutDir := StrCopyTail(Arg, 3)
-    else if StrHead(Arg, 3) = '-FU' then
-      { unit output directory — ignored }
-    else if StrHead(Arg, 3) = '-Fu' then
-      SearchPaths.Add(StrCopyTail(Arg, 3))
-    else if StrHead(Arg, 2) = '-o' then
-      OutName := StrCopyTail(Arg, 2)
-    else if StrHead(Arg, 2) = '-M' then
-      { mode switch (e.g. -Mobjfpc) — ignored }
-    else if StrHead(Arg, 2) = '-O' then
-      { optimisation level — ignored }
-    else if StrHead(Arg, 2) = '-d' then
-      { conditional define — ignored in Phase 1 }
-    else if (Arg = '-g') or (Arg = '-gl') then
-      OPDFEnabled := True
-    else if (Arg = '-CX') or (Arg = '-XX') or (Arg = '-Xs') then
-      { other linking flags — ignored }
-    else if (Arg = '--help') or (Arg = '-h') then
-    begin
-      PrintUsage();
-      Halt(0);
-    end
-    else if (Length(Arg) > 0) and (StrAt(Arg, 0) <> Ord('-')) then
-    begin
-      { Positional argument — the source file }
-      if SourceFile = '' then
-        SourceFile := Arg;
-    end;
-    { Any other unrecognised -X flag is silently ignored for forward-compat }
-
-    Inc(I);
-  end;
-
-  if SourceFile = '' then
-  begin
-    WriteLn(StdErr, 'Error: no source file specified');
-    SearchPaths.Free();
-    Exit;
-  end;
-
-  { Build output path from -FE and -o, mirroring FPC behaviour }
-  if OutName = '' then
-    OutName := ChangeFileExt(ExtractFileName(SourceFile), '');
-  if OutDir <> '' then
-    OutputFile := IncludeTrailingPathDelimiter(OutDir) + OutName
-  else
-    OutputFile := OutName;
-
-  Result := True;
-end;
-
-{ Returns True when the argument list looks like FPC-style flags (single-dash,
-  single-letter prefix) rather than Blaise native (double-dash) flags. }
-function IsFPCStyleInvocation: Boolean;
-var
-  I: Integer;
-  Arg: string;
-begin
-  Result := False;
-  for I := 1 to ParamCount() do
-  begin
-    Arg := ParamStr(I);
-    if (Length(Arg) >= 2) and (StrAt(Arg, 0) = Ord('-')) and (StrAt(Arg, 1) <> Ord('-')) then
-    begin
-      Exit(True);
-    end;
-  end;
 end;
 
 function ParseArgs(
@@ -552,39 +428,13 @@ begin
   UnitCacheDir   := '';
   TopUnit        := nil;
   IsUnitMode     := False;
-  if IsFPCStyleInvocation() then
+  if not ParseArgs(SourceFile, OutputFile, EmitIR, EmitAsm, DumpAST,
+                   OPDFEnabled, DebugMode,
+                   Backend, Target, SearchPaths, SkipDepCodegen, EmitIfaceDir,
+                   Incremental, UnitCacheDir, UseInternalAsm) then
   begin
-    if not ParseFPCArgs(SourceFile, OutputFile, SearchPaths, OPDFEnabled) then
-    begin
-      PrintUsage();
-      Halt(1);
-    end;
-    { ParseFPCArgs only assigns the four params above; every other
-      option variable must be defaulted here.  Locals are not
-      zero-initialised — reading them unassigned is stack garbage
-      that happens to be zero on a fresh stack. }
-    EmitIR         := False;
-    EmitAsm        := False;
-    DumpAST        := False;
-    DebugMode      := False;
-    Backend        := bkQBE;
-    Target         := HostTarget();
-    SkipDepCodegen := False;
-    EmitIfaceDir   := '';
-    Incremental    := False;
-    UnitCacheDir   := '';
-    UseInternalAsm := False;
-  end
-  else
-  begin
-    if not ParseArgs(SourceFile, OutputFile, EmitIR, EmitAsm, DumpAST,
-                     OPDFEnabled, DebugMode,
-                     Backend, Target, SearchPaths, SkipDepCodegen, EmitIfaceDir,
-                     Incremental, UnitCacheDir, UseInternalAsm) then
-    begin
-      PrintUsage();
-      Halt(1);
-    end;
+    PrintUsage();
+    Halt(1);
   end;
 
   ConfigPaths := TStringList.Create();

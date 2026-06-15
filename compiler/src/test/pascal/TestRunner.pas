@@ -141,6 +141,7 @@ uses
   cp.test.threadvar,
   cp.test.config,
   cp.test.assembler,
+  cp.test.cli,
   cp.test.linker;
 
 begin
