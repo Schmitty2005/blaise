@@ -6239,6 +6239,19 @@ begin
 
   { Zero-arg interface method call: G.GetVal where G: IFoo.  Dispatched through
     the itab; result (if any) in %rax. }
+  { Class const accessed via the type name (TThing.MaxCount): semantic marks
+    the field-access node IsConstant with the value inlined — no storage to
+    load, mirror the IDENT-const path. }
+  if (AExpr is TFieldAccessExpr) and TFieldAccessExpr(AExpr).IsConstant then
+  begin
+    FAE := TFieldAccessExpr(AExpr);
+    if (FAE.ResolvedType <> nil) and FAE.ResolvedType.IsString() then
+      Self.EmitStrLitAddr(FAE.ConstString)
+    else
+      Self.Emit(Format(#9'movabsq $%s, %%rax', [IntToStr(FAE.ConstValue)]));
+    Exit;
+  end;
+
   if (AExpr is TFieldAccessExpr) and
      TFieldAccessExpr(AExpr).IsInterfaceCall then
   begin

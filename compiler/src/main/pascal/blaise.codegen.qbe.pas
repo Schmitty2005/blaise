@@ -11157,12 +11157,11 @@ begin
         Exit('$' + FldAccess.ConstArraySymbol);
       end
       else if FldAccess.ResolvedType.Kind = tyString then
-      begin
-        T := AllocTemp();
-        EmitLine(Format('  %s =l call $_StringRetain(l $%s)',
-          [T, EmitStrLit(FldAccess.ConstString)]));
-        Result := T;
-      end
+        { String class const via type: return the literal's data pointer,
+          exactly like a plain string literal (EmitStrLit returns the temp;
+          the consumer manages ARC).  The previous code called a non-existent
+          $_StringRetain and double-wrapped the temp in '$'. }
+        Result := EmitStrLit(FldAccess.ConstString)
       else
       begin
         T := AllocTemp();

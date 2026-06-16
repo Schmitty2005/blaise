@@ -82,6 +82,13 @@ type
       that declares them, not to a never-emitted child-mangled symbol. }
     procedure TestRun_InheritedProperty_AccessorsResolveToParent;
 
+    { Class const accessed via the type name (TThing.MaxCount): native
+      backend lacked the IsConstant case (codegen error), QBE mis-emitted
+      string class consts (invalid IR + phantom _StringRetain). }
+    procedure TestRun_ClassConst_IntViaType;
+    procedure TestRun_ClassConst_StringViaType;
+    procedure TestRun_ClassConst_ViaInstanceAndType;
+
     { Interface properties: read/write through the interface variable. }
     procedure TestRun_InterfaceProperty_ReadWrite;
     { Accessor names with non-declared casing must still link (symbols are
@@ -1370,6 +1377,58 @@ procedure TE2EClasses2Tests.TestRun_InheritedProperty_AccessorsResolveToParent;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcInheritedProperty, '12' + LE, 0);
+end;
+
+const
+  SrcClassConstInt = '''
+    program Prg;
+    type TThing = class const MaxCount = 10; end;
+    begin WriteLn(TThing.MaxCount) end.
+    ''';
+
+  SrcClassConstStr = '''
+    program Prg;
+    type TThing = class const Tag = 'hi'; end;
+    var s: string;
+    begin
+      s := TThing.Tag + '!';
+      WriteLn(s);
+      WriteLn(TThing.Tag)
+    end.
+    ''';
+
+  SrcClassConstInstAndType = '''
+    program Prg;
+    type
+      TThing = class
+        const MaxCount = 10;
+        function Limit: Integer; begin Result := MaxCount end;
+      end;
+    var t: TThing;
+    begin
+      t := TThing.Create;
+      WriteLn(t.Limit());
+      WriteLn(TThing.MaxCount);
+      t := nil
+    end.
+    ''';
+
+procedure TE2EClasses2Tests.TestRun_ClassConst_IntViaType;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcClassConstInt, '10' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ClassConst_StringViaType;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcClassConstStr, 'hi!' + LE + 'hi' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ClassConst_ViaInstanceAndType;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcClassConstInstAndType, '10' + LE + '10' + LE, 0);
 end;
 
 const
