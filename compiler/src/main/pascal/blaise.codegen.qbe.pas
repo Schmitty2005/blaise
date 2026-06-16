@@ -13715,6 +13715,43 @@ begin
     FldExpr := TFieldAccessExpr(AExpr.Expr);
     if FldExpr.Base <> nil then
       StrPtr := EmitInstancePtr(FldExpr.Base)
+    else if FldExpr.IsClassAccess then
+    begin
+      { Class field leaf: the variable's slot holds a POINTER to the heap
+        object — load it so the field offset reaches the field, not a
+        location adjacent to the slot itself.  (Without this, @Obj.Arr[I]
+        computed `add $Obj, off` instead of `loadl $Obj; add .., off`,
+        producing a garbage address.)  A var-param class slot holds the
+        ADDRESS of the caller's variable, so load twice. }
+      StrPtr := AllocTemp();
+      EmitLine(Format('  %s =l loadl %s',
+        [StrPtr, VarRef(FldExpr.RecordName, FldExpr.IsGlobal)]));
+      if FldExpr.IsVarParam then
+      begin
+        ObjPtr := AllocTemp();
+        EmitLine(Format('  %s =l loadl %s', [ObjPtr, StrPtr]));
+        StrPtr := ObjPtr;
+      end;
+    end
+    else if FldExpr.IsImplicitSelf then
+    begin
+      StrPtr := AllocTemp();
+      EmitLine(Format('  %s =l loadl %%_var_Self', [StrPtr]));
+      if (FldExpr.ImplicitBaseInfo <> nil) and
+         (FldExpr.ImplicitBaseInfo.Offset > 0) then
+      begin
+        ObjPtr := AllocTemp();
+        EmitLine(Format('  %s =l add %s, %d',
+          [ObjPtr, StrPtr, FldExpr.ImplicitBaseInfo.Offset]));
+        StrPtr := ObjPtr;
+      end;
+      if FldExpr.IsClassAccess then
+      begin
+        ObjPtr := AllocTemp();
+        EmitLine(Format('  %s =l loadl %s', [ObjPtr, StrPtr]));
+        StrPtr := ObjPtr;
+      end;
+    end
     else if FldExpr.IsVarParam then
     begin
       StrPtr := AllocTemp();

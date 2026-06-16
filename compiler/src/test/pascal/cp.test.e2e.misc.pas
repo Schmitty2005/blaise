@@ -91,6 +91,14 @@ type
     { function-of-object called through a variable must load Data (Self)
       from the TMethod block and shift user args right. }
     procedure TestRun_FunctionOfObject_IndirectCall;
+
+    { @(class-field dynamic-array)[idx] as a USED pointer must load the
+      instance pointer first (loadl), not treat the class variable's slot
+      as the instance.  Regression for the QBE codegen bug where
+      @Obj.Arr[I] computed `add $Obj, off` instead of
+      `loadl $Obj; add .., off`, producing a garbage address that
+      segfaulted when dereferenced (e.g. passed to memcpy). }
+    procedure TestRun_AddrOfClassFieldDynArrayElem_LoadsInstance;
   end;
 
 implementation
@@ -1036,6 +1044,40 @@ procedure TE2EMiscTests.TestRun_FunctionOfObject_IndirectCall;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcFuncOfObjectIndirect, '123' + LE + '215' + LE, 0);
+end;
+
+const
+  { @(class-field dynamic array)[idx] used as a real pointer: write through
+    it (memcpy), then read the bytes back.  Under the old QBE codegen the
+    element address was computed off the class variable's slot instead of
+    the loaded instance pointer, so the memcpy scribbled garbage / crashed.
+    Runs on BOTH backends. }
+  SrcAddrClassFieldDynArr = '''
+    program Prg;
+    procedure CopyBytes(Dst, Src: Pointer; N: Int64); external name 'memcpy';
+    type
+      TBuf = class
+        Data: array of Byte;
+        Count: Integer;
+      end;
+    var
+      B: TBuf;
+    begin
+      B := TBuf.Create();
+      SetLength(B.Data, 8);
+      B.Count := 0;
+      CopyBytes(@B.Data[B.Count], PChar('Hi'), 2);
+      B.Count := 2;
+      CopyBytes(@B.Data[B.Count], PChar('!!'), 2);
+      WriteLn(Chr(B.Data[0]), Chr(B.Data[1]), Chr(B.Data[2]), Chr(B.Data[3]));
+      B.Free();
+    end.
+    ''';
+
+procedure TE2EMiscTests.TestRun_AddrOfClassFieldDynArrayElem_LoadsInstance;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcAddrClassFieldDynArr, 'Hi!!' + LE, 0);
 end;
 
 initialization
