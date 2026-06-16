@@ -303,6 +303,7 @@ type
     procedure ReleaseConstStringArgs(AArgs: TObjectList;
       AArgTemps: TStringList; AParams: TObjectList);
     procedure EmitInheritedCall(ACall: TInheritedCallStmt);
+    function  EmitInheritedCallExpr(ACall: TInheritedCallExpr): string;
     procedure EmitCaseStmt(AStmt: TCaseStmt);
     procedure EmitProcCall(ACall: TProcCall);
     { Helper for string-mutator built-ins (Delete, SetLength).
@@ -6713,6 +6714,62 @@ begin
   FlushPendingReleases(PMark);
 end;
 
+function TCodeGenQBE.EmitInheritedCallExpr(ACall: TInheritedCallExpr): string;
+var
+  MDecl:    TMethodDecl;
+  SelfTemp: string;
+  ArgLine:  string;
+  ArgTemp:  string;
+  ArgTemp2: string;
+  Par:      TMethodParam;
+  QType:    string;
+  I:        Integer;
+begin
+  { Expression form of `inherited Method(args)` — semantic guarantees a
+    non-void function.  Same static-dispatch arg marshalling as
+    EmitInheritedCall, but the call result is RETURNED (not stored to
+    %_var_Result). }
+  MDecl := TMethodDecl(ACall.ResolvedMethod);
+
+  SelfTemp := AllocTemp();
+  EmitLine(Format('  %s =l loadl %%_var_Self', [SelfTemp]));
+
+  ArgLine := Format('l %s', [SelfTemp]);
+  for I := 0 to ACall.Args.Count - 1 do
+  begin
+    Par := TMethodParam(MDecl.Params.Items[I]);
+    if Par.IsVarParam then
+    begin
+      ArgLine := ArgLine + Format(', l %s',
+        [EmitLValueAddr(TASTExpr(ACall.Args.Items[I]))]);
+      Continue;
+    end;
+    if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface) then
+    begin
+      if TASTExpr(ACall.Args.Items[I]).ResolvedType.Kind = tyClass then
+      begin
+        ArgTemp  := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+        ArgTemp2 := '$itab_' +
+          ClassSymName(QBEMangle(TASTExpr(ACall.Args.Items[I]).ResolvedType.Name))
+          + '_' + QBEMangle(Par.ResolvedType.Name);
+        ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
+      end
+      else
+        ArgLine := ArgLine + InterfaceArgFragment(TASTExpr(ACall.Args.Items[I]));
+      Continue;
+    end;
+    ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+    QType   := QbeTypeOf(Par.ResolvedType);
+    ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
+    ArgLine := ArgLine + Format(', %s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
+  end;
+
+  QType  := QbeTypeOf(MDecl.ResolvedReturnType);
+  Result := AllocTemp();
+  EmitLine(Format('  %s =%s call $%s(%s)',
+    [Result, QType, MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
+end;
+
 procedure TCodeGenQBE.EmitParamAllocs(AMethod: TMethodDecl;
   AClassType: TRecordTypeDesc);
 var
@@ -12222,6 +12279,8 @@ begin
     Result := EmitAddrOfExpr(TAddrOfExpr(AExpr))
   else if AExpr is TIsExpr then
     Result := EmitIsExpr(TIsExpr(AExpr))
+  else if AExpr is TInheritedCallExpr then
+    Result := EmitInheritedCallExpr(TInheritedCallExpr(AExpr))
   else if AExpr is TAsExpr then
     Result := EmitAsExpr(TAsExpr(AExpr))
   else if AExpr is TSupportsExpr then

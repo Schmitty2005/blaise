@@ -174,6 +174,21 @@ type
     destructor Destroy; override;
   end;
 
+  { `inherited Method(args)` used in EXPRESSION position (the value of the
+    parent method's result is needed).  The statement form is
+    TInheritedCallStmt; this is its expression sibling.  Resolved and lowered
+    the same way (static dispatch to the parent slot), but yields a value. }
+  TInheritedCallExpr = class(TASTExpr)
+  public
+    Name:               string;        { parent method name to call }
+    Args:               TObjectList;   { owned TASTExpr items }
+    { Set by uSemantic: }
+    [Unretained] ResolvedParentType: TObject;   { TRecordTypeDesc — not owned }
+    [Unretained] ResolvedMethod:     TObject;   { TMethodDecl — not owned }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
   { boSlash is the `/` operator: real division, always yields a float.
     boDiv is the `div` operator: integer division between integer operands. }
   TBinaryOp = (boAdd, boSub, boMul, boSlash, boDiv, boMod,
@@ -1325,6 +1340,20 @@ begin
   inherited Destroy();
 end;
 
+{ TInheritedCallExpr }
+
+constructor TInheritedCallExpr.Create;
+begin
+  inherited Create();
+  Args := TObjectList.Create(True);
+end;
+
+destructor TInheritedCallExpr.Destroy;
+begin
+  { Owned class fields released by ARC field cleanup. }
+  inherited Destroy();
+end;
+
 { TMethodParam }
 
 destructor TMethodParam.Destroy;
@@ -1741,6 +1770,8 @@ var
   IE:  TIdentExpr;
   FA:  TFieldAccessExpr;
   IsE: TIsExpr;
+  InhE: TInheritedCallExpr;
+  CloneI: Integer;
   AsE: TAsExpr;
   SuE: TSupportsExpr;
   BE:  TBinaryExpr;
@@ -1821,6 +1852,14 @@ begin
     IsE.Obj      := CloneExpr(TIsExpr(AExpr).Obj);
     IsE.TypeName := TIsExpr(AExpr).TypeName;
     Result := IsE;
+  end
+  else if AExpr is TInheritedCallExpr then
+  begin
+    InhE := TInheritedCallExpr.Create();
+    InhE.Name := TInheritedCallExpr(AExpr).Name;
+    for CloneI := 0 to TInheritedCallExpr(AExpr).Args.Count - 1 do
+      InhE.Args.Add(CloneExpr(TASTExpr(TInheritedCallExpr(AExpr).Args.Items[CloneI])));
+    Result := InhE;
   end
   else if AExpr is TAsExpr then
   begin

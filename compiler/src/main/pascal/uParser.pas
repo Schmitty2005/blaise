@@ -3803,8 +3803,39 @@ var
   IndCallNode:   TIndirectFuncCallExpr;
   ParseIntV:    Int64;
   ParseIntFlag: Boolean;
+  InhNode:      TInheritedCallExpr;
 begin
   case FCurrent.Kind of
+    tkInherited:
+      begin
+        { `inherited Method(args)` in expression position — the parent
+          method's result value is needed.  Mirrors ParseInheritedStmt. }
+        InhNode      := TInheritedCallExpr.Create();
+        InhNode.Line := FCurrent.Line;
+        InhNode.Col  := FCurrent.Col;
+        Advance();  { consume 'inherited' }
+        if not Check(tkIdent) then
+          raise EParseError.Create(Format(
+            'Expected method name after ''inherited'' at line %d col %d in %s',
+            [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+        InhNode.Name := FCurrent.Value;
+        Advance();
+        if Check(tkLParen) then
+        begin
+          Advance();
+          if not Check(tkRParen) then
+          begin
+            InhNode.Args.Add(Self.ParseExpr());
+            while Check(tkComma) do
+            begin
+              Advance();
+              InhNode.Args.Add(Self.ParseExpr());
+            end;
+          end;
+          Expect(tkRParen);
+        end;
+        Result := InhNode;
+      end;
     tkAt:
       begin
         AddrNode      := TAddrOfExpr.Create();

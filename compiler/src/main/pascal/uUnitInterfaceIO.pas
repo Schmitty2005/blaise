@@ -731,6 +731,10 @@ begin
               EncodeExpr(TSupportsExpr(AE).Obj) +
               EncodeLpstr(TSupportsExpr(AE).IntfTypeName) +
               EncodeLpstr(TSupportsExpr(AE).OutVarName)
+  else if AE is TInheritedCallExpr then
+    Result := EncodeLpstr('inhc') +
+              EncodeLpstr(TInheritedCallExpr(AE).Name) +
+              EncodeExprList(TInheritedCallExpr(AE).Args)
   else
     raise EIfaceFormatError.Create(
       'EncodeExpr: unhandled expression node ' + AE.ClassName);
@@ -1289,6 +1293,7 @@ var
   IsE:  TIsExpr;
   AsE:  TAsExpr;
   SuE:  TSupportsExpr;
+  InhE: TInheritedCallExpr;
 begin
   Kind := ReadLpstrAt(AText, APos);
   if Kind = 'nil' then begin Result := nil; Exit; end;
@@ -1418,6 +1423,13 @@ begin
     SuE.IntfTypeName := ReadLpstrAt(AText, APos);
     SuE.OutVarName   := ReadLpstrAt(AText, APos);
     Result := SuE;
+  end
+  else if Kind = 'inhc' then
+  begin
+    InhE := TInheritedCallExpr.Create();
+    InhE.Name := ReadLpstrAt(AText, APos);
+    ReadExprList(AText, APos, InhE.Args);
+    Result := InhE;
   end
   else
     raise EIfaceFormatError.Create(

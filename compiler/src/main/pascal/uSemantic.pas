@@ -224,6 +224,7 @@ type
     function  ResolveIntfMethodReturn(AIntf: TInterfaceTypeDesc;
       const AMethName: string): TTypeDesc;
     procedure AnalyseInheritedCall(ACall: TInheritedCallStmt);
+    function  AnalyseInheritedCallExpr(ACall: TInheritedCallExpr): TTypeDesc;
     procedure AnalyseCaseStmt(AStmt: TCaseStmt);
     function  AnalyseMethodCallExpr(AExpr: TMethodCallExpr): TTypeDesc;
     function  AnalyseFuncCallExpr(AExpr: TFuncCallExpr): TTypeDesc;
@@ -6320,6 +6321,63 @@ begin
   ACall.ResolvedMethod     := MDecl;
 end;
 
+function TSemanticAnalyser.AnalyseInheritedCallExpr(
+  ACall: TInheritedCallExpr): TTypeDesc;
+var
+  ParentType: TRecordTypeDesc;
+  MDecl:      TMethodDecl;
+  ArgType:    TTypeDesc;
+  Par:        TMethodParam;
+  I:          Integer;
+begin
+  { Mirrors AnalyseInheritedCall (the statement form) but the call is used as
+    a VALUE, so the parent method must be a function (non-void return) and the
+    result type becomes this expression's ResolvedType. }
+  if FCurrentClass = nil then
+    SemanticError('''inherited'' used outside a method body',
+      ACall.Line, ACall.Col);
+  if FCurrentClass.Parent = nil then
+    SemanticError(
+      Format('Class ''%s'' has no parent; ''inherited'' is not valid',
+        [FCurrentClass.Name]),
+      ACall.Line, ACall.Col);
+
+  ParentType := FCurrentClass.Parent;
+  MDecl := FindMethodDecl(ParentType.Name, ACall.Name);
+  if MDecl = nil then
+    SemanticError(
+      Format('Parent class ''%s'' has no method ''%s''',
+        [ParentType.Name, ACall.Name]),
+      ACall.Line, ACall.Col);
+
+  if (MDecl.ResolvedReturnType = nil) or
+     (MDecl.ResolvedReturnType.Kind = tyVoid) then
+    SemanticError(
+      Format('inherited ''%s'' is a procedure and has no value',
+        [ACall.Name]),
+      ACall.Line, ACall.Col);
+
+  if ACall.Args.Count <> MDecl.Params.Count then
+    SemanticError(
+      Format('Method ''%s.%s'' expects %d argument(s) but got %d',
+        [ParentType.Name, ACall.Name, MDecl.Params.Count, ACall.Args.Count]),
+      ACall.Line, ACall.Col);
+
+  for I := 0 to ACall.Args.Count - 1 do
+  begin
+    ArgType := AnalyseExpr(TASTExpr(ACall.Args.Items[I]));
+    Par     := TMethodParam(MDecl.Params.Items[I]);
+    CheckTypesMatch(Par.ResolvedType, ArgType,
+      Format('argument %d of inherited ''%s''', [I + 1, ACall.Name]),
+      ACall.Line, ACall.Col);
+  end;
+
+  ACall.ResolvedParentType := ParentType;
+  ACall.ResolvedMethod     := MDecl;
+  ACall.ResolvedType       := MDecl.ResolvedReturnType;
+  Result                   := MDecl.ResolvedReturnType;
+end;
+
 { Effective float type of a float-builtin argument: float types pass
   through unchanged; integer-family arguments implicitly widen to Double
   (FPC/Delphi semantics, consistent with Blaise's int→float assignment
@@ -8836,6 +8894,8 @@ begin
     Result := AnalyseBinaryExpr(TBinaryExpr(AExpr))
   else if AExpr is TIsExpr then
     Result := AnalyseIsExpr(TIsExpr(AExpr))
+  else if AExpr is TInheritedCallExpr then
+    Result := AnalyseInheritedCallExpr(TInheritedCallExpr(AExpr))
   else if AExpr is TAsExpr then
     Result := AnalyseAsExpr(TAsExpr(AExpr))
   else if AExpr is TSupportsExpr then

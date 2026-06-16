@@ -491,6 +491,10 @@ type
       dispatch to the parent method (no vtable); Self is the current method's
       Self; a value-returning parent stores its result into the Result slot. }
     procedure EmitInheritedCall(ACall: TInheritedCallStmt);
+    { Shared static-dispatch sequence (Self + args + direct callq); result in
+      %rax/%xmm0 on return.  Used by both inherited forms (stmt + expr). }
+    procedure EmitInheritedCallSeq(MD: TMethodDecl; AArgs: TObjectList;
+      const AName: string);
     { Evaluate one method-call argument and push it onto the stack.  Scalar and
       var/out params push one value; interface params push two (itab first, then
       obj — reversed so the pop loop restores them in the correct register order). }
@@ -6983,6 +6987,17 @@ begin
     Exit;
   end;
 
+  { `inherited Method(args)` in expression position — static dispatch to the
+    parent slot; result lands in %rax / %xmm0 (the EmitExprToEax contract). }
+  if AExpr is TInheritedCallExpr then
+  begin
+    Self.EmitInheritedCallSeq(
+      TMethodDecl(TInheritedCallExpr(AExpr).ResolvedMethod),
+      TInheritedCallExpr(AExpr).Args,
+      TInheritedCallExpr(AExpr).Name);
+    Exit;
+  end;
+
   { X is TFoo — class type test via _IsInstance / _ImplementsInterface.
     Result: 0/1 in %eax. }
   if AExpr is TIsExpr then
@@ -7779,35 +7794,41 @@ begin
     Self.EndCallArgs();
 end;
 
-procedure TX86_64Backend.EmitInheritedCall(ACall: TInheritedCallStmt);
+{ Shared static-dispatch call sequence for both inherited forms.  Marshals
+  Self + args and emits the direct callq to the parent method; on return the
+  result (if any) is in %rax / %xmm0 per the SysV ABI.  AMD/AArgs/AName come
+  from either TInheritedCallStmt or TInheritedCallExpr. }
+procedure TX86_64Backend.EmitInheritedCallSeq(MD: TMethodDecl;
+  AArgs: TObjectList; const AName: string);
 var
   I:   Integer;
-  MD:  TMethodDecl;
   Sym: string;
   Par: TMethodParam;
 begin
-  { `inherited` on TObject (no parent body) is a no-op. }
-  MD := TMethodDecl(ACall.ResolvedMethod);
-  if MD = nil then Exit;
-  Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
-
-  { Evaluate args left-to-right and push them. }
-  Self.BeginCallArgs(MD.Params, ACall.Args);
-  for I := 0 to ACall.Args.Count - 1 do
+  Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, AName);
+  Self.BeginCallArgs(MD.Params, AArgs);
+  for I := 0 to AArgs.Count - 1 do
   begin
     Par := TMethodParam(MD.Params.Items[I]);
-    Self.PushCallArg(Par, TASTExpr(ACall.Args.Items[I]), I);
+    Self.PushCallArg(Par, TASTExpr(AArgs.Items[I]), I);
   end;
-
   { Self is the current method's Self slot. }
   Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
-  { Pop args into %rsi/%rdx/... (shift by 1 for %rdi = Self).
-    Use slot count so interface args (2 slots each) get two pops. }
   for I := CountArgSlots(MD.Params) - 1 downto 0 do
     Self.Emit(#9'popq ' + SysVArgRegs64[I + 1]);
   Self.Emit(#9'movq %r10, %rdi');
   Self.Emit(#9'callq ' + Sym);
   Self.EndCallArgs();
+end;
+
+procedure TX86_64Backend.EmitInheritedCall(ACall: TInheritedCallStmt);
+var
+  MD: TMethodDecl;
+begin
+  { `inherited` on TObject (no parent body) is a no-op. }
+  MD := TMethodDecl(ACall.ResolvedMethod);
+  if MD = nil then Exit;
+  Self.EmitInheritedCallSeq(MD, ACall.Args, ACall.Name);
 
   { A value-returning parent stores its result into the current Result slot,
     so `Result := ...` is unnecessary for `inherited F;` to set Result. }

@@ -1970,6 +1970,37 @@ method must repeat any defaults it wants to expose.  This matches
 Delphi semantics and avoids surprising callers of an override that the
 defaults silently changed underneath them.
 
+=== `inherited` in expression position
+
+`inherited Method(args)` is accepted both as a statement and as an
+*expression*.  The statement form (`inherited Setup();`) calls the
+parent method for its side effects; the expression form lets an
+overriding *function* build on its parent's result:
+
+[source,pascal]
+----
+function TDerived.Value: Integer; override;
+begin
+  Result := inherited Value() + 100;   // call parent, then extend
+end;
+----
+
+Both forms lower to the same thing — a *static* (non-virtual) call to
+the parent's method slot, bypassing vtable dispatch (that is the whole
+point of `inherited`: reach the specific parent implementation, not
+re-dispatch to `Self`).  The only difference is what happens to the
+result: the statement form stores it into the current method's `Result`
+slot (so a bare `inherited F;` still sets `Result`), while the
+expression form yields the value to the surrounding expression.
+
+The expression form was added because the statement-only form forced an
+awkward two-step (`inherited F; X := Result + 1;`) and could not be
+used inside a larger expression at all.  AST: `TInheritedCallExpr`
+(the sibling of `TInheritedCallStmt`); both resolve and lower through
+the same parent-method lookup and the same static-dispatch call
+sequence (`EmitInheritedCallSeq` on native, `EmitInheritedCallExpr` on
+QBE).
+
 === Overload resolution and tie-break
 
 The arity filter in `ResolveStandaloneOverload` and

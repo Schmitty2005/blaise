@@ -99,6 +99,11 @@ type
       `loadl $Obj; add .., off`, producing a garbage address that
       segfaulted when dereferenced (e.g. passed to memcpy). }
     procedure TestRun_AddrOfClassFieldDynArrayElem_LoadsInstance;
+
+    { inherited Method() in EXPRESSION position — calling an inherited
+      function and using its result (Result := inherited F() + ...). Was a
+      parser gap (inherited only worked as a statement). }
+    procedure TestRun_InheritedFunctionCall_InExpression;
   end;
 
 implementation
@@ -1078,6 +1083,40 @@ procedure TE2EMiscTests.TestRun_AddrOfClassFieldDynArrayElem_LoadsInstance;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcAddrClassFieldDynArr, 'Hi!!' + LE, 0);
+end;
+
+const
+  { inherited as an expression: the overriding function adds to the parent's
+    result.  Exercises a value-returning inherited call plus inherited with an
+    argument (inherited Scale(F)). }
+  SrcInheritedExprCall = '''
+    program Prg;
+    type
+      TBase = class
+        function V: Integer; virtual;
+        begin Result := 5 end;
+        function Scale(F: Integer): Integer; virtual;
+        begin Result := F * 10 end;
+      end;
+      TDerived = class(TBase)
+        function V: Integer; override;
+        begin Result := inherited V() + 100 end;
+        function Scale(F: Integer): Integer; override;
+        begin Result := inherited Scale(F) + 1 end;
+      end;
+    var D: TDerived;
+    begin
+      D := TDerived.Create();
+      WriteLn(D.V());
+      WriteLn(D.Scale(3));
+      D.Free()
+    end.
+    ''';
+
+procedure TE2EMiscTests.TestRun_InheritedFunctionCall_InExpression;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcInheritedExprCall, '105' + LE + '31' + LE, 0);
 end;
 
 initialization
