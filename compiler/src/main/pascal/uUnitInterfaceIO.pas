@@ -2172,6 +2172,7 @@ end;
 function ContentHashFnv1a64(const AContent: string): string;
 var
   I:    Integer;
+  B:    Byte;
   H:    UInt64;
   Lo:   Integer;
   FnvOffset: UInt64;
@@ -2180,9 +2181,9 @@ begin
   FnvOffset := (UInt64($cbf29ce4) shl 32) or UInt64($84222325);
   FnvPrime  := (UInt64($00000100) shl 32) or UInt64($000001b3);
   H := FnvOffset;
-  for I := 0 to Length(AContent) - 1 do
+  for B in AContent do
   begin
-    H := H xor UInt64(Byte(AContent[I + 1]));
+    H := H xor UInt64(B);
     H := H * FnvPrime;
   end;
   Result := '';

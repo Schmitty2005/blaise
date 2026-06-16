@@ -170,12 +170,12 @@ const
   FNV_PRIME  = $01000193;
   FNV_OFFSET = $811C9DC5;
 var
-  I: Integer;
+  B: Byte;
 begin
   Result := FNV_OFFSET;
-  for I := 1 to Length(S) do
+  for B in S do
   begin
-    Result := Result xor Cardinal(Ord(S[I]));
+    Result := Result xor Cardinal(B);
     Result := Result * FNV_PRIME;
   end;
   if Result = 0 then
