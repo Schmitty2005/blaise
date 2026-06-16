@@ -2386,6 +2386,7 @@ begin
       NewPDecl.WriteName      := PDecl.WriteName;
       NewPDecl.IndexParamName := PDecl.IndexParamName;
       NewPDecl.IndexTypeName  := SubstTypeParam(PDecl.IndexTypeName, Templ.ParamNames, Args);
+      NewPDecl.IsDefault      := PDecl.IsDefault;
       ClonedCD.Properties.Add(NewPDecl);
     end;
 

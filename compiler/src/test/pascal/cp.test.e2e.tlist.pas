@@ -34,6 +34,10 @@ type
       reference was a local in an exited routine must survive in the list
       (decision recorded in language-rationale: collection ownership). }
     procedure TestRun_TList_ClassElements_RetainedAcrossScope;
+
+    { Default array property: List[i] subscript for read and write. }
+    procedure TestRun_TList_DefaultProperty_ReadWrite;
+    procedure TestRun_TList_DefaultProperty_Polymorphic;
   end;
 
 implementation
@@ -205,6 +209,69 @@ begin
     CompileAndRunWithRTLDebugOn(beNative, SrcTListClassRetain, Output, RCode, False));
   AssertEquals('exit code (native)', 0, RCode);
   AssertEquals('retained elements readable (native)', '77' + #10 + '88' + #10, Output);
+end;
+
+const
+  SrcTListDefaultRW = '''
+    program P;
+    uses Generics.Collections;
+    var lst: TList<Integer>;
+    begin
+      lst := TList<Integer>.Create;
+      lst.Add(1); lst.Add(2);
+      lst[0] := 100; lst[1] := 200;
+      WriteLn(lst[0] + lst[1]);
+      lst.Free()
+    end.
+    ''';
+
+  SrcTListDefaultPoly = '''
+    program P;
+    uses Generics.Collections;
+    type
+      TShape = class function Area: Integer; virtual; begin Result := 0 end; end;
+      TBox = class(TShape)
+        FS: Integer;
+        constructor Create(s: Integer); begin FS := s end;
+        function Area: Integer; override; begin Result := FS * FS end;
+      end;
+    var lst: TList<TShape>; i, total: Integer;
+    begin
+      lst := TList<TShape>.Create;
+      lst.Add(TBox.Create(3)); lst.Add(TBox.Create(4));
+      total := 0;
+      for i := 0 to lst.Count - 1 do total := total + lst[i].Area();
+      WriteLn(total);
+      lst.Free()
+    end.
+    ''';
+
+procedure TE2ETListTests.TestRun_TList_DefaultProperty_ReadWrite;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run (qbe)',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcTListDefaultRW, Output, RCode, False));
+  AssertEquals('exit code (qbe)', 0, RCode);
+  AssertEquals('List[i] read/write (qbe)', '300' + #10, Output);
+  AssertTrue('compile+run (native)',
+    CompileAndRunWithRTLDebugOn(beNative, SrcTListDefaultRW, Output, RCode, False));
+  AssertEquals('exit code (native)', 0, RCode);
+  AssertEquals('List[i] read/write (native)', '300' + #10, Output);
+end;
+
+procedure TE2ETListTests.TestRun_TList_DefaultProperty_Polymorphic;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run (qbe)',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcTListDefaultPoly, Output, RCode, False));
+  AssertEquals('exit code (qbe)', 0, RCode);
+  AssertEquals('List[i].Area (qbe)', '25' + #10, Output);
+  AssertTrue('compile+run (native)',
+    CompileAndRunWithRTLDebugOn(beNative, SrcTListDefaultPoly, Output, RCode, False));
+  AssertEquals('exit code (native)', 0, RCode);
+  AssertEquals('List[i].Area (native)', '25' + #10, Output);
 end;
 
 initialization

@@ -36,12 +36,15 @@ type
     procedure Grow;
     procedure Add(Value: T);
     function  Get(AIndex: Integer): T;
+    procedure SetItem(AIndex: Integer; Value: T);
     function  IndexOf(Value: T): Integer;
     procedure Delete(AIndex: Integer);
     procedure Clear;
     procedure Destroy;
     function  GetEnumerator: TListEnumerator<T>;
     property Count: Integer read FCount;
+    { Default array property — enables List[i] for read and write. }
+    property Items[AIndex: Integer]: T read Get write SetItem; default;
   end;
 
   { Generic LIFO stack backed by a dynamic array.  Push/Pop/Peek operate on
@@ -260,6 +263,16 @@ var
 begin
   Src    := Self.FData + AIndex * SizeOf(T);
   Result := Src^
+end;
+
+procedure TList<T>.SetItem(AIndex: Integer; Value: T);
+var
+  Dest: ^T;
+begin
+  { The ^T := Value store carries the compiler's ARC discipline for a managed
+    T — the previous element is released and the new one retained. }
+  Dest  := Self.FData + AIndex * SizeOf(T);
+  Dest^ := Value
 end;
 
 function TList<T>.IndexOf(Value: T): Integer;
