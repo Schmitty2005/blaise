@@ -7233,7 +7233,16 @@ begin
     CD := TClassTypeDef(TD.Def);
 
     if RT.Parent <> nil then
-      ParentStr := '$typeinfo_' + ClassSymName(RT.Parent.Name)
+    begin
+      { A generic-instance parent (TBox<Integer>) is defined under the
+        QBEMangle'd symbol (typeinfo_TBox_Integer) and carries no unit prefix,
+        so reference it the same way.  Non-generic parents keep ClassSymName
+        (which adds the unit prefix). }
+      if StrPos('<', RT.Parent.Name) >= 0 then
+        ParentStr := '$typeinfo_' + QBEMangle(RT.Parent.Name)
+      else
+        ParentStr := '$typeinfo_' + ClassSymName(RT.Parent.Name);
+    end
     else
       ParentStr := '0';
     if RT.ImplementsCount() > 0 then

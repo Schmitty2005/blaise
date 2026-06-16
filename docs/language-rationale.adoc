@@ -2461,6 +2461,15 @@ The codegen emits itab and impllist data for generic class instances in
 Both class and interface names in itab symbols are passed through `QBEMangle`
 to produce valid QBE identifiers (e.g. `$itab_TDictionary_Integer_Integer_IMap_Integer_Integer`).
 
+A non-generic class may also *inherit* from a generic-class instance — e.g.
+`TIntBox = class(TBox<Integer>)`.  The first heritage entry is instantiated and
+then classified: a `tyInterface` result becomes an implements entry (above),
+any other (a class instance) is the parent class.  Because the generic instance
+is emitted under its `QBEMangle`'d symbol (`typeinfo_TBox_Integer`), the
+inheriting class's typeinfo must reference the parent through `QBEMangle` too,
+not the unmangled name — otherwise the emitted QBE identifier contains the
+illegal `<`/`>` characters.
+
 === Alternatives Rejected
 
 * *Structural duck-typing without interfaces* — Blaise already uses

@@ -3576,6 +3576,7 @@ var
   RT:         TRecordTypeDesc;
   ParentRT:   TRecordTypeDesc;
   ParentSym:  TSymbol;
+  GenParentDesc: TTypeDesc;
   FldType:    TTypeDesc;
   FldName:    string;
   Sym:        TSymbol;
@@ -3944,18 +3945,25 @@ begin
       if TClassTypeDef(TD.Def).ParentName <> '' then
       begin
         ParentSym := nil;
-        { If name looks generic, try instantiating as interface first }
+        { A generic name as the first heritage entry (class(TBox<Integer>) or
+          class(IFoo<T>)) must be instantiated, then classified: a generic
+          CLASS instance is the parent class, a generic INTERFACE instance is
+          an implements entry.  Earlier this assumed interface unconditionally,
+          so inheriting from a generic class was rejected as an unknown
+          interface. }
         if StrPos('<', TClassTypeDef(TD.Def).ParentName) >= 0 then
         begin
-          IntfDesc := TInterfaceTypeDesc(
-            FindTypeOrInstantiate(TClassTypeDef(TD.Def).ParentName));
-          if IntfDesc <> nil then
+          GenParentDesc := FindTypeOrInstantiate(TClassTypeDef(TD.Def).ParentName);
+          if (GenParentDesc <> nil) and
+             (GenParentDesc is TInterfaceTypeDesc) then
           begin
-            { Treat it as an interface to implement — move to implements list }
+            { Generic interface — move to the implements list. }
             TClassTypeDef(TD.Def).ImplementsNames.Insert(
               0, TClassTypeDef(TD.Def).ParentName);
             TClassTypeDef(TD.Def).ParentName := '';
           end;
+          { Otherwise (generic class instance, or unresolved) leave it as the
+            ParentName for the class-parent resolution below. }
         end;
         if TClassTypeDef(TD.Def).ParentName <> '' then
         begin

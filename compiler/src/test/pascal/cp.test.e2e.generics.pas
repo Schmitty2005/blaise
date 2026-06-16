@@ -41,6 +41,10 @@ type
       rejected as shadowing a visible type. }
     procedure TestRun_GenericClass_LocalNamedLikeTypeParam;
     procedure TestRun_GenericRecord_LocalNamedLikeTypeParam;
+    { Non-generic class inheriting from a generic-class instance
+      (class(TBox<Integer>)) — parent classification + symbol mangling. }
+    procedure TestRun_InheritFromGenericInstance_MethodAndField;
+    procedure TestRun_InheritFromGenericInstance_VirtualOverride;
   end;
 
 implementation
@@ -238,6 +242,56 @@ procedure TE2EGenericsTests.TestRun_GenericRecord_LocalNamedLikeTypeParam;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcRecordLocalLikeParam, '55' + LE, 0);
+end;
+
+const
+  SrcInheritGenericMethodField = '''
+    program P;
+    type
+      TBox<T> = class
+        FVal: T;
+        procedure SetIt(v: T); begin FVal := v; end;
+        function GetIt: T; begin Result := FVal; end;
+      end;
+      TIntBox = class(TBox<Integer>) end;
+    var b: TIntBox;
+    begin
+      b := TIntBox.Create;
+      b.SetIt(7);
+      WriteLn(b.GetIt());
+      WriteLn(b.FVal);
+      b := nil
+    end.
+    ''';
+
+  SrcInheritGenericVirtual = '''
+    program P;
+    type
+      TBase<T> = class
+        function Describe: string; virtual; begin Result := 'base' end;
+        function Wrap: string; begin Result := '[' + Self.Describe() + ']' end;
+      end;
+      TIntD = class(TBase<Integer>)
+        function Describe: string; override; begin Result := 'derived' end;
+      end;
+    var d: TBase<Integer>;
+    begin
+      d := TIntD.Create;
+      WriteLn(d.Wrap());
+      d := nil
+    end.
+    ''';
+
+procedure TE2EGenericsTests.TestRun_InheritFromGenericInstance_MethodAndField;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcInheritGenericMethodField, '7' + LE + '7' + LE, 0);
+end;
+
+procedure TE2EGenericsTests.TestRun_InheritFromGenericInstance_VirtualOverride;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcInheritGenericVirtual, '[derived]' + LE, 0);
 end;
 
 initialization
