@@ -268,6 +268,12 @@ type
 
     procedure AnalyseCompoundBody(ABody: TCompoundStmt);
     function  FindMethodDecl(const ATypeName, AMethodName: string): TMethodDecl;
+    { Walks the class hierarchy from ATypeName upward and returns the name
+      of the class that actually declares AMethodName.  Property accessors
+      are mangled as <owner>_<method>; when a child inherits a property
+      whose getter/setter lives in a parent, the call site must target the
+      parent's symbol, not the child's (which never gets emitted). }
+    function  PropAccessorOwner(const ATypeName, AMethodName: string): string;
     { Attribute helpers.  AttrMatches performs the Delphi-style suffix-drop
       lookup: [Weak] and [WeakAttribute] both resolve to the recognised
       attribute 'Weak'.  HasWeakAttribute scans an attribute list for
@@ -4501,6 +4507,36 @@ begin
   Result := nil;
 end;
 
+function TSemanticAnalyser.PropAccessorOwner(
+  const ATypeName, AMethodName: string): string;
+{ See the interface-section comment.  Mirrors the chain walk in
+  FindMethodDecl; falls back to ATypeName when no declaring class is found
+  (e.g. abstract/forward) so the non-inherited case is unchanged. }
+var
+  CurrName: string;
+  Sym:      TSymbol;
+  RT:       TRecordTypeDesc;
+begin
+  CurrName := ATypeName;
+  while CurrName <> '' do
+  begin
+    if FMethodIndex.IndexOf(CurrName + '.' + AMethodName) >= 0 then
+      Exit(CurrName);
+    Sym := FTable.Lookup(CurrName);
+    if (Sym <> nil) and (Sym.TypeDesc is TRecordTypeDesc) then
+    begin
+      RT := TRecordTypeDesc(Sym.TypeDesc);
+      if RT.Parent <> nil then
+        CurrName := RT.Parent.Name
+      else
+        Break;
+    end
+    else
+      Break;
+  end;
+  Result := ATypeName;
+end;
+
 function TSemanticAnalyser.ResolveMethodOverload(
   const ATypeName, AMethodName: string;
   AArgs: TObjectList; ALine, ACol: Integer): TMethodDecl;
@@ -6587,7 +6623,8 @@ begin
               AnalyseExpr(AAssign.PropIndexExpr);
             end;
             AAssign.PropWriteInfo := PropInfo;
-            AAssign.PropOwnerType := RT.Name;
+            AAssign.PropOwnerType :=
+              PropAccessorOwner(RT.Name, PropInfo.WriteMethod);
             ExprType := AnalyseExpr(AAssign.Expr);
             CheckTypesMatch(PropInfo.TypeDesc, ExprType, 'property assignment',
               AAssign.Line, AAssign.Col);
@@ -6684,7 +6721,8 @@ begin
           AnalyseExpr(AAssign.PropIndexExpr);
         end;
         AAssign.PropWriteInfo := PropInfo;
-        AAssign.PropOwnerType := RT.Name;
+        AAssign.PropOwnerType :=
+          PropAccessorOwner(RT.Name, PropInfo.WriteMethod);
         ExprType := AnalyseExpr(AAssign.Expr);
         CheckTypesMatch(PropInfo.TypeDesc, ExprType, 'property assignment',
           AAssign.Line, AAssign.Col);
@@ -9060,7 +9098,8 @@ begin
           AnalyseExpr(AAccess.PropIndexExpr);
         end;
         AAccess.PropRead := PropInfo;
-        AAccess.PropOwnerType := RT.Name;
+        AAccess.PropOwnerType :=
+          PropAccessorOwner(RT.Name, PropInfo.ReadMethod);
         Result := PropInfo.TypeDesc;
         AAccess.ResolvedType := Result;
         Exit;
@@ -9118,7 +9157,8 @@ begin
         begin
           AnalyseExpr(AAccess.PropIndexExpr);
           AAccess.PropRead      := PropInfo;
-          AAccess.PropOwnerType := TRecordTypeDesc(FldInfo.TypeDesc).Name;
+          AAccess.PropOwnerType := PropAccessorOwner(
+            TRecordTypeDesc(FldInfo.TypeDesc).Name, PropInfo.ReadMethod);
           Result := PropInfo.TypeDesc;
           AAccess.ResolvedType := Result;
         end;
@@ -9199,7 +9239,8 @@ begin
                 AnalyseExpr(AAccess.PropIndexExpr);
               end;
               AAccess.PropRead := PropInfo;
-              AAccess.PropOwnerType := RT.Name;
+              AAccess.PropOwnerType :=
+                PropAccessorOwner(RT.Name, PropInfo.ReadMethod);
               Result := PropInfo.TypeDesc;
               AAccess.ResolvedType := Result;
               Exit;
@@ -9233,7 +9274,9 @@ begin
             begin
               AnalyseExpr(AAccess.PropIndexExpr);
               AAccess.PropRead      := PropInfo;
-              AAccess.PropOwnerType := TRecordTypeDesc(AAccess.FieldInfo.TypeDesc).Name;
+              AAccess.PropOwnerType := PropAccessorOwner(
+                TRecordTypeDesc(AAccess.FieldInfo.TypeDesc).Name,
+                PropInfo.ReadMethod);
               Result := PropInfo.TypeDesc;
               AAccess.ResolvedType := Result;
             end;
@@ -9426,7 +9469,8 @@ begin
           AnalyseExpr(AAccess.PropIndexExpr);
         end;
         AAccess.PropRead := PropInfo;
-        AAccess.PropOwnerType := RT.Name;
+        AAccess.PropOwnerType :=
+          PropAccessorOwner(RT.Name, PropInfo.ReadMethod);
         Result := PropInfo.TypeDesc;
         AAccess.ResolvedType := Result;
         Exit;
@@ -9477,7 +9521,8 @@ begin
       begin
         AnalyseExpr(AAccess.PropIndexExpr);
         AAccess.PropRead      := PropInfo;
-        AAccess.PropOwnerType := TRecordTypeDesc(FldInfo.TypeDesc).Name;
+        AAccess.PropOwnerType := PropAccessorOwner(
+          TRecordTypeDesc(FldInfo.TypeDesc).Name, PropInfo.ReadMethod);
         Result := PropInfo.TypeDesc;
         AAccess.ResolvedType := Result;
       end;

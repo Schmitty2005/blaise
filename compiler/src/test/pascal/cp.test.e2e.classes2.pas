@@ -77,6 +77,11 @@ type
       program-level global of a different type. }
     procedure TestRun_InterfaceField_ShadowsGlobal_Dispatches;
 
+    { Regression for graemeg/blaise#111: a child class that inherits a
+      method-backed property must dispatch the getter/setter to the parent
+      that declares them, not to a never-emitted child-mangled symbol. }
+    procedure TestRun_InheritedProperty_AccessorsResolveToParent;
+
     { Interface properties: read/write through the interface variable. }
     procedure TestRun_InterfaceProperty_ReadWrite;
     { Accessor names with non-declared casing must still link (symbols are
@@ -1327,6 +1332,44 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcInterfaceProperty,
     '13' + LE + '21' + LE + '22' + LE + '41' + LE, 0);
+end;
+
+const
+  { graemeg/blaise#111 — Tchild inherits classValue (a method-backed
+    property) from Tbase; the read and write must reach Tbase's accessors. }
+  SrcInheritedProperty = '''
+    program Prg;
+    type
+      Tbase = class
+      private
+        fValue: Integer;
+      public
+        procedure setValue(AValue: Integer);
+        function getValue: Integer;
+        property classValue: Integer read getValue write setValue;
+      end;
+      Tchild = class(Tbase)
+        procedure childAct;
+      end;
+    procedure Tbase.setValue(AValue: Integer);
+    begin fValue := AValue end;
+    function Tbase.getValue: Integer;
+    begin Result := fValue end;
+    procedure Tchild.childAct;
+    begin writeln('act') end;
+    var child: Tchild;
+    begin
+      child := Tchild.Create();
+      child.classValue := 12;
+      writeln(child.classValue);
+      child.Free()
+    end.
+    ''';
+
+procedure TE2EClasses2Tests.TestRun_InheritedProperty_AccessorsResolveToParent;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcInheritedProperty, '12' + LE, 0);
 end;
 
 const
