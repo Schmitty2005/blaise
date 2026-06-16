@@ -3459,12 +3459,10 @@ an ordinary method.  Monomorphisation (rather than type erasure) keeps the
 model uniform with generic classes and records and needs no runtime type
 descriptors.
 
-=== Current limitation
-
-Only the *inline-body* declaration form is supported (the body written inside
-the class).  The out-of-line implementation form
-`function TUtil.Pick<T>(...)` with the body separated from the class is not yet
-parsed.
+Both declaration forms are accepted: the inline body written inside the class,
+and the out-of-line implementation `function TUtil.Pick<T>(...)` with the body
+separated from the class declaration (the body is transferred onto the in-class
+generic-method template before instantiation).
 
 == Platform constants — one name per concept
 

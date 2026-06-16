@@ -872,8 +872,8 @@ MethodCall
  * The parser folds the type args into the method name (Method<Integer>) and the
  * semantic pass monomorphises the method on first use.  The leading-'<' is
  * disambiguated from a comparison by the same two-token lookahead used for
- * generic free-function calls.  Only the INLINE-body method form is supported;
- * the out-of-line impl  function TOwner.Method<T>(...)  is not yet parsed. *)
+ * generic free-function calls.  Both the inline-body method form and the
+ * out-of-line impl  function TOwner.Method<T>(...)  are supported. *)
 
 (* Semantic disambiguation of  IDENT DOT IDENT  in Stmt:
  *   - Followed by ASSIGN or LBRACKET ASSIGN → FieldAssignment (plain or indexed)

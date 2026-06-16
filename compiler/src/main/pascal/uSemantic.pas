@@ -1786,6 +1786,30 @@ begin
     if Decl.OwnerTypeName = '' then Continue;
     if Decl.OwnerTypeParams <> nil then Continue;  { generic owner — handled by LinkGenericClassMethodImpls }
 
+    { Out-of-line generic METHOD impl (function TUtil.Pick<T>(...)): its params
+      reference the method's own <T>, so they cannot be resolved here.  Find the
+      in-class generic-method template by Owner.Method and transfer the body
+      onto it so InstantiateGenericMethod clones a complete template. }
+    if Decl.TypeParams <> nil then
+    begin
+      Key := Decl.OwnerTypeName + '.' + Decl.Name;
+      K   := FGenericMethodTemplates.IndexOf(Key);
+      if K < 0 then
+        SemanticError(
+          Format('Generic method ''%s'' is not declared in class ''%s''',
+            [Decl.Name, Decl.OwnerTypeName]),
+          Decl.Line, Decl.Col);
+      Match := TMethodDecl(FGenericMethodTemplates.Objects[K]);
+      if Match.Body <> nil then
+        SemanticError(
+          Format('Generic method ''%s.%s'' already has an inline body',
+            [Decl.OwnerTypeName, Decl.Name]),
+          Decl.Line, Decl.Col);
+      Match.Body := Decl.Body;
+      Decl.Body  := nil;
+      Continue;
+    end;
+
     { Resolve impl param types so we can compute its signature for matching. }
     for J := 0 to Decl.Params.Count - 1 do
     begin
@@ -9053,6 +9077,19 @@ begin
     if MDecl = nil then
       SemanticError(Format('Class ''%s'' has no generic method ''%s''',
         [RT.Name, AExpr.Name]), AExpr.Line, AExpr.Col);
+    { Validate the call arguments against the monomorphised signature — the
+      instance body was analysed, but the call site's args still need checking
+      (unlike the overload path, this path bypasses ResolveMethodOverload). }
+    if AExpr.Args.Count <> MDecl.Params.Count then
+      SemanticError(
+        Format('Method ''%s.%s'' expects %d argument(s) but got %d',
+          [RT.Name, AExpr.Name, MDecl.Params.Count, AExpr.Args.Count]),
+        AExpr.Line, AExpr.Col);
+    for I := 0 to AExpr.Args.Count - 1 do
+      CheckTypesMatch(TMethodParam(MDecl.Params.Items[I]).ResolvedType,
+        TASTExpr(AExpr.Args.Items[I]).ResolvedType,
+        Format('argument %d of ''%s''', [I + 1, AExpr.Name]),
+        AExpr.Line, AExpr.Col);
     AExpr.ResolvedClassType := RT;
     AExpr.ResolvedMethod    := MDecl;
     AExpr.IsGlobal          := ObjSym.IsGlobal;

@@ -1722,6 +1722,42 @@ begin
       Result.OwnerTypeName := Result.Name;
       Result.Name          := FCurrent.Value;
       Advance();
+      { Out-of-line generic METHOD impl: function TUtil.Pick<T>(...).  The
+        method's own type params follow the qualified name (the <T> BEFORE the
+        dot is the owner's, handled above).  Parse them into TypeParams so the
+        impl matches its in-class generic-method template. }
+      if (Result.TypeParams = nil) and Check(tkLessThan) and
+         (PeekKind() = tkIdent) and
+         (PeekKind2() in [tkGreaterThan, tkComma, tkColon]) then
+      begin
+        Result.TypeParams           := TStringList.Create();
+        Result.TypeParamConstraints := TStringList.Create();
+        Advance();  { consume '<' }
+        repeat
+          if not Check(tkIdent) then
+            raise EParseError.Create(Format(
+              'Expected type parameter name at line %d col %d in %s',
+              [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+          Result.TypeParams.Add(FCurrent.Value);
+          Advance();
+          Constraint := '';
+          if Check(tkColon) then
+          begin
+            Advance();
+            if      Check(tkClass)  then begin Constraint := 'class';  Advance(); end
+            else if Check(tkRecord) then begin Constraint := 'record'; Advance(); end
+            else if Check(tkIdent)  then begin Constraint := FCurrent.Value; Advance(); end
+            else
+              raise EParseError.Create(Format(
+                'Expected ''class'', ''record'', or a type name after '':'' at line %d col %d in %s',
+                [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+          end;
+          Result.TypeParamConstraints.Add(Constraint);
+          if not Check(tkComma) then Break;
+          Advance();
+        until False;
+        Expect(tkGreaterThan);
+      end;
     end;
     if Check(tkLParen) then
     begin

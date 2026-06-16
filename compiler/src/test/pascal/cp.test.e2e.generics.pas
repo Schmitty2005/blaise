@@ -55,6 +55,7 @@ type
     procedure TestRun_GenericMethod_TwoInstantiations;
     procedure TestRun_GenericMethod_UsesSelfField;
     procedure TestRun_GenericMethod_TwoTypeParams;
+    procedure TestRun_GenericMethod_OutOfLineImpl;
   end;
 
 implementation
@@ -434,6 +435,31 @@ procedure TE2EGenericsTests.TestRun_GenericMethod_TwoTypeParams;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcGenMethodTwoParams, '7' + LE, 0);
+end;
+
+const
+  { Out-of-line implementation form: the body lives outside the class. }
+  SrcGenMethodOutOfLine = '''
+    program Prog;
+    type
+      TUtil = class
+        function Pick<T>(cond: Boolean; a, b: T): T;
+      end;
+    function TUtil.Pick<T>(cond: Boolean; a, b: T): T;
+    begin if cond then Result := a else Result := b end;
+    var u: TUtil;
+    begin
+      u := TUtil.Create;
+      WriteLn(u.Pick<string>(True, 'aa', 'bb'));
+      WriteLn(u.Pick<Integer>(False, 1, 2));
+      u := nil
+    end.
+    ''';
+
+procedure TE2EGenericsTests.TestRun_GenericMethod_OutOfLineImpl;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcGenMethodOutOfLine, 'aa' + LE + '2' + LE, 0);
 end;
 
 initialization
