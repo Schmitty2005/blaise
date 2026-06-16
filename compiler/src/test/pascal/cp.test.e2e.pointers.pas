@@ -30,6 +30,12 @@ type
     procedure TestRun_StaticArrayOfPChar_ElementPreservesAllBits;
     procedure TestRun_DoublePointerWrite_PreservesValue;
     procedure TestRun_SinglePointerWrite_NoAdjacentSlotClobber;
+    { Added by the hardening sweep — run on BOTH backends. }
+    procedure TestRun_PointerToRecordField;
+    procedure TestRun_PointerParam;
+    procedure TestRun_PointerEquality;
+    procedure TestRun_PointerToArrayElement;
+    procedure TestRun_LinkedListViaGetMem;
   end;
 
 implementation
@@ -245,6 +251,87 @@ begin
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('PSingle^ write must not clobber adjacent Single B',
     '9.5' + LE, Output);
+end;
+
+const
+  SrcPtrRecordField = '''
+    program Prg;
+    type TP = record X, Y: Integer; end;
+    var r: TP; pr: ^TP;
+    begin r.X := 5; pr := @r; pr^.Y := 8; WriteLn(pr^.X + pr^.Y) end.
+    ''';
+
+  SrcPtrParam2 = '''
+    program Prg;
+    type PInt = ^Integer;
+    procedure Bump(P: PInt); begin P^ := P^ + 10 end;
+    var a: Integer;
+    begin a := 5; Bump(@a); WriteLn(a) end.
+    ''';
+
+  SrcPtrEquality = '''
+    program Prg;
+    var a, b: Integer; pa, pb: ^Integer;
+    begin a := 1; b := 2; pa := @a; pb := @a;
+      if pa = pb then WriteLn('same') else WriteLn('diff');
+      pb := @b;
+      if pa = pb then WriteLn('same') else WriteLn('diff')
+    end.
+    ''';
+
+  SrcPtrToElem2 = '''
+    program Prg;
+    type PInt = ^Integer;
+    var arr: array[0..4] of Integer; p: PInt; i: Integer;
+    begin
+      for i := 0 to 4 do arr[i] := i * 11;
+      p := @arr[2];
+      WriteLn(p^)
+    end.
+    ''';
+
+  SrcLinkedList2 = '''
+    program Prg;
+    type PNode = ^TNode; TNode = record Val: Integer; Next: PNode; end;
+    var head, n: PNode; sum: Integer;
+    begin
+      head := nil;
+      n := GetMem(SizeOf(TNode)); n^.Val := 1; n^.Next := head; head := n;
+      n := GetMem(SizeOf(TNode)); n^.Val := 2; n^.Next := head; head := n;
+      sum := 0; n := head;
+      while n <> nil do begin sum := sum + n^.Val; n := n^.Next end;
+      WriteLn(sum)
+    end.
+    ''';
+
+procedure TE2EPointersTests.TestRun_PointerToRecordField;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcPtrRecordField, '13' + LE, 0);
+end;
+
+procedure TE2EPointersTests.TestRun_PointerParam;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcPtrParam2, '15' + LE, 0);
+end;
+
+procedure TE2EPointersTests.TestRun_PointerEquality;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcPtrEquality, 'same' + LE + 'diff' + LE, 0);
+end;
+
+procedure TE2EPointersTests.TestRun_PointerToArrayElement;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcPtrToElem2, '22' + LE, 0);
+end;
+
+procedure TE2EPointersTests.TestRun_LinkedListViaGetMem;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcLinkedList2, '3' + LE, 0);
 end;
 
 initialization
