@@ -861,8 +861,19 @@ FieldAssignment
     ;
 
 MethodCall
-    = IDENT DOT IDENT LPAREN [ ArgList ] RPAREN
+    = IDENT DOT IDENT
+      [ LESS TypeArgList GREATER ]            (* explicit args for a generic method *)
+      LPAREN [ ArgList ] RPAREN
     ;
+
+(* Generic method call: Obj.Method<Integer>(args).  The optional
+ * LESS TypeArgList GREATER supplies explicit type arguments for a method that
+ * declares its own type parameters (MethodDecl's [ LESS TypeParamList GREATER ]).
+ * The parser folds the type args into the method name (Method<Integer>) and the
+ * semantic pass monomorphises the method on first use.  The leading-'<' is
+ * disambiguated from a comparison by the same two-token lookahead used for
+ * generic free-function calls.  Only the INLINE-body method form is supported;
+ * the out-of-line impl  function TOwner.Method<T>(...)  is not yet parsed. *)
 
 (* Semantic disambiguation of  IDENT DOT IDENT  in Stmt:
  *   - Followed by ASSIGN or LBRACKET ASSIGN → FieldAssignment (plain or indexed)

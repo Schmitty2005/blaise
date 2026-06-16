@@ -3417,6 +3417,55 @@ inside generic records are handled by the existing record-cleanup logic at
 variable scope exit, not by class-style field cleanup.
 
 
+== Generic Methods
+
+=== Decision
+
+A class or record method may declare its *own* type parameters, independent of
+any type parameters on the enclosing type:
+
+[source,pascal]
+----
+type
+  TUtil = class
+    function Pick<T>(cond: Boolean; a, b: T): T;
+      begin if cond then Result := a else Result := b end;
+  end;
+...
+  u.Pick<Integer>(True, 7, 9);     // -> 7
+  u.Pick<string>(False, 'a', 'b'); // -> 'b'
+----
+
+The method is *monomorphised* on first use: each distinct set of explicit type
+arguments at a call site produces one concrete method body, named
+`<Owner>_<Method>_<Args>` (e.g. `TUtil_Pick_Integer`).  The implicit `Self` is
+preserved, so a generic method may read the receiver's fields and call its
+other methods.  Type arguments are explicit at the call site
+(`u.Pick<Integer>(...)`); they are not inferred from the value arguments.
+
+This is distinct from a method of a generic *class* (`TBox<T>` and its
+`function Get: T`), where the type parameter `T` is bound by the class
+instantiation, not the method.  The two compose: a generic class may have a
+method with its own additional type parameters.
+
+=== Rationale
+
+Generic methods reuse the existing generic free-function machinery: the same
+on-demand instantiation, the same `<T>` type-parameter scoping during body
+analysis, and the same `QBEMangle`/`NativeMangle` name mangling (`<`/`,` ->
+`_`, `>` dropped).  The only addition over a free function is carrying the
+owner type and the implicit `Self` through to codegen, so the instance emits as
+an ordinary method.  Monomorphisation (rather than type erasure) keeps the
+model uniform with generic classes and records and needs no runtime type
+descriptors.
+
+=== Current limitation
+
+Only the *inline-body* declaration form is supported (the body written inside
+the class).  The out-of-line implementation form
+`function TUtil.Pick<T>(...)` with the body separated from the class is not yet
+parsed.
+
 == Platform constants — one name per concept
 
 Delphi and FPC carry multiple aliases for the same platform constant:

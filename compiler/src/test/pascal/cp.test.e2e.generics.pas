@@ -49,6 +49,12 @@ type
       interface — class(IVal) on a generic template must wire AddImplements. }
     procedure TestRun_GenericClassImplementsInterface;
     procedure TestRun_GenericClassImplementsInterface_MethodArgs;
+    { Generic METHODS (method-level <T>): a method declaring its own type
+      parameter, instantiated per call site (obj.M<Integer>(...)). }
+    procedure TestRun_GenericMethod_Pick;
+    procedure TestRun_GenericMethod_TwoInstantiations;
+    procedure TestRun_GenericMethod_UsesSelfField;
+    procedure TestRun_GenericMethod_TwoTypeParams;
   end;
 
 implementation
@@ -341,6 +347,93 @@ procedure TE2EGenericsTests.TestRun_GenericClassImplementsInterface_MethodArgs;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcGenericImplementsIntfArgs, '42' + LE, 0);
+end;
+
+const
+  SrcGenMethodPick = '''
+    program Prog;
+    type
+      TUtil = class
+        function Pick<T>(cond: Boolean; a, b: T): T;
+          begin if cond then Result := a else Result := b end;
+      end;
+    var u: TUtil;
+    begin
+      u := TUtil.Create;
+      WriteLn(u.Pick<Integer>(True, 7, 9));
+      WriteLn(u.Pick<Integer>(False, 7, 9));
+      u := nil
+    end.
+    ''';
+
+  SrcGenMethodTwo = '''
+    program Prog;
+    type
+      TUtil = class
+        function Echo<T>(x: T): T; begin Result := x end;
+      end;
+    var u: TUtil;
+    begin
+      u := TUtil.Create;
+      WriteLn(u.Echo<Integer>(42));
+      WriteLn(u.Echo<string>('hi'));
+      u := nil
+    end.
+    ''';
+
+  SrcGenMethodSelf = '''
+    program Prog;
+    type
+      TBox = class
+        FBase: Integer;
+        constructor Create(b: Integer); begin FBase := b end;
+        function Combine<T>(x: T): T; begin Result := x end;
+        function Offset: Integer; begin Result := FBase end;
+      end;
+    var b: TBox;
+    begin
+      b := TBox.Create(100);
+      WriteLn(b.Combine<Integer>(5) + b.Offset());
+      b := nil
+    end.
+    ''';
+
+  SrcGenMethodTwoParams = '''
+    program Prog;
+    type
+      TUtil = class
+        function First<A, B>(x: A; y: B): A; begin Result := x end;
+      end;
+    var u: TUtil;
+    begin
+      u := TUtil.Create;
+      WriteLn(u.First<Integer, string>(7, 'ignored'));
+      u := nil
+    end.
+    ''';
+
+procedure TE2EGenericsTests.TestRun_GenericMethod_Pick;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcGenMethodPick, '7' + LE + '9' + LE, 0);
+end;
+
+procedure TE2EGenericsTests.TestRun_GenericMethod_TwoInstantiations;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcGenMethodTwo, '42' + LE + 'hi' + LE, 0);
+end;
+
+procedure TE2EGenericsTests.TestRun_GenericMethod_UsesSelfField;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcGenMethodSelf, '105' + LE, 0);
+end;
+
+procedure TE2EGenericsTests.TestRun_GenericMethod_TwoTypeParams;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcGenMethodTwoParams, '7' + LE, 0);
 end;
 
 initialization

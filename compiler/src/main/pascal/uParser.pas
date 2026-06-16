@@ -4030,6 +4030,23 @@ begin
               [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
           SecondName := FCurrent.Value;
           Advance();
+          { Generic-method call: IDENT '.' IDENT '<' TypeArgs '>' '(' ... ')'.
+            Fold the explicit type arguments into the method name
+            (Pick<Integer>), mirroring the generic free-function call site; the
+            semantic pass instantiates on the '<' in the name. }
+          if Check(tkLessThan) and (PeekKind() = tkIdent) and
+             (PeekKind2() in [tkGreaterThan, tkComma, tkLessThan]) then
+          begin
+            Advance();  { consume '<' }
+            SecondName := SecondName + '<' + ParseTypeName();
+            while Check(tkComma) do
+            begin
+              Advance();
+              SecondName := SecondName + ',' + ParseTypeName();
+            end;
+            Expect(tkGreaterThan);
+            SecondName := SecondName + '>';
+          end;
           if Check(tkLParen) then
           begin
             { IDENT '.' IDENT '(' ... ')' — method call expression }

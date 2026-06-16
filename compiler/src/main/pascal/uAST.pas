@@ -894,6 +894,19 @@ type
     destructor Destroy; override;
   end;
 
+  { A monomorphised generic METHOD instance (method-level <T>): a method that
+    declares its own type parameters, instantiated at a call site.  OwnerType
+    is the class/record the method belongs to; the instance keeps an implicit
+    Self and is emitted as OwnerType_Method_<args>. }
+  TGenericMethodInstance = class
+  public
+    OwnerType:  string;       { the class/record name }
+    InstName:   string;       { method name with type args, e.g. 'Pick<Integer>' }
+    MethodDecl: TMethodDecl;  { owned — concrete method decl with substituted types }
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
   { One concrete instantiation produced by monomorphization — stored on TProgram.
     Codegen iterates this list to emit typeinfo, vtables, and method bodies. }
   TGenericInstance = class
@@ -977,6 +990,7 @@ type
     SymbolTable:          TSymbolTable;   { owned after semantic analysis; nil before }
     GenericInstances:       TObjectList;    { owned TGenericInstance — populated by uSemantic }
     GenericFuncInstances:   TObjectList;    { owned TGenericFuncInstance — populated by uSemantic }
+    GenericMethodInstances: TObjectList;    { owned TGenericMethodInstance — populated by uSemantic }
     GenericIntfInstances:   TObjectList;    { owned TGenericInterfaceInstance — populated by uSemantic }
     GenericRecordInstances: TObjectList;    { owned TGenericRecordInstance — populated by uSemantic }
     constructor Create;
@@ -999,6 +1013,7 @@ type
                                  program (program owns the table). }
     GenericInstances:       TObjectList;
     GenericFuncInstances:   TObjectList;
+    GenericMethodInstances: TObjectList;
     GenericIntfInstances:   TObjectList;
     GenericRecordInstances: TObjectList;
     constructor Create;
@@ -1535,6 +1550,17 @@ begin
   inherited Destroy();
 end;
 
+constructor TGenericMethodInstance.Create;
+begin
+  inherited Create();
+end;
+
+destructor TGenericMethodInstance.Destroy;
+begin
+  { Owned class fields released by ARC field cleanup. }
+  inherited Destroy();
+end;
+
 { TGenericInterfaceDef }
 
 constructor TGenericInterfaceDef.Create;
@@ -1692,6 +1718,7 @@ begin
   UsedUnits              := TStringList.Create();
   GenericInstances       := TObjectList.Create(True);
   GenericFuncInstances   := TObjectList.Create(True);
+  GenericMethodInstances := TObjectList.Create(True);
   GenericIntfInstances   := TObjectList.Create(True);
   GenericRecordInstances := TObjectList.Create(True);
 end;
@@ -1721,6 +1748,7 @@ begin
   FinalStmts := nil;
   GenericInstances       := TObjectList.Create(True);
   GenericFuncInstances   := TObjectList.Create(True);
+  GenericMethodInstances := TObjectList.Create(True);
   GenericIntfInstances   := TObjectList.Create(True);
   GenericRecordInstances := TObjectList.Create(True);
 end;

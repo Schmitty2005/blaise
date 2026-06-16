@@ -50,6 +50,7 @@ type
       lifetime; the destructor frees this list, releasing the groups. }
     FGroupKeepAlive:       TObjectList;
     FGenericFuncTemplates: TStringList;  { base name → TMethodDecl template (not owned) }
+    FGenericMethodTemplates: TStringList; { 'OwnerType.Method' → TMethodDecl template (not owned) — generic methods with method-level <T> }
     FLoopDepth:            Integer;      { depth of enclosing while/for — Break only legal if > 0 }
     FScopeDepth:           Integer;      { mirrors FTable scope depth; used to detect main-level globals }
     FCurrentClass:         TRecordTypeDesc;  { class being analysed (set in AnalyseMethodDecl) }
@@ -131,6 +132,10 @@ type
 
     { Generic function instantiation: resolves 'Identity<Integer>' on demand. }
     function  InstantiateGenericFunc(const AInstName: string): TMethodDecl;
+    { Generic method instantiation: resolves 'Pick<Integer>' on an owner class
+      on demand, preserving the implicit Self.  Returns the monomorphised
+      TMethodDecl (with ResolvedQbeName set), or nil if not a generic method. }
+    function  InstantiateGenericMethod(const AOwnerType, AInstName: string): TMethodDecl;
 
     procedure AnalyseBlock(ABlock: TBlock; AIsProgramTop: Boolean = False);
     procedure AnalyseConstDecls(ABlock: TBlock);
@@ -468,6 +473,8 @@ begin
   FGroupKeepAlive       := TObjectList.Create(False);
   FGenericFuncTemplates := TStringList.Create();
   FGenericFuncTemplates.CaseSensitive := False;
+  FGenericMethodTemplates := TStringList.Create();
+  FGenericMethodTemplates.CaseSensitive := False;
   FCurrentUsesChain     := TStringList.Create();
   FCurrentUsesChain.CaseSensitive := False;
   FUnitIfaces           := TStringList.Create();
@@ -486,6 +493,7 @@ begin
   FUnitIfaces.Free();
   FCurrentUsesChain.Free();
   FGenericFuncTemplates.Free();
+  FGenericMethodTemplates.Free();
   { Releasing the keep-alive releases every group list; the group string
     lists themselves only hold raw pointers. }
   FGroupKeepAlive.Free();
@@ -3050,6 +3058,165 @@ begin
   end;
 end;
 
+function TSemanticAnalyser.InstantiateGenericMethod(
+  const AOwnerType, AInstName: string): TMethodDecl;
+{ AInstName is the method name with type args, e.g. 'Pick<Integer>'.  Mirrors
+  InstantiateGenericFunc but preserves the implicit Self: the instance is
+  analysed as a method of AOwnerType and emitted as <Owner>_<Inst>. }
+var
+  BaseName:    string;
+  ArgsStr:     string;
+  TemplIdx:    Integer;
+  BracPos:     Integer;
+  Templ:       TMethodDecl;
+  Args:        TStringList;
+  NewMDecl:    TMethodDecl;
+  NewPar:      TMethodParam;
+  OldPar:      TMethodParam;
+  ParTypeName: string;
+  RetTypeName: string;
+  SubstType:   TTypeDesc;
+  OwnerSym:    TSymbol;
+  OwnerRT:     TRecordTypeDesc;
+  GMI:         TGenericMethodInstance;
+  I, J:        Integer;
+begin
+  Result := nil;
+  BracPos := StrPos('<', AInstName);
+  if BracPos < 0 then Exit;
+  BaseName := StrHead(AInstName, BracPos);
+  ArgsStr  := StrCopyFrom(AInstName, BracPos + 1, Length(AInstName) - BracPos - 2);
+
+  TemplIdx := FGenericMethodTemplates.IndexOf(AOwnerType + '.' + BaseName);
+  if TemplIdx < 0 then Exit;  { not a known generic method on this owner }
+  Templ := TMethodDecl(FGenericMethodTemplates.Objects[TemplIdx]);
+
+  OwnerSym := FTable.Lookup(AOwnerType);
+  if (OwnerSym = nil) or not (OwnerSym.TypeDesc is TRecordTypeDesc) then Exit;
+  OwnerRT := TRecordTypeDesc(OwnerSym.TypeDesc);
+
+  { Idempotent: a second call site with the same type args reuses the existing
+    instance rather than emitting a duplicate symbol. }
+  if FCurrentUnit <> nil then
+  begin
+    for I := 0 to FCurrentUnit.GenericMethodInstances.Count - 1 do
+    begin
+      GMI := TGenericMethodInstance(FCurrentUnit.GenericMethodInstances.Items[I]);
+      if SameText(GMI.OwnerType, AOwnerType) and SameText(GMI.InstName, AInstName) then
+        Exit(GMI.MethodDecl);
+    end;
+  end
+  else
+    for I := 0 to FProg.GenericMethodInstances.Count - 1 do
+    begin
+      GMI := TGenericMethodInstance(FProg.GenericMethodInstances.Items[I]);
+      if SameText(GMI.OwnerType, AOwnerType) and SameText(GMI.InstName, AInstName) then
+        Exit(GMI.MethodDecl);
+    end;
+
+  Args := TStringList.Create();
+  try
+    while Length(ArgsStr) > 0 do
+    begin
+      BracPos := StrPos(',', ArgsStr);
+      if BracPos >= 0 then
+      begin
+        Args.Add(Trim(StrHead(ArgsStr, BracPos)));
+        ArgsStr := Trim(StrCopyTail(ArgsStr, BracPos + 1));
+      end
+      else
+      begin
+        Args.Add(Trim(ArgsStr));
+        ArgsStr := '';
+      end;
+    end;
+
+    if Args.Count <> Templ.TypeParams.Count then
+      SemanticError(
+        Format('Generic method ''%s.%s'' expects %d type parameter(s) but got %d',
+          [AOwnerType, BaseName, Templ.TypeParams.Count, Args.Count]),
+        0, 0);
+    for I := 0 to Args.Count - 1 do
+      if (Templ.TypeParamConstraints <> nil) and
+         (I < Templ.TypeParamConstraints.Count) then
+        CheckTypeParamConstraint(Templ.TypeParams.Strings[I], Args.Strings[I],
+          Templ.TypeParamConstraints.Strings[I],
+          Format('generic method ''%s.%s''', [AOwnerType, BaseName]));
+
+    NewMDecl              := TMethodDecl.Create();
+    NewMDecl.Name         := AInstName;
+    NewMDecl.OwnerTypeName := AOwnerType;
+    NewMDecl.IsRecordMethod := Templ.IsRecordMethod;
+    { Mangled symbol: <unit><Owner>_<Method><args> -> QBEMangle drops the <>
+      and joins with '_', e.g. TUtil_Pick_Integer. }
+    NewMDecl.ResolvedQbeName := CurrentUnitPrefix() + AOwnerType + '_' + AInstName;
+
+    if Templ.Body <> nil then
+    begin
+      NewMDecl.Body    := CloneBlock(Templ.Body);
+      NewMDecl.OwnBody := True;
+      for I := 0 to NewMDecl.Body.Decls.Count - 1 do
+        TVarDecl(NewMDecl.Body.Decls.Items[I]).TypeName :=
+          Self.SubstTypeParam(TVarDecl(NewMDecl.Body.Decls.Items[I]).TypeName,
+            Templ.TypeParams, Args);
+    end
+    else
+    begin
+      NewMDecl.Body    := nil;
+      NewMDecl.OwnBody := False;
+    end;
+
+    RetTypeName := Templ.ReturnTypeName;
+    for I := 0 to Templ.TypeParams.Count - 1 do
+      if SameText(RetTypeName, Templ.TypeParams.Strings[I]) then
+        RetTypeName := Args.Strings[I];
+    NewMDecl.ReturnTypeName := RetTypeName;
+    if RetTypeName <> '' then
+    begin
+      SubstType := FindTypeOrInstantiate(RetTypeName);
+      if SubstType = nil then
+        SemanticError(Format('Unknown type ''%s'' in generic method instance ''%s.%s''',
+          [RetTypeName, AOwnerType, AInstName]), 0, 0);
+      NewMDecl.ResolvedReturnType := SubstType;
+    end;
+
+    for I := 0 to Templ.Params.Count - 1 do
+    begin
+      OldPar            := TMethodParam(Templ.Params.Items[I]);
+      NewPar            := TMethodParam.Create();
+      NewPar.ParamName  := OldPar.ParamName;
+      NewPar.IsVarParam := OldPar.IsVarParam;
+      ParTypeName       := OldPar.TypeName;
+      for J := 0 to Templ.TypeParams.Count - 1 do
+        if SameText(ParTypeName, Templ.TypeParams.Strings[J]) then
+          ParTypeName := Args.Strings[J];
+      NewPar.TypeName := ParTypeName;
+      SubstType := FindTypeOrInstantiate(ParTypeName);
+      if SubstType = nil then
+        SemanticError(Format('Unknown type ''%s'' for parameter ''%s'' in ''%s.%s''',
+          [ParTypeName, NewPar.ParamName, AOwnerType, AInstName]), 0, 0);
+      NewPar.ResolvedType := SubstType;
+      NewMDecl.Params.Add(NewPar);
+    end;
+
+    { Analyse the body with Self (the owner) and concrete types in scope. }
+    AnalyseMethodDecl(NewMDecl, OwnerRT);
+
+    GMI            := TGenericMethodInstance.Create();
+    GMI.OwnerType  := AOwnerType;
+    GMI.InstName   := AInstName;
+    GMI.MethodDecl := NewMDecl;
+    if FCurrentUnit <> nil then
+      FCurrentUnit.GenericMethodInstances.Add(GMI)
+    else
+      FProg.GenericMethodInstances.Add(GMI);
+
+    Result := NewMDecl;
+  finally
+    Args.Free();
+  end;
+end;
+
 procedure TSemanticAnalyser.AnalyseBlock(ABlock: TBlock; AIsProgramTop: Boolean = False);
 var
   I: Integer;
@@ -4054,6 +4221,16 @@ begin
         for J := 0 to MethodList.Count - 1 do
         begin
           MDecl := TMethodDecl(MethodList.Items[J]);
+          { Generic method (method-level <T>): params/return reference the
+            method's own type params, unknown until a call site instantiates it.
+            Register the template keyed by OwnerType.Method and skip resolution. }
+          if MDecl.TypeParams <> nil then
+          begin
+            MDecl.OwnerTypeName := RT.Name;
+            if FGenericMethodTemplates.IndexOf(RT.Name + '.' + MDecl.Name) < 0 then
+              FGenericMethodTemplates.AddObject(RT.Name + '.' + MDecl.Name, MDecl);
+            Continue;
+          end;
           for K := 0 to MDecl.Params.Count - 1 do
           begin
             Par              := TMethodParam(MDecl.Params.Items[K]);
@@ -4079,6 +4256,9 @@ begin
         for J := 0 to MethodList.Count - 1 do
         begin
           MDecl := TMethodDecl(MethodList.Items[J]);
+          { Generic-method templates take no vtable slot — they cannot be
+            virtual (each instantiation is a distinct monomorphised body). }
+          if MDecl.TypeParams <> nil then Continue;
           MangledKey := MDecl.Name;
           if MDecl.IsOverload then
             MangledKey := MangledKey + '$' + MangleParamSig(MDecl);
@@ -4453,7 +4633,21 @@ var
   Par:        TMethodParam;
   Sym:        TSymbol;
   SavedClass: TRecordTypeDesc;
+  TKey:       string;
 begin
+  { Generic method (method-level <T>): its params/body reference the method's
+    own type parameters, which are not in scope until a call site instantiates
+    it.  Register the template keyed by OwnerType.Method and defer analysis to
+    InstantiateGenericMethod.  (A method of a generic CLASS uses OwnerTypeParams,
+    not TypeParams, and is NOT skipped here.) }
+  if AMethod.TypeParams <> nil then
+  begin
+    TKey := AClassType.Name + '.' + AMethod.Name;
+    if FGenericMethodTemplates.IndexOf(TKey) < 0 then
+      FGenericMethodTemplates.AddObject(TKey, AMethod);
+    AMethod.OwnerTypeName := AClassType.Name;
+    Exit;
+  end;
   SavedClass    := FCurrentClass;
   FCurrentClass := AClassType;
   FTable.PushScope();
@@ -8850,6 +9044,26 @@ begin
     Fall back to a plain chain lookup for the no-overload / single case. }
   for I := 0 to AExpr.Args.Count - 1 do
     AnalyseExpr(TASTExpr(AExpr.Args.Items[I]));
+  { Generic method call obj.Pick<Integer>(...): the parser folded the explicit
+    type args into AExpr.Name.  Instantiate the monomorphised method and use it
+    directly (it is not part of the overload set). }
+  if StrPos('<', AExpr.Name) >= 0 then
+  begin
+    MDecl := InstantiateGenericMethod(RT.Name, AExpr.Name);
+    if MDecl = nil then
+      SemanticError(Format('Class ''%s'' has no generic method ''%s''',
+        [RT.Name, AExpr.Name]), AExpr.Line, AExpr.Col);
+    AExpr.ResolvedClassType := RT;
+    AExpr.ResolvedMethod    := MDecl;
+    AExpr.IsGlobal          := ObjSym.IsGlobal;
+    AExpr.IsVarParam        :=
+      (ObjSym.Kind = skVarParameter) or
+      ((ObjSym.Kind = skParameter) and (ObjSym.TypeDesc <> nil) and
+       (ObjSym.TypeDesc.Kind in [tyRecord, tyStaticArray]));
+    Result := MDecl.ResolvedReturnType;
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
   MDecl := ResolveMethodOverload(RT.Name, AExpr.Name, AExpr.Args,
     AExpr.Line, AExpr.Col);
   if MDecl = nil then

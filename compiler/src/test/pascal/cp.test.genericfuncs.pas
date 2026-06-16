@@ -53,6 +53,9 @@ type
     { ------------------------------------------------------------------ }
     procedure TestCodegen_GenericFunc_BodyEmitted;
     procedure TestCodegen_GenericFunc_CallEmitted;
+    { Generic METHOD (method-level <T>) — monomorphised body + call site. }
+    procedure TestCodegen_GenericMethod_BodyEmitted;
+    procedure TestCodegen_GenericMethod_CallEmitted;
   end;
 
 implementation
@@ -380,6 +383,36 @@ begin
   IR := GenIR(SrcGenericFuncUsage);
   AssertTrue('call emitted with mangled name',
     Pos('call $Identity_Integer', IR) > 0);
+end;
+
+const
+  SrcGenericMethodUsage =
+    '''
+        program Prog;
+        type
+          TUtil = class
+            function Echo<T>(x: T): T; begin Result := x end;
+          end;
+        var u: TUtil; r: Integer;
+        begin u := TUtil.Create(); r := u.Echo<Integer>(42); WriteLn(r) end.
+        ''';
+
+procedure TGenericFuncTests.TestCodegen_GenericMethod_BodyEmitted;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcGenericMethodUsage);
+  AssertTrue('generic-method body emitted with mangled owner_method_type name',
+    Pos('$TUtil_Echo_Integer', IR) > 0);
+end;
+
+procedure TGenericFuncTests.TestCodegen_GenericMethod_CallEmitted;
+var
+  IR: string;
+begin
+  IR := GenIR(SrcGenericMethodUsage);
+  AssertTrue('generic-method call emitted with mangled name',
+    Pos('call $TUtil_Echo_Integer', IR) > 0);
 end;
 
 initialization

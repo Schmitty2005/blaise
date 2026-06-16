@@ -7743,6 +7743,7 @@ var
   RD:      TRecordTypeDef;
   GI:      TGenericInstance;
   GRI:     TGenericRecordInstance;
+  GMI:     TGenericMethodInstance;
   MDecl:   TMethodDecl;
   Methods: TObjectList;
   SavedUnit: string;
@@ -7763,7 +7764,10 @@ begin
     else
       Continue;
     for J := 0 to Methods.Count - 1 do
-      if TMethodDecl(Methods.Items[J]).Body <> nil then
+      if (TMethodDecl(Methods.Items[J]).Body <> nil) and
+         { Generic-method templates (method-level <T>) are emitted per
+           instantiation via GenericMethodInstances, not as a template body. }
+         (TMethodDecl(Methods.Items[J]).TypeParams = nil) then
         EmitMethodDef(TD.Name, TMethodDecl(Methods.Items[J]));
   end;
 
@@ -7798,6 +7802,16 @@ begin
       if MDecl.Body <> nil then
         EmitMethodDef(QBEMangle(GRI.TypeName), MDecl);
     end;
+  end;
+
+  { Generic METHOD instances (method-level <T>) — emit each monomorphised body.
+    Its ResolvedQbeName already encodes <Owner>_<Method><args>, so EmitMethodDef
+    uses that label and adds the implicit Self param. }
+  for I := 0 to AProg.GenericMethodInstances.Count - 1 do
+  begin
+    GMI := TGenericMethodInstance(AProg.GenericMethodInstances.Items[I]);
+    if GMI.MethodDecl.Body <> nil then
+      EmitMethodDef(GMI.OwnerType, GMI.MethodDecl);
   end;
 end;
 

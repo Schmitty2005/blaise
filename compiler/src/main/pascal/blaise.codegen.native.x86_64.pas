@@ -240,7 +240,8 @@ type
       the supplied generic-instance lists. }
     procedure EmitClassMethods(ATypeDecls: TObjectList;
                                AGenericInstances: TObjectList;
-                               AGenericRecordInstances: TObjectList);
+                               AGenericRecordInstances: TObjectList;
+                               AGenericMethodInstances: TObjectList);
 
     { Resolve a class/interface name to its assembly symbol form, adding the
       unit prefix when the type is defined in a non-system unit.  Mirrors the
@@ -3162,7 +3163,8 @@ end;
 
 procedure TX86_64Backend.EmitClassMethods(ATypeDecls: TObjectList;
                                           AGenericInstances: TObjectList;
-                                          AGenericRecordInstances: TObjectList);
+                                          AGenericRecordInstances: TObjectList;
+                                          AGenericMethodInstances: TObjectList);
 var
   I, J: Integer;
   TD:   TTypeDecl;
@@ -3170,6 +3172,7 @@ var
   RD:   TRecordTypeDef;
   GI:   TGenericInstance;
   GRI:  TGenericRecordInstance;
+  GMI:  TGenericMethodInstance;
   Decl: TMethodDecl;
   SavedUnit: string;
 begin
@@ -3183,6 +3186,8 @@ begin
       begin
         Decl := TMethodDecl(CD.Methods.Items[J]);
         if Decl.Body = nil then Continue;
+        { Generic-method templates emit per instantiation, not as a template. }
+        if Decl.TypeParams <> nil then Continue;
         Self.EmitFunctionDef(Decl);
       end;
     end
@@ -3193,6 +3198,7 @@ begin
       begin
         Decl := TMethodDecl(RD.Methods.Items[J]);
         if Decl.Body = nil then Continue;
+        if Decl.TypeParams <> nil then Continue;
         Self.EmitFunctionDef(Decl);
       end;
     end;
@@ -3227,6 +3233,16 @@ begin
       if Decl.Body = nil then Continue;
       Self.EmitFunctionDef(Decl);
     end;
+  end;
+
+  { Generic METHOD instances (method-level <T>): each monomorphised body.  Its
+    ResolvedQbeName encodes <Owner>_<Method><args> and OwnerTypeName is set, so
+    EmitFunctionDef emits it with the implicit Self like any method. }
+  for I := 0 to AGenericMethodInstances.Count - 1 do
+  begin
+    GMI := TGenericMethodInstance(AGenericMethodInstances.Items[I]);
+    if GMI.MethodDecl.Body <> nil then
+      Self.EmitFunctionDef(GMI.MethodDecl);
   end;
 end;
 
@@ -14169,7 +14185,7 @@ begin
 
   { Class method bodies before standalone procedures. }
   Self.EmitClassMethods(AProg.Block.TypeDecls, AProg.GenericInstances,
-                        AProg.GenericRecordInstances);
+                        AProg.GenericRecordInstances, AProg.GenericMethodInstances);
 
   { Array-typed constants — emit data sections so const arrays are defined
     as assembly labels before being referenced in code.  Covers block-level
@@ -14313,7 +14329,7 @@ begin
     generic class/record instances declared in this unit.  After
     LinkClassMethodImpls the definition's TMethodDecl nodes hold the bodies. }
   Self.EmitClassMethods(AUnit.IntfBlock.TypeDecls, AUnit.GenericInstances,
-                        AUnit.GenericRecordInstances);
+                        AUnit.GenericRecordInstances, AUnit.GenericMethodInstances);
 
   { Array-typed constants from both interface and implementation blocks. }
   Self.EmitArrayConstData(AUnit.IntfBlock, '');
