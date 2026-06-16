@@ -37,6 +37,10 @@ type
     procedure TestRun_DerivedInterface_ToBaseVar;
     procedure TestRun_DerivedInterface_ToBaseParam;
     procedure TestRun_ThreeLevelInterfaceChain;
+    { A class implementing a DERIVED interface, narrowed directly to a BASE
+      interface (needs the class to emit an itab for the inherited base). }
+    procedure TestRun_ClassImplDerived_ToBaseVar;
+    procedure TestRun_ClassImplDerived_ToBaseParam;
   end;
 
 implementation
@@ -253,6 +257,53 @@ procedure TE2EInterfaceTests.TestRun_ThreeLevelInterfaceChain;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcThreeLevelChain, '1' + LE, 0);
+end;
+
+const
+  { TDog implements IDog (derived); narrowing the INSTANCE directly to an
+    IAnimal var/param needs the class to emit itab_TDog_IAnimal. }
+  SrcClassImplDerivedToBaseVar = '''
+    program P;
+    type
+      IAnimal = interface function Name: string; end;
+      IDog = interface(IAnimal) function Bark: string; end;
+      TDog = class(IDog)
+        function Name: string; begin Result := 'Rex' end;
+        function Bark: string; begin Result := 'woof' end;
+      end;
+    var a: IAnimal;
+    begin
+      a := TDog.Create;
+      WriteLn(a.Name());
+      a := nil
+    end.
+    ''';
+
+  SrcClassImplDerivedToBaseParam = '''
+    program P;
+    type
+      IAnimal = interface function Name: string; end;
+      IDog = interface(IAnimal) function Bark: string; end;
+      TDog = class(IDog)
+        function Name: string; begin Result := 'Rex' end;
+        function Bark: string; begin Result := 'woof' end;
+      end;
+    function Describe(a: IAnimal): string; begin Result := 'A:' + a.Name() end;
+    begin
+      WriteLn(Describe(TDog.Create))
+    end.
+    ''';
+
+procedure TE2EInterfaceTests.TestRun_ClassImplDerived_ToBaseVar;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcClassImplDerivedToBaseVar, 'Rex' + LE, 0);
+end;
+
+procedure TE2EInterfaceTests.TestRun_ClassImplDerived_ToBaseParam;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcClassImplDerivedToBaseParam, 'A:Rex' + LE, 0);
 end;
 
 initialization

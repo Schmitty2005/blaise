@@ -7424,6 +7424,8 @@ var
   GI:          TGenericInstance;
   MDecl:       TMethodDecl;
   MName:       string;
+  EmitIntfs:   TObjectList;
+  IntfWalk:    TInterfaceTypeDesc;
 begin
   { Typeinfo blocks for every plain interface }
   for I := 0 to AProg.Block.TypeDecls.Count - 1 do
@@ -7450,47 +7452,68 @@ begin
     ClassRT := TRecordTypeDesc(TDesc);
     if ClassRT.ImplementsCount() = 0 then Continue;
 
-    { One itab per interface — when a class's vtable slot for a given
-      interface method is abstract (e.g. the class is an abstract base that
-      declares the interface but defers implementation to subclasses), the
-      itab entry must point at $_AbstractMethodError instead of the would-be
-      symbol, which does not exist. }
-    for J := 0 to ClassRT.ImplementsCount() - 1 do
-    begin
-      IntfDesc   := ClassRT.ImplementsIntfAt(J);
-      IntfMangle := QBEMangle(IntfDesc.Name);
-      ItabLine   := 'data $itab_' + ClassSymName(TD.Name) + '_' + IntfMangle + ' = {';
-      for K := 0 to IntfDesc.MethodCount() - 1 do
+    { Collect each implemented interface PLUS every ancestor on its parent
+      chain (IDog = interface(IAnimal) -> also emit an IAnimal itab), so a
+      class instance can be narrowed directly to a base interface.  An
+      ancestor's methods are a prefix of the descendant's itab, so the same
+      impl pointers apply; the dedup keeps one itab per (class, interface). }
+    EmitIntfs := TObjectList.Create(False);
+    try
+      for J := 0 to ClassRT.ImplementsCount() - 1 do
       begin
-        MethName := IntfDesc.MethodName(K);
-        if IsAbstractClassMethod(ClassRT, MethName) then
-          MethRef := '$_AbstractMethodError'
-        else
-          MethRef := '$' + ClassSymName(TD.Name) + '_' + MethName;
-        if K = 0 then
-          ItabLine := ItabLine + ' l ' + MethRef
-        else
-          ItabLine := ItabLine + ', l ' + MethRef;
+        IntfWalk := ClassRT.ImplementsIntfAt(J);
+        while IntfWalk <> nil do
+        begin
+          if EmitIntfs.IndexOf(IntfWalk) < 0 then EmitIntfs.Add(IntfWalk);
+          IntfWalk := IntfWalk.Parent;
+        end;
       end;
-      ItabLine := ItabLine + ' }';
-      EmitLine(ItabLine);
-    end;
 
-    { One impllist per class: NULL-terminated (typeinfo_intf, itab) pairs }
-    ImplLine := 'data $impllist_' + ClassSymName(TD.Name) + ' = {';
-    for J := 0 to ClassRT.ImplementsCount() - 1 do
-    begin
-      IntfDesc   := ClassRT.ImplementsIntfAt(J);
-      IntfMangle := QBEMangle(IntfDesc.Name);
-      if J = 0 then
-        ImplLine := ImplLine + ' l $typeinfo_' + IntfTypeInfoName(IntfDesc.Name) +
-                               ', l $itab_' + ClassSymName(TD.Name) + '_' + IntfMangle
-      else
-        ImplLine := ImplLine + ', l $typeinfo_' + IntfTypeInfoName(IntfDesc.Name) +
-                               ', l $itab_' + ClassSymName(TD.Name) + '_' + IntfMangle;
+      { One itab per interface — when a class's vtable slot for a given
+        interface method is abstract (e.g. the class is an abstract base that
+        declares the interface but defers implementation to subclasses), the
+        itab entry must point at $_AbstractMethodError instead of the would-be
+        symbol, which does not exist. }
+      for J := 0 to EmitIntfs.Count - 1 do
+      begin
+        IntfDesc   := TInterfaceTypeDesc(EmitIntfs.Items[J]);
+        IntfMangle := QBEMangle(IntfDesc.Name);
+        ItabLine   := 'data $itab_' + ClassSymName(TD.Name) + '_' + IntfMangle + ' = {';
+        for K := 0 to IntfDesc.MethodCount() - 1 do
+        begin
+          MethName := IntfDesc.MethodName(K);
+          if IsAbstractClassMethod(ClassRT, MethName) then
+            MethRef := '$_AbstractMethodError'
+          else
+            MethRef := '$' + ClassSymName(TD.Name) + '_' + MethName;
+          if K = 0 then
+            ItabLine := ItabLine + ' l ' + MethRef
+          else
+            ItabLine := ItabLine + ', l ' + MethRef;
+        end;
+        ItabLine := ItabLine + ' }';
+        EmitLine(ItabLine);
+      end;
+
+      { One impllist per class: NULL-terminated (typeinfo_intf, itab) pairs.
+        Includes ancestor interfaces so _GetItab(obj, typeinfo_IBase) resolves. }
+      ImplLine := 'data $impllist_' + ClassSymName(TD.Name) + ' = {';
+      for J := 0 to EmitIntfs.Count - 1 do
+      begin
+        IntfDesc   := TInterfaceTypeDesc(EmitIntfs.Items[J]);
+        IntfMangle := QBEMangle(IntfDesc.Name);
+        if J = 0 then
+          ImplLine := ImplLine + ' l $typeinfo_' + IntfTypeInfoName(IntfDesc.Name) +
+                                 ', l $itab_' + ClassSymName(TD.Name) + '_' + IntfMangle
+        else
+          ImplLine := ImplLine + ', l $typeinfo_' + IntfTypeInfoName(IntfDesc.Name) +
+                                 ', l $itab_' + ClassSymName(TD.Name) + '_' + IntfMangle;
+      end;
+      ImplLine := ImplLine + ', l 0 }';
+      EmitLine(ImplLine);
+    finally
+      EmitIntfs.Free();
     end;
-    ImplLine := ImplLine + ', l 0 }';
-    EmitLine(ImplLine);
   end;
 
   { Itab and impllist for generic class instances that implement interfaces }

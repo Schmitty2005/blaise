@@ -2444,6 +2444,8 @@ var
   MethName:   string;
   MethRef:    string;
   MDecl:      TMethodDecl;
+  EmitIntfs:  TObjectList;
+  IntfWalk:   TInterfaceTypeDesc;
 begin
   { Typeinfo blocks for every plain interface. }
   for I := 0 to ATypeDecls.Count - 1 do
@@ -2478,38 +2480,58 @@ begin
     if ClassRT.ImplementsCount() = 0 then Continue;
     CSym := Self.ClassSymName(TD.Name);
 
-    { One itab per implemented interface — a flat array of method-code ptrs in
-      interface declaration order. }
-    for J := 0 to ClassRT.ImplementsCount() - 1 do
-    begin
-      IntfDesc := ClassRT.ImplementsIntfAt(J);
-      Self.Emit('.balign 8');
-      Self.Emit('.globl itab_' + CSym + '_' + Self.IntfTypeInfoName(IntfDesc.Name));
-      Self.Emit('itab_' + CSym + '_' + Self.IntfTypeInfoName(IntfDesc.Name) + ':');
-      for K := 0 to IntfDesc.MethodCount() - 1 do
+    { Collect each implemented interface PLUS every ancestor on its parent
+      chain so a class instance can narrow directly to a base interface (an
+      ancestor's methods are a prefix of the descendant's itab — same impl
+      pointers).  Dedup keeps one itab per (class, interface). }
+    EmitIntfs := TObjectList.Create(False);
+    try
+      for J := 0 to ClassRT.ImplementsCount() - 1 do
       begin
-        MethName := IntfDesc.MethodName(K);
-        if Self.IsAbstractClassMethod(ClassRT, MethName) then
-          MethRef := '_AbstractMethodError'
-        else
-          MethRef := MethodEmitNameNative(
-                       FindMethodInClassDef(TClassTypeDef(TD.Def), MethName),
-                       TD.Name, MethName);
-        Self.Emit(#9'.quad ' + MethRef);
+        IntfWalk := ClassRT.ImplementsIntfAt(J);
+        while IntfWalk <> nil do
+        begin
+          if EmitIntfs.IndexOf(IntfWalk) < 0 then EmitIntfs.Add(IntfWalk);
+          IntfWalk := IntfWalk.Parent;
+        end;
       end;
-    end;
 
-    { One impllist per class: NULL-terminated (typeinfo, itab) pairs. }
-    Self.Emit('.balign 8');
-    Self.Emit('.globl impllist_' + CSym);
-    Self.Emit('impllist_' + CSym + ':');
-    for J := 0 to ClassRT.ImplementsCount() - 1 do
-    begin
-      IntfDesc := ClassRT.ImplementsIntfAt(J);
-      Self.Emit(#9'.quad typeinfo_' + Self.IntfTypeInfoName(IntfDesc.Name));
-      Self.Emit(#9'.quad itab_' + CSym + '_' + Self.IntfTypeInfoName(IntfDesc.Name));
+      { One itab per interface — a flat array of method-code ptrs in interface
+        declaration order. }
+      for J := 0 to EmitIntfs.Count - 1 do
+      begin
+        IntfDesc := TInterfaceTypeDesc(EmitIntfs.Items[J]);
+        Self.Emit('.balign 8');
+        Self.Emit('.globl itab_' + CSym + '_' + Self.IntfTypeInfoName(IntfDesc.Name));
+        Self.Emit('itab_' + CSym + '_' + Self.IntfTypeInfoName(IntfDesc.Name) + ':');
+        for K := 0 to IntfDesc.MethodCount() - 1 do
+        begin
+          MethName := IntfDesc.MethodName(K);
+          if Self.IsAbstractClassMethod(ClassRT, MethName) then
+            MethRef := '_AbstractMethodError'
+          else
+            MethRef := MethodEmitNameNative(
+                         FindMethodInClassDef(TClassTypeDef(TD.Def), MethName),
+                         TD.Name, MethName);
+          Self.Emit(#9'.quad ' + MethRef);
+        end;
+      end;
+
+      { One impllist per class: NULL-terminated (typeinfo, itab) pairs.
+        Includes ancestor interfaces so _GetItab(obj, typeinfo_IBase) resolves. }
+      Self.Emit('.balign 8');
+      Self.Emit('.globl impllist_' + CSym);
+      Self.Emit('impllist_' + CSym + ':');
+      for J := 0 to EmitIntfs.Count - 1 do
+      begin
+        IntfDesc := TInterfaceTypeDesc(EmitIntfs.Items[J]);
+        Self.Emit(#9'.quad typeinfo_' + Self.IntfTypeInfoName(IntfDesc.Name));
+        Self.Emit(#9'.quad itab_' + CSym + '_' + Self.IntfTypeInfoName(IntfDesc.Name));
+      end;
+      Self.Emit(#9'.quad 0');
+    finally
+      EmitIntfs.Free();
     end;
-    Self.Emit(#9'.quad 0');
   end;
 
   { Itab and impllist for generic class instances that implement interfaces. }
