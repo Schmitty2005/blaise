@@ -70,17 +70,53 @@ type
     Addend:   Int64;         { addend (RELA) }
   end;
 
-  { In-memory section: accumulates bytes (for non-BSS) and relocations. }
+  { Amortized-growth byte buffer.  Used to assemble the final ELF image in
+    Finish without the O(n^2) `Buf := Buf + ...` per-byte string growth that
+    OOM-killed on the compiler's own ~2 MB object.  Appends are amortized
+    O(1); a section body or table is bulk-copied in via AppendBytes. }
+  TByteBuf = class
+  public
+    Bytes: array of Byte;
+    Count: Integer;
+    constructor Create;
+    destructor Destroy; override;
+    procedure PushByte(AVal: Integer);
+    procedure PushU16(AVal: Integer);
+    procedure PushU32(AVal: Integer);
+    procedure PushU64(AVal: Int64);
+    procedure PadTo(ALen: Integer);        { append zeros until Count = ALen }
+    procedure AppendBytes(const ASrc: string);   { bulk-copy a byte string }
+    procedure AppendBuf(ASrc: TByteBuf);          { bulk-copy another buffer }
+    function AsString: string;
+  end;
+
+  { In-memory section: accumulates bytes (for non-BSS) and relocations.
+
+    Byte storage is a capacity-doubled array (Bytes holds the backing
+    store, Count the logical length) rather than a `string` grown with
+    `Data := Data + ...`.  String concatenation reallocates and copies the
+    whole buffer on every append, which is O(n^2): assembling the
+    compiler's own ~2 MB .text one byte at a time that way needed tens of
+    GB of peak memory and OOM-killed.  Amortized doubling makes appends
+    O(1) and peak memory ~2x the section size.  An `array of Byte` (not a
+    string) is also the natural shape for the future internal linker, which
+    needs indexed byte access into section bodies. }
   TElfWriterSection = class
   public
     Kind:      TElfSectionKind;
-    Data:      string;         { byte buffer (empty for BSS/TBSS) }
-    Size:      Integer;        { for BSS: logical size; for others: Length(Data) }
+    Bytes:     array of Byte;  { backing store; capacity = Length(Bytes) }
+    Count:     Integer;        { logical byte length (<= Length(Bytes)) }
+    Size:      Integer;        { for BSS: logical size; for others: Count }
     Align:     Integer;        { section alignment (power of 2) }
     Relocs:    array of TElfReloc;
     RelocCount: Integer;
     constructor Create(AKind: TElfSectionKind);
     destructor Destroy; override;
+    { Append one byte, growing the backing store geometrically. }
+    procedure PushByte(AVal: Integer);
+    { Materialise the section body as a string (used only at serialise
+      time, once per section — not on the hot append path). }
+    function AsString: string;
   end;
 
   { Symbol definition recorded before serialisation. }
@@ -161,6 +197,10 @@ implementation
 uses
   streams;
 
+{ Bulk memory copy, used to materialise a section's byte array into a
+  string in one O(n) pass at serialise time. }
+procedure _ew_memcpy(Dst, Src: Pointer; N: Int64); external name 'memcpy';
+
 const
   ELFCLASS64  = 2;
   ELFDATA2LSB = 1;
@@ -214,7 +254,8 @@ constructor TElfWriterSection.Create(AKind: TElfSectionKind);
 begin
   inherited Create();
   Kind  := AKind;
-  Data  := '';
+  SetLength(Bytes, 0);
+  Count := 0;
   Size  := 0;
   Align := 1;
   SetLength(Relocs, 0);
@@ -223,8 +264,137 @@ end;
 
 destructor TElfWriterSection.Destroy;
 begin
+  SetLength(Bytes, 0);
   SetLength(Relocs, 0);
   inherited Destroy();
+end;
+
+procedure TElfWriterSection.PushByte(AVal: Integer);
+var
+  NewCap: Integer;
+begin
+  if Count >= Length(Bytes) then
+  begin
+    { Geometric growth: amortised O(1) append, peak memory ~2x size. }
+    NewCap := Length(Bytes) * 2;
+    if NewCap < 64 then
+      NewCap := 64;
+    SetLength(Bytes, NewCap);
+  end;
+  Bytes[Count] := AVal and $FF;
+  Count := Count + 1;
+  Size := Count;
+end;
+
+function TElfWriterSection.AsString: string;
+begin
+  { Bulk byte-array -> string, done once per section at serialise time
+    (NOT on the hot append path).  SetLength preallocates the string and
+    memcpy fills it in one O(n) copy. }
+  SetLength(Result, Count);
+  if Count > 0 then
+    _ew_memcpy(PChar(Result), @Bytes[0], Count);
+end;
+
+{ ---- TByteBuf --------------------------------------------------------- }
+
+constructor TByteBuf.Create;
+begin
+  inherited Create();
+  SetLength(Bytes, 0);
+  Count := 0;
+end;
+
+destructor TByteBuf.Destroy;
+begin
+  SetLength(Bytes, 0);
+  inherited Destroy();
+end;
+
+procedure TByteBuf.PushByte(AVal: Integer);
+var
+  NewCap: Integer;
+begin
+  if Count >= Length(Bytes) then
+  begin
+    NewCap := Length(Bytes) * 2;
+    if NewCap < 4096 then
+      NewCap := 4096;
+    SetLength(Bytes, NewCap);
+  end;
+  Bytes[Count] := AVal and $FF;
+  Count := Count + 1;
+end;
+
+procedure TByteBuf.PushU16(AVal: Integer);
+begin
+  PushByte(AVal and $FF);
+  PushByte((AVal shr 8) and $FF);
+end;
+
+procedure TByteBuf.PushU32(AVal: Integer);
+begin
+  PushByte(AVal and $FF);
+  PushByte((AVal shr 8) and $FF);
+  PushByte((AVal shr 16) and $FF);
+  PushByte((AVal shr 24) and $FF);
+end;
+
+procedure TByteBuf.PushU64(AVal: Int64);
+var
+  I: Integer;
+begin
+  for I := 0 to 7 do
+    PushByte(Integer((AVal shr (I * 8)) and $FF));
+end;
+
+procedure TByteBuf.PadTo(ALen: Integer);
+begin
+  while Count < ALen do
+    PushByte(0);
+end;
+
+procedure TByteBuf.AppendBytes(const ASrc: string);
+var
+  N, NewCap: Integer;
+begin
+  N := Length(ASrc);
+  if N = 0 then Exit;
+  if Count + N > Length(Bytes) then
+  begin
+    NewCap := Length(Bytes);
+    if NewCap < 4096 then NewCap := 4096;
+    while Count + N > NewCap do
+      NewCap := NewCap * 2;
+    SetLength(Bytes, NewCap);
+  end;
+  _ew_memcpy(@Bytes[Count], PChar(ASrc), N);
+  Count := Count + N;
+end;
+
+procedure TByteBuf.AppendBuf(ASrc: TByteBuf);
+var
+  N, NewCap: Integer;
+begin
+  N := ASrc.Count;
+  if N = 0 then Exit;
+  if Count + N > Length(Bytes) then
+  begin
+    NewCap := Length(Bytes);
+    if NewCap < 4096 then NewCap := 4096;
+    while Count + N > NewCap do
+      NewCap := NewCap * 2;
+    SetLength(Bytes, NewCap);
+  end;
+  _ew_memcpy(@Bytes[Count], @ASrc.Bytes[0], N);
+  Count := Count + N;
+end;
+
+function TByteBuf.AsString: string;
+begin
+  SetLength(Result, Count);
+  if Count > 0 then
+    _ew_memcpy(PChar(Result), @Bytes[0], Count);
 end;
 
 { ---- Byte helpers ----------------------------------------------------- }
@@ -378,20 +548,17 @@ end;
 function TElfObjectWriter.Append(AKind: TElfSectionKind; const ABytes: string): Integer;
 var
   Sec: TElfWriterSection;
+  I: Integer;
 begin
   Sec := GetSection(AKind);
-  Result := Length(Sec.Data);
-  Sec.Data := Sec.Data + ABytes;
-  Sec.Size := Length(Sec.Data);
+  Result := Sec.Count;
+  for I := 0 to Length(ABytes) - 1 do
+    Sec.PushByte(Ord(ABytes[I]));
 end;
 
 procedure TElfObjectWriter.AppendByte(AKind: TElfSectionKind; AVal: Integer);
-var
-  Sec: TElfWriterSection;
 begin
-  Sec := GetSection(AKind);
-  Sec.Data := Sec.Data + Chr(AVal and $FF);
-  Sec.Size := Length(Sec.Data);
+  GetSection(AKind).PushByte(AVal);
 end;
 
 procedure TElfObjectWriter.AppendWord(AKind: TElfSectionKind; AVal: Integer);
@@ -399,8 +566,8 @@ var
   Sec: TElfWriterSection;
 begin
   Sec := GetSection(AKind);
-  PutU16LE(Sec.Data, AVal);
-  Sec.Size := Length(Sec.Data);
+  Sec.PushByte(AVal and $FF);
+  Sec.PushByte((AVal shr 8) and $FF);
 end;
 
 procedure TElfObjectWriter.AppendDWord(AKind: TElfSectionKind; AVal: Integer);
@@ -408,32 +575,36 @@ var
   Sec: TElfWriterSection;
 begin
   Sec := GetSection(AKind);
-  PutU32LE(Sec.Data, AVal);
-  Sec.Size := Length(Sec.Data);
+  Sec.PushByte(AVal and $FF);
+  Sec.PushByte((AVal shr 8) and $FF);
+  Sec.PushByte((AVal shr 16) and $FF);
+  Sec.PushByte((AVal shr 24) and $FF);
 end;
 
 procedure TElfObjectWriter.AppendQWord(AKind: TElfSectionKind; AVal: Int64);
 var
   Sec: TElfWriterSection;
+  I: Integer;
 begin
   Sec := GetSection(AKind);
-  PutU64LE(Sec.Data, AVal);
-  Sec.Size := Length(Sec.Data);
+  for I := 0 to 7 do
+    Sec.PushByte(Integer((AVal shr (I * 8)) and $FF));
 end;
 
 procedure TElfObjectWriter.AppendZeros(AKind: TElfSectionKind; ACount: Integer);
 var
   Sec: TElfWriterSection;
+  I: Integer;
 begin
   Sec := GetSection(AKind);
-  Sec.Data := Sec.Data + MakeZeros(ACount);
-  Sec.Size := Length(Sec.Data);
+  for I := 1 to ACount do
+    Sec.PushByte(0);
 end;
 
 procedure TElfObjectWriter.AlignSection(AKind: TElfSectionKind; AAlign: Integer);
 var
   Sec: TElfWriterSection;
-  Pad: Integer;
+  Pad, I: Integer;
 begin
   Sec := GetSection(AKind);
   if AAlign > Sec.Align then
@@ -444,10 +615,9 @@ begin
   end
   else
   begin
-    Pad := ElfAlignUp(Length(Sec.Data), AAlign) - Length(Sec.Data);
-    if Pad > 0 then
-      Sec.Data := Sec.Data + MakeZeros(Pad);
-    Sec.Size := Length(Sec.Data);
+    Pad := ElfAlignUp(Sec.Count, AAlign) - Sec.Count;
+    for I := 1 to Pad do
+      Sec.PushByte(0);
   end;
 end;
 
@@ -467,7 +637,7 @@ begin
   if (AKind = eskBss) or (AKind = eskTbss) then
     Result := Sec.Size
   else
-    Result := Length(Sec.Data);
+    Result := Sec.Count;
 end;
 
 procedure TElfObjectWriter.Patch32(AKind: TElfSectionKind; AOffset: Integer;
@@ -476,7 +646,10 @@ var
   Sec: TElfWriterSection;
 begin
   Sec := GetSection(AKind);
-  PatchU32LE(Sec.Data, AOffset, AVal);
+  Sec.Bytes[AOffset]     := AVal and $FF;
+  Sec.Bytes[AOffset + 1] := (AVal shr 8) and $FF;
+  Sec.Bytes[AOffset + 2] := (AVal shr 16) and $FF;
+  Sec.Bytes[AOffset + 3] := (AVal shr 24) and $FF;
 end;
 
 function TElfObjectWriter.DefineSymbol(const AName: string;
@@ -647,6 +820,44 @@ begin
   PutU64LE(ABuf, AAddend);
 end;
 
+{ TByteBuf-based variants used for the large, per-element-built tables
+  (.strtab, .symtab, .rela.*) so building them is amortized O(1) per
+  element instead of O(n^2) string concatenation. }
+
+function ElfAddStrtabBB(ATab: TByteBuf; const AStr: string): Integer;
+begin
+  if AStr = '' then
+  begin
+    Result := 0;
+    Exit;
+  end;
+  Result := ATab.Count;
+  ATab.AppendBytes(AStr);
+  ATab.PushByte(0);
+end;
+
+procedure ElfEmitSymBB(ABuf: TByteBuf; ANameIdx: Integer; AInfo: Integer;
+  AOther: Integer; AShndx: Integer; AValue: Int64; ASize: Int64);
+begin
+  ABuf.PushU32(ANameIdx);   { st_name }
+  ABuf.PushByte(AInfo);     { st_info }
+  ABuf.PushByte(AOther);    { st_other }
+  ABuf.PushU16(AShndx);     { st_shndx }
+  ABuf.PushU64(AValue);     { st_value }
+  ABuf.PushU64(ASize);      { st_size }
+end;
+
+procedure ElfEmitRelaBB(ABuf: TByteBuf; AOffset: Int64; ASymIdx: Integer;
+  AType: Integer; AAddend: Int64);
+var
+  RInfo: Int64;
+begin
+  ABuf.PushU64(AOffset);
+  RInfo := (Int64(ASymIdx) shl 32) or (Int64(AType) and $FFFFFFFF);
+  ABuf.PushU64(RInfo);
+  ABuf.PushU64(AAddend);
+end;
+
 function TElfObjectWriter.Finish: string;
 var
   Buf: string;
@@ -667,8 +878,8 @@ var
   Sym: TElfWriterSym;
   R: TElfReloc;
 
-  Strtab: string;
-  Shstrtab: string;
+  Strtab: TByteBuf;
+  Shstrtab: TByteBuf;
 
   ShdrOff: Int64;
   CurOff: Int64;
@@ -677,17 +888,17 @@ var
   RelaFileOff: array[0..4] of Int64;
   SymtabFileOff, StrtabFileOff, ShstrtabFileOff, NoteFileOff: Int64;
 
-  SymtabBuf: string;
+  SymtabBuf: TByteBuf;
   FirstGlobal: Integer;
   SymSecIdx: Integer;
   StInfo: Integer;
 
-  RelaBuf: array[0..4] of string;
+  RelaBuf: array[0..4] of TByteBuf;
   RelaCount: array[0..4] of Integer;
   SymRemapIdx: array of Integer;
   LocalSymCount, GlobalSymCount: Integer;
   LocalSyms, GlobalSyms: TList<Integer>;
-  TmpBuf: string;
+  OutBuf: TByteBuf;
 
   ShFlags: Int64;
   ShType: Integer;
@@ -736,30 +947,36 @@ begin
   ShstrtabIdx  := StrtabIdx + 1;
   TotalShNum   := ShstrtabIdx + 1;
 
-  { Build .strtab — symbol name string table (starts with NUL byte) }
-  Strtab := Chr(0);
-
-  { Build .shstrtab — section name string table }
-  Shstrtab := Chr(0);
+  { All large per-element-built tables use amortized TByteBuf, not string
+    concatenation. }
+  Strtab := TByteBuf.Create();
+  Shstrtab := TByteBuf.Create();
+  SymtabBuf := TByteBuf.Create();
   for I := 0 to 4 do
-  begin
-    SecNameIdx[I] := 0;
-    RelaNameIdx[I] := 0;
-    if SecPresent[I] then
-      SecNameIdx[I] := ElfAddStrtab(Shstrtab, SectionName(SecOrder[I]));
-    if RelaShtIdx[I] > 0 then
-      RelaNameIdx[I] := ElfAddStrtab(Shstrtab, '.rela' + SectionName(SecOrder[I]));
-  end;
-  NoteNameIdx     := ElfAddStrtab(Shstrtab, '.note.GNU-stack');
-  SymtabNameIdx   := ElfAddStrtab(Shstrtab, '.symtab');
-  StrtabNameIdx   := ElfAddStrtab(Shstrtab, '.strtab');
-  ShstrtabNameIdx := ElfAddStrtab(Shstrtab, '.shstrtab');
-
-  { Build symbol table — separate locals from globals (ELF requires
-    all locals before all globals in .symtab). }
+    RelaBuf[I] := nil;
   LocalSyms := TList<Integer>.Create();
   GlobalSyms := TList<Integer>.Create();
+  OutBuf := nil;
   try
+    { Build .strtab — symbol name string table (starts with NUL byte) }
+    Strtab.PushByte(0);
+
+    { Build .shstrtab — section name string table }
+    Shstrtab.PushByte(0);
+    for I := 0 to 4 do
+    begin
+      SecNameIdx[I] := 0;
+      RelaNameIdx[I] := 0;
+      if SecPresent[I] then
+        SecNameIdx[I] := ElfAddStrtabBB(Shstrtab, SectionName(SecOrder[I]));
+      if RelaShtIdx[I] > 0 then
+        RelaNameIdx[I] := ElfAddStrtabBB(Shstrtab, '.rela' + SectionName(SecOrder[I]));
+    end;
+    NoteNameIdx     := ElfAddStrtabBB(Shstrtab, '.note.GNU-stack');
+    SymtabNameIdx   := ElfAddStrtabBB(Shstrtab, '.symtab');
+    StrtabNameIdx   := ElfAddStrtabBB(Shstrtab, '.strtab');
+    ShstrtabNameIdx := ElfAddStrtabBB(Shstrtab, '.shstrtab');
+
     for I := 0 to FSymbols.Count - 1 do
     begin
       Sym := FSymbols.Get(I);
@@ -779,9 +996,8 @@ begin
     FirstGlobal := LocalSyms.Count + 1;
 
     { Serialise .symtab }
-    SymtabBuf := '';
     { NULL symbol (entry 0) }
-    ElfEmitSym(SymtabBuf, 0, 0, 0, SHN_UNDEF, 0, 0);
+    ElfEmitSymBB(SymtabBuf, 0, 0, 0, SHN_UNDEF, 0, 0);
     { Locals first }
     for I := 0 to LocalSyms.Count - 1 do
     begin
@@ -799,7 +1015,7 @@ begin
           end;
       end;
       StInfo := (SymBindToElf(Sym.Bind) shl 4) or SymTypeToElf(Sym.SType);
-      ElfEmitSym(SymtabBuf, ElfAddStrtab(Strtab, Sym.Name), StInfo, 0,
+      ElfEmitSymBB(SymtabBuf, ElfAddStrtabBB(Strtab, Sym.Name), StInfo, 0,
               SymSecIdx, Int64(Sym.Value), Int64(Sym.Size));
     end;
     { Globals }
@@ -819,27 +1035,25 @@ begin
           end;
       end;
       StInfo := (SymBindToElf(Sym.Bind) shl 4) or SymTypeToElf(Sym.SType);
-      ElfEmitSym(SymtabBuf, ElfAddStrtab(Strtab, Sym.Name), StInfo, 0,
+      ElfEmitSymBB(SymtabBuf, ElfAddStrtabBB(Strtab, Sym.Name), StInfo, 0,
               SymSecIdx, Int64(Sym.Value), Int64(Sym.Size));
     end;
 
     { Build .rela.* sections }
     for I := 0 to 4 do
     begin
-      RelaBuf[I] := '';
+      RelaBuf[I] := TByteBuf.Create();
       RelaCount[I] := 0;
       if (not SecPresent[I]) or (RelaShtIdx[I] = 0) then Continue;
       Sec := GetSection(SecOrder[I]);
-      TmpBuf := '';
       for J := 0 to Sec.RelocCount - 1 do
       begin
         R := Sec.Relocs[J];
-        ElfEmitRela(TmpBuf, Int64(R.Offset),
+        ElfEmitRelaBB(RelaBuf[I], Int64(R.Offset),
                  SymRemapIdx[R.SymIndex],
                  RelocTypeToElf(R.RType), R.Addend);
         RelaCount[I] := RelaCount[I] + 1;
       end;
-      RelaBuf[I] := TmpBuf;
     end;
 
     { Now lay out the file.  ELF header first, then section contents in order,
@@ -855,7 +1069,7 @@ begin
         CurOff := ElfAlignUp64(CurOff, Int64(Sec.Align));
       SecFileOff[I] := CurOff;
       if (SecOrder[I] <> eskBss) and (SecOrder[I] <> eskTbss) then
-        CurOff := CurOff + Int64(Length(Sec.Data));
+        CurOff := CurOff + Int64(Sec.Count);
     end;
 
     for I := 0 to 4 do
@@ -871,21 +1085,28 @@ begin
 
     CurOff := ElfAlignUp64(CurOff, 8);
     SymtabFileOff := CurOff;
-    CurOff := CurOff + Int64(Length(SymtabBuf));
+    CurOff := CurOff + Int64(SymtabBuf.Count);
 
     CurOff := ElfAlignUp64(CurOff, 1);
     StrtabFileOff := CurOff;
-    CurOff := CurOff + Int64(Length(Strtab));
+    CurOff := CurOff + Int64(Strtab.Count);
 
     CurOff := ElfAlignUp64(CurOff, 1);
     ShstrtabFileOff := CurOff;
-    CurOff := CurOff + Int64(Length(Shstrtab));
+    CurOff := CurOff + Int64(Shstrtab.Count);
 
     ShdrOff := ElfAlignUp64(CurOff, 8);
 
-    { Emit the ELF header }
+    { Assemble the final image into an amortized byte buffer.  Each fixed
+      piece (ELF header, section-header table) is built into a small local
+      string then bulk-copied in; section bodies and tables are bulk-copied;
+      padding is a single PadTo per gap.  This avoids the O(n^2) per-byte
+      `Buf := Buf + ...` growth that OOM-killed on the compiler's own
+      object. }
+    OutBuf := TByteBuf.Create();
+
+    { ELF header (64 bytes) built locally then appended. }
     Buf := '';
-    { e_ident }
     PutU8(Buf, $7F);
     PutU8(Buf, $45);  { E }
     PutU8(Buf, $4C);  { L }
@@ -908,6 +1129,7 @@ begin
     PutU16LE(Buf, ELF64_SHDR_SIZE);              { e_shentsize }
     PutU16LE(Buf, TotalShNum);                   { e_shnum }
     PutU16LE(Buf, ShstrtabIdx);                  { e_shstrndx }
+    OutBuf.AppendBytes(Buf);
 
     { Emit section data bodies }
     for I := 0 to 4 do
@@ -915,41 +1137,35 @@ begin
       if not SecPresent[I] then Continue;
       Sec := GetSection(SecOrder[I]);
       if (SecOrder[I] = eskBss) or (SecOrder[I] = eskTbss) then Continue;
-      { Pad to file offset }
-      while Length(Buf) < Integer(SecFileOff[I]) do
-        PutU8(Buf, 0);
-      Buf := Buf + Sec.Data;
+      OutBuf.PadTo(Integer(SecFileOff[I]));
+      OutBuf.AppendBytes(Sec.AsString());
     end;
 
     { Emit .rela.* bodies }
     for I := 0 to 4 do
     begin
       if RelaShtIdx[I] = 0 then Continue;
-      while Length(Buf) < Integer(RelaFileOff[I]) do
-        PutU8(Buf, 0);
-      Buf := Buf + RelaBuf[I];
+      OutBuf.PadTo(Integer(RelaFileOff[I]));
+      OutBuf.AppendBuf(RelaBuf[I]);
     end;
 
     { Emit .symtab }
-    while Length(Buf) < Integer(SymtabFileOff) do
-      PutU8(Buf, 0);
-    Buf := Buf + SymtabBuf;
+    OutBuf.PadTo(Integer(SymtabFileOff));
+    OutBuf.AppendBuf(SymtabBuf);
 
     { Emit .strtab }
-    while Length(Buf) < Integer(StrtabFileOff) do
-      PutU8(Buf, 0);
-    Buf := Buf + Strtab;
+    OutBuf.PadTo(Integer(StrtabFileOff));
+    OutBuf.AppendBuf(Strtab);
 
     { Emit .shstrtab }
-    while Length(Buf) < Integer(ShstrtabFileOff) do
-      PutU8(Buf, 0);
-    Buf := Buf + Shstrtab;
+    OutBuf.PadTo(Integer(ShstrtabFileOff));
+    OutBuf.AppendBuf(Shstrtab);
 
     { Pad to section header table }
-    while Length(Buf) < Integer(ShdrOff) do
-      PutU8(Buf, 0);
+    OutBuf.PadTo(Integer(ShdrOff));
 
-    { Section header table }
+    { Section header table — built into a local string then appended. }
+    Buf := '';
     { Entry 0: NULL }
     ElfEmitShdr(Buf, 0, SHT_NULL, 0, 0, 0, 0, 0, 0, 0, 0);
 
@@ -1008,23 +1224,31 @@ begin
 
     { .symtab }
     ElfEmitShdr(Buf, SymtabNameIdx, SHT_SYMTAB, 0, 0,
-             SymtabFileOff, Int64(Length(SymtabBuf)),
+             SymtabFileOff, Int64(SymtabBuf.Count),
              StrtabIdx,     { sh_link -> .strtab }
              FirstGlobal,   { sh_info = index of first global sym }
              8, ELF64_SYM_SIZE);
 
     { .strtab }
     ElfEmitShdr(Buf, StrtabNameIdx, SHT_STRTAB, 0, 0,
-             StrtabFileOff, Int64(Length(Strtab)),
+             StrtabFileOff, Int64(Strtab.Count),
              0, 0, 1, 0);
 
     { .shstrtab }
     ElfEmitShdr(Buf, ShstrtabNameIdx, SHT_STRTAB, 0, 0,
-             ShstrtabFileOff, Int64(Length(Shstrtab)),
+             ShstrtabFileOff, Int64(Shstrtab.Count),
              0, 0, 1, 0);
 
-    Result := Buf;
+    { Append the section-header table and materialise the final image. }
+    OutBuf.AppendBytes(Buf);
+    Result := OutBuf.AsString();
   finally
+    OutBuf.Free();
+    Strtab.Free();
+    Shstrtab.Free();
+    SymtabBuf.Free();
+    for I := 0 to 4 do
+      RelaBuf[I].Free();
     LocalSyms.Free();
     GlobalSyms.Free();
   end;
