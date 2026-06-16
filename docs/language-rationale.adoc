@@ -3960,6 +3960,35 @@ blob identical to what the equivalent runtime assignments would produce.
 See the "Array-of-enum Typed Constants" section for the value-count
 validation rule.
 
+=== Dynamic-array nesting (jagged arrays)
+
+A *dynamic* array of dynamic arrays (`array of array of T`) supports the
+same chained subscript forms for both reading and writing:
+
+[source,pascal]
+----
+var m: array of array of Integer;
+begin
+  SetLength(m, 2);
+  SetLength(m[0], 3);     // each row sized independently — rows may be jagged
+  m[0][1] := 5;           // chained element write
+  WriteLn(m[0][1]);       // chained element read
+end;
+----
+
+The representation differs from the static case: each level is a separate
+heap allocation, so an inner row is reached through a pointer rather than
+inline storage.  The chained-write codegen therefore evaluates the base
+expression (`m[i]`) to the inner array's *data pointer* and indexes into
+it, whereas the static path computes an inline offset.  This indirection
+is what makes jagged arrays possible — distinct rows may have distinct
+lengths, set independently with `SetLength(m[i], n)`.
+
+The element type of a chained write may be any managed or unmanaged type
+(integers, strings, records, classes); the store path applies the same
+ARC retain/release discipline used for a single-dimension dynamic-array
+element write.
+
 == Initialised Global Variables
 
 === Decision

@@ -10208,15 +10208,19 @@ begin
   begin
     AStmt.ResolvedArrayType := AnalyseExpr(AStmt.BaseExpr);
     if (AStmt.ResolvedArrayType = nil) or
-       (AStmt.ResolvedArrayType.Kind <> tyStaticArray) then
-      SemanticError('Multi-dimensional subscript base must be a static array',
+       not (AStmt.ResolvedArrayType.Kind in [tyStaticArray, tyDynArray]) then
+      SemanticError(
+        'Multi-dimensional subscript base must be a static or dynamic array',
         AStmt.Line, AStmt.Col);
-    ArrType := TStaticArrayTypeDesc(AStmt.ResolvedArrayType);
+    if AStmt.ResolvedArrayType.Kind = tyDynArray then
+      ElemT := TDynArrayTypeDesc(AStmt.ResolvedArrayType).ElementType
+    else
+      ElemT := TStaticArrayTypeDesc(AStmt.ResolvedArrayType).ElementType;
     IdxType := AnalyseExpr(AStmt.IndexExpr);
     if not IdxType.IsNumeric() then
       SemanticError('Array index must be numeric', AStmt.Line, AStmt.Col);
     ValType := AnalyseExpr(AStmt.ValueExpr);
-    CheckTypesMatch(ArrType.ElementType, ValType,
+    CheckTypesMatch(ElemT, ValType,
       Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
     Exit;
   end;

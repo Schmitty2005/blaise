@@ -13959,8 +13959,15 @@ begin
     ElemType  := TDynArrayTypeDesc(AStmt.ResolvedArrayType).ElementType;
     ElemSize  := ElemType.RawSize();
     PCharBase := AllocTemp();
+    { Chained / multi-dimensional write A[I][J] := V where the inner array
+      is itself a dynamic array: BaseExpr (A[I]) evaluates to the inner
+      dynarray value — its data pointer.  No variable-slot load needed. }
+    if AStmt.BaseExpr <> nil then
+    begin
+      PCharBase := EmitExpr(AStmt.BaseExpr);
+    end
     { load the data pointer from the variable slot }
-    if AStmt.IsImplicitSelf then
+    else if AStmt.IsImplicitSelf then
     begin
       { ArrayName is a dyn-array field of Self: Self + offset holds the
         data pointer. }

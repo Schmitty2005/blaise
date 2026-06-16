@@ -10932,6 +10932,16 @@ begin
        (SSA.ResolvedArrayType.Kind = tyDynArray) then
     begin
       DAElemType := TDynArrayTypeDesc(SSA.ResolvedArrayType).ElementType;
+      { Chained / multi-dimensional write A[I][J] := V where the inner array
+        is itself a dynamic array: BaseExpr (A[I]) evaluates to the inner
+        dynarray value — its data pointer.  Stash it on the stack so index
+        and value evaluation below can clobber registers freely; the
+        base-resolve steps then reload it instead of a named slot. }
+      if SSA.BaseExpr <> nil then
+      begin
+        Self.EmitExprToEax(SSA.BaseExpr);
+        Self.Emit(#9'pushq %rax');             { stack: [baseptr] }
+      end;
       { Record-returning call as the RHS: sret directly into the element —
         EmitExprToEax cannot evaluate a record call (the callee writes its
         Result through the hidden sret pointer, which would be garbage). }
@@ -10940,7 +10950,10 @@ begin
         Self.Emit(#9'pushq %rbx');
         Self.EmitExprToEax(SSA.IndexExpr);
         Self.Emit(Format(#9'imulq $%d, %%rax', [DAElemType.RawSize()]));
-        if SSA.IsImplicitSelf then
+        if SSA.BaseExpr <> nil then
+          { Base ptr pushed before %rbx: now at 8(%rsp). }
+          Self.Emit(#9'movq 8(%rsp), %rcx')
+        else if SSA.IsImplicitSelf then
         begin
           Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
           if SSA.ImplicitFieldInfo.Offset > 0 then
@@ -10961,6 +10974,8 @@ begin
         Self.EmitRecordFieldReleases(TRecordTypeDesc(DAElemType), '%rbx');
         Self.EmitRecordCallSretAt(SSA.ValueExpr, '(%rbx)');
         Self.Emit(#9'popq %rbx');
+        if SSA.BaseExpr <> nil then
+          Self.Emit(#9'addq $8, %rsp');         { drop stashed base ptr }
         Exit;
       end;
       { Float element: evaluate the RHS into %xmm0, coerce to the element's
@@ -10981,7 +10996,11 @@ begin
       Self.Emit(#9'pushq %rax');
       Self.EmitExprToEax(SSA.IndexExpr);
       Self.Emit(Format(#9'imulq $%d, %%rax', [DAElemType.RawSize()]));
-      if SSA.IsImplicitSelf then
+      if SSA.BaseExpr <> nil then
+        { Base ptr pushed before the value: value is on top, so the base
+          sits at 8(%rsp). }
+        Self.Emit(#9'movq 8(%rsp), %rcx')
+      else if SSA.IsImplicitSelf then
       begin
         { ArrayName is a dyn-array field of Self: Self + offset holds the
           data pointer. }
@@ -11008,6 +11027,8 @@ begin
         Self.Emit(#9'popq %rax');
         Self.Emit(#9'movq %rax, %xmm0');
         Self.EmitStoreFloat('(%rcx)', DAElemType);
+        if SSA.BaseExpr <> nil then
+          Self.Emit(#9'addq $8, %rsp');         { drop stashed base ptr }
         Exit;
       end;
       if DAElemType.Kind = tyRecord then
@@ -11031,6 +11052,8 @@ begin
         Self.Emit(#9'popq %r15');
         Self.Emit(#9'popq %rbx');
         Self.Emit(#9'addq $8, %rsp');          { drop saved src addr }
+        if SSA.BaseExpr <> nil then
+          Self.Emit(#9'addq $8, %rsp');         { drop stashed base ptr }
         Exit;
       end;
       if DAElemType.Kind = tyString then
@@ -11055,6 +11078,8 @@ begin
       end;
       Self.Emit(#9'popq %rax');
       Self.EmitStoreVar('(%rcx)', DAElemType);
+      if SSA.BaseExpr <> nil then
+        Self.Emit(#9'addq $8, %rsp');           { drop stashed base ptr }
       Exit;
     end;
     { Static array element write. }
