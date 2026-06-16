@@ -5200,6 +5200,17 @@ begin
       end;
       Exit;
     end;
+    if (SameText(FC.Name, 'Succ') or SameText(FC.Name, 'Pred')) and
+       (FC.Args.Count = 1) then
+    begin
+      { Next/previous ordinal value: +1 / -1.  Result keeps the arg's type. }
+      Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+      if SameText(FC.Name, 'Succ') then
+        Self.Emit(#9'addl $1, %eax')
+      else
+        Self.Emit(#9'subl $1, %eax');
+      Exit;
+    end;
     if SameText(FC.Name, 'Assigned') and (FC.Args.Count = 1) then
     begin
       Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
@@ -8694,7 +8705,25 @@ begin
     for J := 0 to Branch.Values.Count - 1 do
     begin
       NextLbl := Self.NewLabel('csnxt');
-      if AStmt.IsStringCase then
+      if TASTExpr(Branch.Values.Items[J]) is TSetRangeExpr then
+      begin
+        { Range label lo..hi: match when (sel >= lo) and (sel <= hi).  Signed
+          ordinal comparison; selector stays in %r10 across both bound evals. }
+        Self.Emit(#9'pushq %r10');
+        Self.EmitExprToEax(TSetRangeExpr(Branch.Values.Items[J]).LowExpr);
+        Self.Emit(#9'movl %eax, %ecx');
+        Self.Emit(#9'popq %r10');
+        Self.Emit(#9'cmpl %ecx, %r10d');
+        Self.Emit(#9'jl ' + NextLbl);        { sel < lo -> no match }
+        Self.Emit(#9'pushq %r10');
+        Self.EmitExprToEax(TSetRangeExpr(Branch.Values.Items[J]).HighExpr);
+        Self.Emit(#9'movl %eax, %ecx');
+        Self.Emit(#9'popq %r10');
+        Self.Emit(#9'cmpl %ecx, %r10d');
+        Self.Emit(#9'jg ' + NextLbl);        { sel > hi -> no match }
+        Self.Emit(#9'jmp ' + BranchLbl);
+      end
+      else if AStmt.IsStringCase then
       begin
         { String comparison: call _StringEquals(selector, value) }
         Self.Emit(#9'pushq %r10');

@@ -105,6 +105,7 @@ type
     procedure ParseBodyInto(ATarget: TCompoundStmt; AStop1, AStop2: TTokenKind);
     function  ParseRaiseStmt: TRaiseStmt;
     function  ParseInheritedStmt: TInheritedCallStmt;
+    function  ParseCaseLabel: TASTExpr;
     function  ParseCaseStmt: TCaseStmt;
     function  ParseForwardDecl(IsFunction: Boolean): TMethodDecl;
     function  ParseCompoundStmt: TCompoundStmt;
@@ -3368,6 +3369,30 @@ begin
   end;
 end;
 
+function TParser.ParseCaseLabel: TASTExpr;
+{ A case label is a single constant value or a range `lo..hi`.  A range is
+  represented with a TSetRangeExpr (reused from set literals); the semantic and
+  codegen passes treat a TSetRangeExpr label as an inclusive range test. }
+var
+  Lo, Hi: TASTExpr;
+  Range:  TSetRangeExpr;
+begin
+  Lo := ParseExpr();
+  if Check(tkDotDot) then
+  begin
+    Advance();  { consume '..' }
+    Hi := ParseExpr();
+    Range := TSetRangeExpr.Create();
+    Range.Line     := Lo.Line;
+    Range.Col      := Lo.Col;
+    Range.LowExpr  := Lo;
+    Range.HighExpr := Hi;
+    Result := Range;
+  end
+  else
+    Result := Lo;
+end;
+
 function TParser.ParseCaseStmt: TCaseStmt;
 var
   Branch:   TCaseBranch;
@@ -3385,11 +3410,11 @@ begin
     while not (Check(tkEnd) or Check(tkElse) or Check(tkEOF)) do
     begin
       Branch := TCaseBranch.Create();
-      Branch.Values.Add(ParseExpr());
+      Branch.Values.Add(ParseCaseLabel());
       while Check(tkComma) do
       begin
         Advance();
-        Branch.Values.Add(ParseExpr());
+        Branch.Values.Add(ParseCaseLabel());
       end;
       Expect(tkColon);
       Stmt := ParseStmt();

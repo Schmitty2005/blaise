@@ -8015,6 +8015,25 @@ begin
       AExpr.Line, AExpr.Col);
   end;
 
+  { Succ(x)/Pred(x): the next/previous value of an ordinal (enum or integer
+    family).  Result keeps the argument's type, so Succ(enum) is still that
+    enum.  Codegen lowers to +1 / -1 on the ordinal value.  Handled here,
+    before the symbol lookup, since these are builtins with no symbol. }
+  if SameText(AExpr.Name, 'Succ') or SameText(AExpr.Name, 'Pred') then
+  begin
+    if AExpr.Args.Count <> 1 then
+      SemanticError(Format('%s requires exactly 1 argument', [AExpr.Name]),
+        AExpr.Line, AExpr.Col);
+    Result := AnalyseExpr(TASTExpr(AExpr.Args.Items[0]));
+    if (Result = nil) or
+       not ((Result.Kind = tyEnum) or Result.IsNumeric()) then
+      SemanticError(
+        Format('%s requires an ordinal (enum or integer) argument', [AExpr.Name]),
+        AExpr.Line, AExpr.Col);
+    AExpr.ResolvedType := Result;
+    Exit;
+  end;
+
   { Resolution order: see AnalyseProcCall for the matching pattern.
     Local vars/parameters win over implicit-Self method, which wins
     over unit-level. }
@@ -10580,8 +10599,22 @@ begin
     Branch := TCaseBranch(AStmt.Branches.Items[I]);
     for J := 0 to Branch.Values.Count - 1 do
     begin
-      ValType := AnalyseExpr(TASTExpr(Branch.Values.Items[J]));
-      CheckTypesMatch(SelType, ValType, 'case value', AStmt.Line, AStmt.Col);
+      if TASTExpr(Branch.Values.Items[J]) is TSetRangeExpr then
+      begin
+        { Range label lo..hi — both bounds must match the selector type. }
+        if AStmt.IsStringCase then
+          SemanticError('case range labels are not allowed for a string selector',
+            AStmt.Line, AStmt.Col);
+        ValType := AnalyseExpr(TSetRangeExpr(Branch.Values.Items[J]).LowExpr);
+        CheckTypesMatch(SelType, ValType, 'case range low', AStmt.Line, AStmt.Col);
+        ValType := AnalyseExpr(TSetRangeExpr(Branch.Values.Items[J]).HighExpr);
+        CheckTypesMatch(SelType, ValType, 'case range high', AStmt.Line, AStmt.Col);
+      end
+      else
+      begin
+        ValType := AnalyseExpr(TASTExpr(Branch.Values.Items[J]));
+        CheckTypesMatch(SelType, ValType, 'case value', AStmt.Line, AStmt.Col);
+      end;
     end;
     AnalyseStmt(Branch.Stmt);
   end;

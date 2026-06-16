@@ -30,6 +30,12 @@ type
     procedure TestRun_Nested_For_Loops;
     procedure TestRun_IncDec_CapturedVar;
     procedure TestRun_ExitValue_ReturnsEarly;
+    { case-label ranges (lo..hi) and Succ/Pred ordinal builtins. }
+    procedure TestRun_Case_Ranges;
+    procedure TestRun_Case_RangeMixedWithSingles;
+    procedure TestRun_Case_EnumRange;
+    procedure TestRun_SuccPred_Integer;
+    procedure TestRun_SuccPred_Enum;
   end;
 
 implementation
@@ -250,6 +256,95 @@ begin
   { Classify: -1, 0, 1; Pick: yes (Exit), no (fall-through). }
   AssertEquals('exit-value returns',
     '-1' + LE + '0' + LE + '1' + LE + 'yes' + LE + 'no' + LE, Output);
+end;
+
+const
+  SrcCaseRanges = '''
+    program P;
+    var i, r: Integer;
+    begin
+      for i := 0 to 6 do
+      begin
+        case i of
+          0, 1: r := 100;
+          2..4: r := 200;
+        else r := 999;
+        end;
+        Write(r); Write(' ');
+      end;
+      WriteLn
+    end.
+    ''';
+
+  SrcCaseRangeMixed = '''
+    program P;
+    var i: Integer;
+    begin
+      for i := 0 to 10 do
+        case i of
+          0:       Write('z');
+          1..3:    Write('a');
+          5, 7..9: Write('b');
+        else Write('.');
+        end;
+      WriteLn
+    end.
+    ''';
+
+  SrcCaseEnumRange = '''
+    program P;
+    type TColor = (Red, Orange, Yellow, Green, Blue, Violet);
+    function Warm(c: TColor): Boolean;
+    begin case c of Red..Yellow: Result := True else Result := False end end;
+    begin
+      WriteLn(Warm(Orange));
+      WriteLn(Warm(Blue))
+    end.
+    ''';
+
+  SrcSuccPredInt = '''
+    program P;
+    var i: Integer;
+    begin i := 10; WriteLn(Succ(i)); WriteLn(Pred(i)); WriteLn(Succ(Succ(i))) end.
+    ''';
+
+  SrcSuccPredEnum = '''
+    program P;
+    type TDir = (North, East, South, West);
+    function Nm(d: TDir): string;
+    begin case d of North: Result:='N'; East: Result:='E'; South: Result:='S'; West: Result:='W' end end;
+    var d: TDir;
+    begin d := North; WriteLn(Nm(Succ(d))); d := West; WriteLn(Nm(Pred(d))) end.
+    ''';
+
+procedure TE2EControlFlowTests.TestRun_Case_Ranges;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcCaseRanges, '100 100 200 200 200 999 999 ' + LE, 0);
+end;
+
+procedure TE2EControlFlowTests.TestRun_Case_RangeMixedWithSingles;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcCaseRangeMixed, 'zaaa.b.bbb.' + LE, 0);
+end;
+
+procedure TE2EControlFlowTests.TestRun_Case_EnumRange;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcCaseEnumRange, 'True' + LE + 'False' + LE, 0);
+end;
+
+procedure TE2EControlFlowTests.TestRun_SuccPred_Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcSuccPredInt, '11' + LE + '9' + LE + '12' + LE, 0);
+end;
+
+procedure TE2EControlFlowTests.TestRun_SuccPred_Enum;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcSuccPredEnum, 'E' + LE + 'S' + LE, 0);
 end;
 
 initialization

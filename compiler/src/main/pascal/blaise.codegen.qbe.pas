@@ -6626,6 +6626,10 @@ var
   SelTemp:     string;
   ValTemp:     string;
   CmpTemp:     string;
+  LoTemp:      string;
+  HiTemp:      string;
+  GeTemp:      string;
+  LeTemp:      string;
   NextLbl:     string;
   BranchLbl:   string;
   ElseLbl:     string;
@@ -6654,14 +6658,30 @@ begin
       BranchLbl := BranchLabels.Strings[I];
       for J := 0 to Branch.Values.Count - 1 do
       begin
-        ValTemp := EmitExpr(TASTExpr(Branch.Values.Items[J]));
-        CmpTemp := AllocTemp();
         NextLbl := AllocLabel('case_next');
-        if AStmt.IsStringCase then
-          EmitLine(Format('  %s =w call $_StringEquals(l %s, l %s)',
-            [CmpTemp, SelTemp, ValTemp]))
+        if TASTExpr(Branch.Values.Items[J]) is TSetRangeExpr then
+        begin
+          { Range label lo..hi: match when (sel >= lo) and (sel <= hi).
+            csgew/cslew are signed ordinal comparisons (enum/integer). }
+          LoTemp  := EmitExpr(TSetRangeExpr(Branch.Values.Items[J]).LowExpr);
+          GeTemp  := AllocTemp();
+          EmitLine(Format('  %s =w csgew %s, %s', [GeTemp, SelTemp, LoTemp]));
+          HiTemp  := EmitExpr(TSetRangeExpr(Branch.Values.Items[J]).HighExpr);
+          LeTemp  := AllocTemp();
+          EmitLine(Format('  %s =w cslew %s, %s', [LeTemp, SelTemp, HiTemp]));
+          CmpTemp := AllocTemp();
+          EmitLine(Format('  %s =w and %s, %s', [CmpTemp, GeTemp, LeTemp]));
+        end
         else
-          EmitLine(Format('  %s =w ceqw %s, %s', [CmpTemp, SelTemp, ValTemp]));
+        begin
+          ValTemp := EmitExpr(TASTExpr(Branch.Values.Items[J]));
+          CmpTemp := AllocTemp();
+          if AStmt.IsStringCase then
+            EmitLine(Format('  %s =w call $_StringEquals(l %s, l %s)',
+              [CmpTemp, SelTemp, ValTemp]))
+          else
+            EmitLine(Format('  %s =w ceqw %s, %s', [CmpTemp, SelTemp, ValTemp]));
+        end;
         EmitLine(Format('  jnz %s, @%s, @%s', [CmpTemp, BranchLbl, NextLbl]));
         EmitLine('@' + NextLbl);
       end;
@@ -9742,6 +9762,19 @@ begin
           EmitLine(Format('  %s =w call $_OrdAt(l %s, w 0)', [T, L]))
         else
           EmitLine(Format('  %s =w copy %s', [T, L]));
+        Exit(T);
+      end;
+
+      if SameText(FC.Name,'Succ') or SameText(FC.Name,'Pred') then
+      begin
+        { Next/previous ordinal value: +1 / -1 on the integer-width value.
+          Result type matches the argument (enum stays enum). }
+        L := EmitExpr(TASTExpr(FC.Args.Items[0]));
+        T := AllocTemp();
+        if SameText(FC.Name,'Succ') then
+          EmitLine(Format('  %s =w add %s, 1', [T, L]))
+        else
+          EmitLine(Format('  %s =w sub %s, 1', [T, L]));
         Exit(T);
       end;
 
