@@ -60,6 +60,19 @@ jobs:
         run: make -C vendor/qbe
 
       # --------------------------------------------------------------------
+      # 3b. Make the freshly-built QBE discoverable by the *compiler itself*.
+      #     The compiler shells out to `qbe` and resolves it via the BLAISE_QBE
+      #     env var first, then PATH (see uToolchain.ResolveQBE). The QBE= make
+      #     variable only covers rolling-bootstrap.sh's direct qbe calls, NOT
+      #     the compiler's internal invocation when building the RTL — so
+      #     without this the RTL build fails with "qbe error (exit 127)".
+      # --------------------------------------------------------------------
+      - name: Expose QBE to the compiler
+        run: |
+          echo "BLAISE_QBE=$PWD/vendor/qbe/qbe" >> "$GITHUB_ENV"
+          echo "$PWD/vendor/qbe" >> "$GITHUB_PATH"
+
+      # --------------------------------------------------------------------
       # 4. Restore the carry-forward cache: the previous successful master run
       #    stashes its -pre binary + a marker file recording the commit SHA it
       #    was built at. We restore them into releases/<sha>/ so the script can
