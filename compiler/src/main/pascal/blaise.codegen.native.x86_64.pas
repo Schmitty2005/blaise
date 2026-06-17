@@ -8640,21 +8640,73 @@ var
   I:   Integer;
   Sym: string;
   Par: TMethodParam;
+  UserSlots, TotalSlots, OverflowSlots, AllocSz, CleanUp, Dest, HTotal: Integer;
+  Arg: TASTExpr;
+  HD, HK: TList<Integer>;
 begin
-  Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, AName);
-  Self.BeginCallArgs(MD.Params, AArgs);
-  for I := 0 to AArgs.Count - 1 do
+  Sym        := MethodEmitNameNative(MD, MD.OwnerTypeName, AName);
+  UserSlots  := CountArgSlots(MD.Params);
+  TotalSlots := UserSlots + 1;   { + Self }
+
+  if TotalSlots <= 6 then
   begin
-    Par := TMethodParam(MD.Params.Items[I]);
-    Self.PushCallArg(Par, TASTExpr(AArgs.Items[I]), I);
+    { All of Self + args fit in the 6 integer arg registers: push then pop. }
+    Self.BeginCallArgs(MD.Params, AArgs);
+    for I := 0 to AArgs.Count - 1 do
+    begin
+      Par := TMethodParam(MD.Params.Items[I]);
+      Self.PushCallArg(Par, TASTExpr(AArgs.Items[I]), I);
+    end;
+    { Self is the current method's Self slot. }
+    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+    for I := UserSlots - 1 downto 0 do
+      Self.Emit(#9'popq ' + SysVArg64(I + 1));
+    Self.Emit(#9'movq %r10, %rdi');
+    Self.Emit(#9'callq ' + Sym);
+    Self.EndCallArgs();
+  end
+  else
+  begin
+    { More than 6 register slots (Self + args): the surplus must spill to the
+      stack.  Build the 6 register slots + overflow region in one frame, place
+      Self in slot 0, evaluate each arg into its slot, load regs 0..5, drop the
+      6-register prefix so the overflow sits at the callee's [rsp+0..], then
+      static-dispatch to the parent.  Mirrors EmitMethodCallStmt's >6 path
+      (the inherited call is always a direct callq, never vtable). }
+    OverflowSlots := TotalSlots - 6;
+    CleanUp := ((OverflowSlots * 8 + 15) and (-16));
+    AllocSz := 6 * 8 + CleanUp;
+    HD := TList<Integer>.Create();
+    HK := TList<Integer>.Create();
+    HTotal := Self.EmitArgHoist(MD.Params, nil, True, '', AArgs, HD, HK);
+    Self.Emit(Format(#9'subq $%d, %%rsp', [AllocSz]));
+    for I := 0 to AArgs.Count - 1 do
+    begin
+      Arg := TASTExpr(AArgs.Items[I]);
+      if I + 1 < 6 then
+        Dest := I * 8 + 8
+      else
+        Dest := 6 * 8 + (I + 1 - 6) * 8;
+      if HK.Get(I) >= akRecCall then
+        Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
+          [AllocSz + HTotal - HD.Get(I)]))
+      else if TMethodParam(MD.Params.Items[I]).IsVarParam then
+        Self.EmitVarArgAddrToRax(Arg)
+      else
+        Self.EmitExprToEax(Arg);
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [Dest]));
+    end;
+    { Self into slot 0 (the implicit first integer arg). }
+    Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+    Self.Emit(Format(#9'movq %%rax, 0(%%rsp)', []));
+    for I := 0 to 5 do
+      Self.Emit(Format(#9'movq %d(%%rsp), %s', [I * 8, SysVArg64(I)]));
+    Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
+    Self.Emit(#9'callq ' + Sym);
+    Self.EmitHoistEpilogue(AArgs, HD, HK, HTotal, CleanUp, True);
+    HD.Free();
+    HK.Free();
   end;
-  { Self is the current method's Self slot. }
-  Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
-  for I := CountArgSlots(MD.Params) - 1 downto 0 do
-    Self.Emit(#9'popq ' + SysVArg64(I + 1));
-  Self.Emit(#9'movq %r10, %rdi');
-  Self.Emit(#9'callq ' + Sym);
-  Self.EndCallArgs();
 end;
 
 procedure TX86_64Backend.EmitInheritedCall(ACall: TInheritedCallStmt);

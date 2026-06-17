@@ -40,6 +40,9 @@ type
     procedure TestRun_Is_WrongClass_False;
     procedure TestRun_As_DowncastCallsMethod;
     procedure TestRun_Inherited_CallsParentMethod;
+    { inherited call whose Self + args exceed 6 integer registers must spill
+      the overflow args to the stack (native arg-register overflow). }
+    procedure TestRun_Inherited_ManyArgs_SpillsToStack;
     procedure TestRun_Inherited_VarParam_PassesByReference;
     procedure TestRun_Virtual_OverrideDispatch;
     procedure TestRun_MultiLevel_Inheritance_Chain;
@@ -396,6 +399,34 @@ const
       C := TChild.Create();
       WriteLn(C.Val());
       C.Free()
+    end.
+    ''';
+
+  { Regression: an `inherited Method(args)` call whose Self + args occupy more
+    than the 6 integer argument registers.  The native inherited-call sequence
+    only handled the all-in-registers case (it popped every slot into a
+    register, walking past the 6 available), so an inherited call with 6+ args
+    aborted codegen ("arg register index 6 out of range").  Here Self + 7 ints
+    = 8 register slots, forcing the overflow to spill to the stack.  TBase.Sum
+    = 1+..+7 = 28; TChild.Sum doubles it via inherited => 56. }
+  SrcInheritedManyArgs = '''
+    program Prg;
+    type
+      TBase = class
+        function Sum(a, b, c, d, e, f, g: Integer): Integer; virtual;
+      end;
+      TChild = class(TBase)
+        function Sum(a, b, c, d, e, f, g: Integer): Integer; override;
+      end;
+    function TBase.Sum(a, b, c, d, e, f, g: Integer): Integer;
+    begin Result := a + b + c + d + e + f + g end;
+    function TChild.Sum(a, b, c, d, e, f, g: Integer): Integer;
+    begin Result := inherited Sum(a, b, c, d, e, f, g) * 2 end;
+    var o: TChild;
+    begin
+      o := TChild.Create();
+      WriteLn(o.Sum(1, 2, 3, 4, 5, 6, 7));
+      o.Free()
     end.
     ''';
 
@@ -1107,6 +1138,12 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcInherited, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('15', '15' + LE, Output);
+end;
+
+procedure TE2EClasses2Tests.TestRun_Inherited_ManyArgs_SpillsToStack;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcInheritedManyArgs, '56' + LE, 0);
 end;
 
 procedure TE2EClasses2Tests.TestRun_Inherited_VarParam_PassesByReference;
