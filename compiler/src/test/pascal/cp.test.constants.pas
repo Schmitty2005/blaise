@@ -142,6 +142,8 @@ type
     procedure TestConstExpr_FloatNamedConst_Folds;
     procedure TestConstExpr_NegativeFloat_Folds;
     procedure TestConstExpr_IntSlash_ProducesFloat;
+    procedure TestConstExpr_TypedDoubleIntExpr_Folds;
+    procedure TestVarInit_TypedDoubleIntExpr_Folds;
   end;
 
 implementation
@@ -1666,6 +1668,33 @@ begin
     ''');
   AssertTrue('IR non-empty', IR <> '');
   AssertTrue('folded to 2.5', IRContains(IR, 'd_2.5'));
+end;
+
+procedure TConstTests.TestConstExpr_TypedDoubleIntExpr_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const X: Double = 2 * 3;
+    var V: Double;
+    begin V := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('folded to 6', IRContains(IR, 'd_6'));
+end;
+
+procedure TConstTests.TestVarInit_TypedDoubleIntExpr_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    var Y: Double = 2 * 3;
+    begin WriteLn(Y) end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('folded to 6', IRContains(IR, 'd_6'));
 end;
 
 initialization

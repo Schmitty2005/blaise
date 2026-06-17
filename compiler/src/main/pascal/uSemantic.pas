@@ -4059,14 +4059,16 @@ begin
     if CD.IsSet then Continue;
     if CD.TypeName <> '' then
     begin
-      { Typed constant: use the declared type.  The value kind (IsFloat,
-        IsString, IntVal) is still set by the parser from the RHS literal,
-        which is all the codegen needs.  We only override the symbol's type
-        descriptor so that type-checking against the declared type is exact. }
       TD := FTable.FindType(CD.TypeName);
       if TD = nil then
         SemanticError(Format('Unknown type ''%s'' in typed constant ''%s''',
           [CD.TypeName, CD.Name]), CD.Line, CD.Col);
+      if (not CD.IsFloat) and (not CD.IsString) and
+         (TD <> nil) and (TD.Kind in [tyDouble, tySingle]) then
+      begin
+        CD.StrVal  := IntToStr(CD.IntVal);
+        CD.IsFloat := True;
+      end;
     end
     else if CD.IsString then
       TD := FTable.TypeString
@@ -6211,8 +6213,20 @@ begin
       CD.Line, CD.Col);
   if CD.IntExprTokens <> nil then
     CD.IntVal := FoldConstBitOpExpr(CD.IntExprTokens, CD.Line, CD.Col);
-  if CD.IntValueExpr <> nil then
+  if (CD.IntValueExpr <> nil) and IsFloatConstExpr(CD.IntValueExpr) then
+  begin
+    CD.StrVal  := EvalConstFloatExpr(CD.IntValueExpr, CD.Line, CD.Col);
+    CD.IsFloat := True;
+    CD.IsString := False;
+  end
+  else if CD.IntValueExpr <> nil then
     CD.IntVal := EvalConstIntExpr(CD.IntValueExpr, CD.Line, CD.Col);
+  if (not CD.IsFloat) and (not CD.IsString) and
+     (Typ.Kind in [tyDouble, tySingle]) then
+  begin
+    CD.StrVal  := IntToStr(CD.IntVal);
+    CD.IsFloat := True;
+  end;
 
   { Type compatibility check between the folded value kind and the declared
     type — catches 'var N: Integer = ''text''' and similar. }

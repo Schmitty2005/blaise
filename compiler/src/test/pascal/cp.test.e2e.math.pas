@@ -161,6 +161,8 @@ type
     procedure TestRun_FloatConstExpr_MixedIntFloat;
     procedure TestRun_FloatConstExpr_NamedRef;
     procedure TestRun_FloatConstExpr_IntSlash;
+    procedure TestRun_FloatConstExpr_TypedDoubleIntExpr;
+    procedure TestRun_FloatVarInit_TypedDoubleIntExpr;
   end;
 
 implementation
@@ -1596,6 +1598,30 @@ begin
       WriteLn(X)
     end.
     ''', '2.5' + LE, 0);
+end;
+
+procedure TE2EMathTests.TestRun_FloatConstExpr_TypedDoubleIntExpr;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll('''
+    program P;
+    const X: Double = 2 * 3;
+    begin
+      WriteLn(X)
+    end.
+    ''', '6' + LE, 0);
+end;
+
+procedure TE2EMathTests.TestRun_FloatVarInit_TypedDoubleIntExpr;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll('''
+    program P;
+    var Y: Double = 2 * 3;
+    begin
+      WriteLn(Y)
+    end.
+    ''', '6' + LE, 0);
 end;
 
 initialization
