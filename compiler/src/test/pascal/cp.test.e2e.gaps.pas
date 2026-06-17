@@ -69,6 +69,9 @@ type
     procedure TestRun_DerefFieldSubscript_Write;
     procedure TestRun_DerefFieldSubscript_ReadAndWrite;
 
+    { Generic record type alias specialisation (GitHub #124) }
+    procedure TestRun_GenericRecordAlias_MethodCall;
+
     { Multi-arg WriteLn }
     procedure TestRun_WriteLn_MultipleArgs_MixedTypes;
   end;
@@ -719,6 +722,31 @@ const
     ''';
 begin
   AssertRunsOnAll(Src, '300' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_GenericRecordAlias_MethodCall;
+const
+  Src =
+    '''
+    program P;
+    type
+      THolder<T> = record
+        FVal: T;
+        procedure SetVal(AVal: T);
+      end;
+      TIntHolder = THolder<Integer>;
+      procedure THolder<T>.SetVal(AVal: T);
+      begin
+        FVal := AVal
+      end;
+    var H: TIntHolder;
+    begin
+      H.SetVal(54);
+      WriteLn(H.FVal)
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, '54' + Chr(10), 0);
 end;
 
 procedure TE2EGapTests.TestRun_WriteLn_MultipleArgs_MixedTypes;

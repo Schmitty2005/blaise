@@ -47,6 +47,9 @@ type
     procedure TestCodegen_GenericRecord_OutOfLine_MethodEmitted;
     procedure TestCodegen_GenericRecord_NoTypeInfoEmitted;
     procedure TestCodegen_GenericRecord_NoVTableEmitted;
+
+    { Named type alias for generic record specialisation (issue #124) }
+    procedure TestCodegen_GenericRecord_TypeAlias_MethodEmitted;
   end;
 
 implementation
@@ -473,6 +476,31 @@ begin
   IR := GenIR(SrcGenericRecordVarInteger);
   AssertTrue('no vtable for records',
     Pos('vtable_TMyVal', IR) < 0);
+end;
+
+procedure TGenericRecordTests.TestCodegen_GenericRecord_TypeAlias_MethodEmitted;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    type
+      THolder<T> = record
+        FVal: T;
+        procedure SetVal(AVal: T);
+      end;
+      TIntHolder = THolder<Integer>;
+      procedure THolder<T>.SetVal(AVal: T);
+      begin
+        FVal := AVal
+      end;
+    var H: TIntHolder;
+    begin
+      H.SetVal(42)
+    end.
+    ''');
+  AssertTrue('method body emitted',
+    Pos('function $THolder_Integer_SetVal', IR) >= 0);
 end;
 
 initialization

@@ -166,6 +166,7 @@ type
     procedure AnalyseTypeDecls(ABlock: TBlock);
     procedure LinkClassMethodImpls(ABlock: TBlock);
     procedure LinkGenericClassMethodImpls(ABlock: TBlock);
+    procedure RepairEarlyGenericInstances;
     procedure AnalyseMethodBodies(ABlock: TBlock);
     procedure AnalyseMethodDecl(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
     procedure AnalyseStandaloneDecls(ABlock: TBlock);
@@ -1013,6 +1014,7 @@ begin
       *before* any FindTypeOrInstantiate call can clone an instance, or the
       instance is born with nil bodies and codegen emits no function for it. }
     LinkGenericClassMethodImpls(AUnit.ImplBlock);
+    RepairEarlyGenericInstances;
 
     { Register interface-section global variables — visible to impl bodies. }
     for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
@@ -1321,12 +1323,11 @@ begin
 
   { Transfer impl-section bodies to generic class templates *before* any
     instantiation can happen.  Generic instances clone the template's
-    Methods.Body at instantiation time (uSemantic.pas ~line 1524), so if
-    the body is still nil when an interface-section global variable or
-    parameter triggers FindTypeOrInstantiate, the cloned instance method
-    is born without a body and codegen emits no function — leaving call
-    sites referencing an undefined symbol. }
+    Methods.Body at instantiation time, so if the body is still nil,
+    the cloned instance method is born without a body and codegen emits
+    no function — leaving call sites referencing an undefined symbol. }
   LinkGenericClassMethodImpls(AUnit.ImplBlock);
+  RepairEarlyGenericInstances;
 
   { Register interface-section global variables.  Marked IsGlobal so
     codegen emits them as data-segment slots rather than stack allocs;
@@ -1905,6 +1906,215 @@ begin
         Decl.Line, Decl.Col);
     MDecl.Body := Decl.Body;
     Decl.Body  := nil;
+  end;
+end;
+
+procedure TSemanticAnalyser.RepairEarlyGenericInstances;
+var
+  Instances: TObjectList;
+  I, J, K, MIdx: Integer;
+  GRI:       TGenericRecordInstance;
+  GI:        TGenericInstance;
+  InstMDecl: TMethodDecl;
+  TmplMDecl: TMethodDecl;
+  BaseName:  string;
+  ArgsStr:   string;
+  BracPos:   Integer;
+  GenObj:    TObject;
+  TmplMethods: TObjectList;
+  Args:      TStringList;
+  ParamNames: TStringList;
+  ConcrType: TTypeDesc;
+  Sym:       TSymbol;
+  RT:        TRecordTypeDesc;
+  RepairedIndices: TStringList;
+begin
+  Instances := nil;
+  if FCurrentUnit <> nil then
+    Instances := FCurrentUnit.GenericRecordInstances
+  else if FProg <> nil then
+    Instances := FProg.GenericRecordInstances;
+  if Instances <> nil then
+  begin
+    for I := 0 to Instances.Count - 1 do
+    begin
+      GRI := TGenericRecordInstance(Instances.Items[I]);
+      BracPos := StrPos('<', GRI.TypeName);
+      if BracPos < 0 then Continue;
+      BaseName := StrHead(GRI.TypeName, BracPos);
+      GenObj := FTable.FindGeneric(BaseName);
+      if not (GenObj is TGenericRecordDef) then Continue;
+      TmplMethods := TGenericRecordDef(GenObj).RecordDef.Methods;
+      RepairedIndices := TStringList.Create();
+      try
+        for J := 0 to GRI.RecordDef.Methods.Count - 1 do
+        begin
+          InstMDecl := TMethodDecl(GRI.RecordDef.Methods.Items[J]);
+          if InstMDecl.Body <> nil then
+            Continue;
+          TmplMDecl := nil;
+          for K := 0 to TmplMethods.Count - 1 do
+            if SameText(TMethodDecl(TmplMethods.Items[K]).Name, InstMDecl.Name) then
+            begin
+              TmplMDecl := TMethodDecl(TmplMethods.Items[K]);
+              Break;
+            end;
+          if (TmplMDecl <> nil) and (TmplMDecl.Body <> nil) then
+          begin
+            InstMDecl.Body := CloneBlock(TmplMDecl.Body);
+            InstMDecl.OwnBody := True;
+            RepairedIndices.Add(IntToStr(J));
+          end;
+        end;
+        if RepairedIndices.Count > 0 then
+        begin
+          ArgsStr := StrCopyFrom(GRI.TypeName, StrPos('<', GRI.TypeName) + 1,
+            Length(GRI.TypeName) - StrPos('<', GRI.TypeName) - 2);
+          Args := TStringList.Create();
+          try
+            while ArgsStr <> '' do
+            begin
+              BracPos := StrPos(',', ArgsStr);
+              if BracPos >= 0 then
+              begin
+                Args.Add(Trim(StrHead(ArgsStr, BracPos)));
+                ArgsStr := Trim(StrCopyTail(ArgsStr, BracPos + 1));
+              end
+              else
+              begin
+                Args.Add(Trim(ArgsStr));
+                ArgsStr := '';
+              end;
+            end;
+            ParamNames := TGenericRecordDef(FTable.FindGeneric(BaseName)).ParamNames;
+            RT := TRecordTypeDesc(GRI.TypeDesc);
+            FTable.PushScope();
+            for K := 0 to ParamNames.Count - 1 do
+              FActiveTypeParams.Add(ParamNames.Strings[K]);
+            try
+              for K := 0 to ParamNames.Count - 1 do
+              begin
+                ConcrType := FindTypeOrInstantiate(Args.Strings[K]);
+                if ConcrType <> nil then
+                begin
+                  Sym := TSymbol.Create(ParamNames.Strings[K], skType, ConcrType);
+                  FTable.Define(Sym);
+                end;
+              end;
+              for J := 0 to RepairedIndices.Count - 1 do
+              begin
+                MIdx := StrToInt(RepairedIndices.Strings[J]);
+                InstMDecl := TMethodDecl(GRI.RecordDef.Methods.Items[MIdx]);
+                if InstMDecl.Body <> nil then
+                  AnalyseMethodDecl(InstMDecl, RT);
+              end;
+            finally
+              for K := 0 to ParamNames.Count - 1 do
+                FActiveTypeParams.Delete(FActiveTypeParams.Count - 1);
+              FTable.PopScope();
+            end;
+          finally
+            Args.Free();
+          end;
+        end;
+      finally
+        RepairedIndices.Free();
+      end;
+    end;
+  end;
+
+  Instances := nil;
+  if FCurrentUnit <> nil then
+    Instances := FCurrentUnit.GenericInstances
+  else if FProg <> nil then
+    Instances := FProg.GenericInstances;
+  if Instances <> nil then
+  begin
+    for I := 0 to Instances.Count - 1 do
+    begin
+      GI := TGenericInstance(Instances.Items[I]);
+      BracPos := StrPos('<', GI.TypeName);
+      if BracPos < 0 then Continue;
+      BaseName := StrHead(GI.TypeName, BracPos);
+      GenObj := FTable.FindGeneric(BaseName);
+      if not (GenObj is TGenericTypeDef) then Continue;
+      TmplMethods := TGenericTypeDef(GenObj).ClassDef.Methods;
+      RepairedIndices := TStringList.Create();
+      try
+        for J := 0 to GI.ClassDef.Methods.Count - 1 do
+        begin
+          InstMDecl := TMethodDecl(GI.ClassDef.Methods.Items[J]);
+          if InstMDecl.Body <> nil then
+            Continue;
+          TmplMDecl := nil;
+          for K := 0 to TmplMethods.Count - 1 do
+            if SameText(TMethodDecl(TmplMethods.Items[K]).Name, InstMDecl.Name) then
+            begin
+              TmplMDecl := TMethodDecl(TmplMethods.Items[K]);
+              Break;
+            end;
+          if (TmplMDecl <> nil) and (TmplMDecl.Body <> nil) then
+          begin
+            InstMDecl.Body := CloneBlock(TmplMDecl.Body);
+            InstMDecl.OwnBody := True;
+            RepairedIndices.Add(IntToStr(J));
+          end;
+        end;
+        if RepairedIndices.Count > 0 then
+        begin
+          ArgsStr := StrCopyFrom(GI.TypeName, StrPos('<', GI.TypeName) + 1,
+            Length(GI.TypeName) - StrPos('<', GI.TypeName) - 2);
+          Args := TStringList.Create();
+          try
+            while ArgsStr <> '' do
+            begin
+              BracPos := StrPos(',', ArgsStr);
+              if BracPos >= 0 then
+              begin
+                Args.Add(Trim(StrHead(ArgsStr, BracPos)));
+                ArgsStr := Trim(StrCopyTail(ArgsStr, BracPos + 1));
+              end
+              else
+              begin
+                Args.Add(Trim(ArgsStr));
+                ArgsStr := '';
+              end;
+            end;
+            ParamNames := TGenericTypeDef(FTable.FindGeneric(BaseName)).ParamNames;
+            RT := TRecordTypeDesc(GI.TypeDesc);
+            FTable.PushScope();
+            for K := 0 to ParamNames.Count - 1 do
+              FActiveTypeParams.Add(ParamNames.Strings[K]);
+            try
+              for K := 0 to ParamNames.Count - 1 do
+              begin
+                ConcrType := FindTypeOrInstantiate(Args.Strings[K]);
+                if ConcrType <> nil then
+                begin
+                  Sym := TSymbol.Create(ParamNames.Strings[K], skType, ConcrType);
+                  FTable.Define(Sym);
+                end;
+              end;
+              for J := 0 to RepairedIndices.Count - 1 do
+              begin
+                MIdx := StrToInt(RepairedIndices.Strings[J]);
+                InstMDecl := TMethodDecl(GI.ClassDef.Methods.Items[MIdx]);
+                if InstMDecl.Body <> nil then
+                  AnalyseMethodDecl(InstMDecl, RT);
+              end;
+            finally
+              for K := 0 to ParamNames.Count - 1 do
+                FActiveTypeParams.Delete(FActiveTypeParams.Count - 1);
+              FTable.PopScope();
+            end;
+          finally
+            Args.Free();
+          end;
+        end;
+      finally
+        RepairedIndices.Free();
+      end;
+    end;
   end;
 end;
 
@@ -3266,6 +3476,7 @@ begin
     declarations, transferring the body so AnalyseMethodBodies can process it. }
   LinkClassMethodImpls(ABlock);
   LinkGenericClassMethodImpls(ABlock);
+  RepairEarlyGenericInstances;
   { Register standalone proc/func signatures before class method bodies so that
     methods can call free functions declared in the same block. }
   AnalyseStandaloneDecls(ABlock);
