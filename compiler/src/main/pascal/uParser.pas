@@ -248,12 +248,23 @@ begin
     Advance();  { consume 'array' }
     if Check(tkLBracket) then
     begin
-      { Static array: array[L..H] of T, optionally multi-dimensional with
+      { Static array: array[L..H] of T (range-indexed) or
+        array[TEnum] of T (ordinal-indexed).  Multi-dimensional with
         comma-separated dimensions: array[L1..H1, L2..H2] of T.  The
         multi-dim form is desugared into nested single-dimension arrays
         (array[L1..H1] of array[L2..H2] of T) so the rest of the pipeline
         sees only the already-supported nested form. }
       Advance();  { consume '[' }
+      if Check(tkIdent) and (PeekKind() = tkRBracket) then
+      begin
+        Result := '@' + FCurrent.Value;
+        Advance();  { consume ident }
+        Expect(tkRBracket);
+        Expect(tkOf);
+        ElemTypeName := Self.ParseTypeName();
+        Result := 'array[' + Result + '] of ' + ElemTypeName;
+        Exit;
+      end;
       Lows := TStringList.Create();
       Highs := TStringList.Create();
       try

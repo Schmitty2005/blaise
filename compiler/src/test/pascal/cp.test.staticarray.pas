@@ -110,6 +110,14 @@ type
     procedure TestSemantic_NamedConstBound_Expression;
     procedure TestSemantic_NamedConstBound_TypeDecl;
     procedure TestCodegen_NamedConstBound_CorrectSize;
+
+    { ------------------------------------------------------------------ }
+    { Enum-indexed var/type static arrays (issue #114)                   }
+    { ------------------------------------------------------------------ }
+    procedure TestSemantic_EnumIndex_VarDecl;
+    procedure TestSemantic_EnumIndex_TypeDecl;
+    procedure TestSemantic_EnumIndex_Bounds;
+    procedure TestCodegen_EnumIndex_AllocSize;
   end;
 
 implementation
@@ -986,6 +994,78 @@ begin
     begin A[0] := 42 end.
     ''');
   AssertTrue('alloc for 5 ints (20 bytes)', Pos('20', IR) >= 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Enum-indexed var/type static arrays (issue #114)                   }
+{ ------------------------------------------------------------------ }
+
+procedure TStaticArrayTests.TestSemantic_EnumIndex_VarDecl;
+var P: TProgram; VD: TVarDecl;
+begin
+  P := AnalyseSrc('''
+    program P;
+    type TColor = (Red, Green, Blue);
+    var A: array[TColor] of Integer;
+    begin end.
+    ''');
+  try
+    VD := TVarDecl(P.Block.Decls.Items[0]);
+    AssertTrue('resolved type', VD.ResolvedType <> nil);
+    AssertTrue('is static array', VD.ResolvedType.Kind = tyStaticArray);
+  finally
+    P.Free();
+  end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_EnumIndex_TypeDecl;
+var P: TProgram; VD: TVarDecl;
+begin
+  P := AnalyseSrc('''
+    program P;
+    type TColor = (Red, Green, Blue);
+    type TColorNames = array[TColor] of string;
+    var Names: TColorNames;
+    begin end.
+    ''');
+  try
+    VD := TVarDecl(P.Block.Decls.Items[0]);
+    AssertTrue('resolved type', VD.ResolvedType <> nil);
+    AssertTrue('is static array', VD.ResolvedType.Kind = tyStaticArray);
+  finally
+    P.Free();
+  end;
+end;
+
+procedure TStaticArrayTests.TestSemantic_EnumIndex_Bounds;
+var P: TProgram; VD: TVarDecl; SAT: TStaticArrayTypeDesc;
+begin
+  P := AnalyseSrc('''
+    program P;
+    type TDir = (North, South, East, West);
+    var D: array[TDir] of Integer;
+    begin end.
+    ''');
+  try
+    VD := TVarDecl(P.Block.Decls.Items[0]);
+    SAT := TStaticArrayTypeDesc(VD.ResolvedType);
+    AssertEquals('low', 0, SAT.LowBound);
+    AssertEquals('high', 3, SAT.HighBound);
+  finally
+    P.Free();
+  end;
+end;
+
+procedure TStaticArrayTests.TestCodegen_EnumIndex_AllocSize;
+var IR: string;
+begin
+  IR := GenIR('''
+    program P;
+    type TColor = (Red, Green, Blue);
+    var A: array[TColor] of Integer;
+    begin A[Red] := 42 end.
+    ''');
+  AssertTrue('alloc for 3 ints (12 bytes)', Pos('12', IR) >= 0);
 end;
 
 initialization

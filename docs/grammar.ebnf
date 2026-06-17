@@ -640,6 +640,7 @@ TypeName
 ArrayType
     = ARRAY LBRACKET ArrayBound DOTDOT ArrayBound
             { COMMA ArrayBound DOTDOT ArrayBound } RBRACKET OF TypeName
+    | ARRAY LBRACKET IDENT RBRACKET OF TypeName   (* ordinal/enum-indexed *)
     ;
 
 ArrayBound

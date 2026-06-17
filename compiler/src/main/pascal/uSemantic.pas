@@ -2269,9 +2269,11 @@ var
   PT:       TPointerTypeDesc;
   Sym:      TSymbol;
   DDotPos, RBrPos, OfPos: Integer;
-  LStr, HStr, ElemName: string;
+  LStr, HStr, ElemName, IdxName: string;
   CanonName: string;
   LVal, HVal: Integer;
+  IdxTD: TTypeDesc;
+  EnumDesc: TEnumTypeDesc;
   SAT: TStaticArrayTypeDesc;
   DAT: TDynArrayTypeDesc;
 begin
@@ -2298,7 +2300,36 @@ begin
     end;
     Exit;
   end;
-  { Static array: 'array[L..H] of TypeName' — create on demand.
+  { Ordinal-indexed static array: 'array[@TEnum] of TypeName'. }
+  if (Length(AName) > 8) and (StrHead(AName, 7) = 'array[@') then
+  begin
+    RBrPos   := StrPos(']', AName);
+    OfPos    := StrPos(' of ', AName);
+    IdxName  := StrCopyFrom(AName, 7, RBrPos - 7);
+    ElemName := StrCopyTail(AName, OfPos + 4);
+    IdxTD    := FTable.FindType(IdxName);
+    BaseType := FindTypeOrInstantiate(ElemName);
+    if (IdxTD <> nil) and (IdxTD.Kind = tyEnum) and (BaseType <> nil) then
+    begin
+      EnumDesc := TEnumTypeDesc(IdxTD);
+      HVal     := EnumDesc.Members.Count - 1;
+      CanonName := Format('array[0..%d] of %s', [HVal, BaseType.Name]);
+      Result    := FTable.FindType(CanonName);
+      if Result = nil then
+      begin
+        SAT := FTable.NewStaticArrayType(BaseType, 0, HVal);
+        Sym := TSymbol.Create(CanonName, skType, SAT);
+        FTable.DefineGlobal(Sym);
+        Result := SAT;
+      end;
+    end
+    else if IdxTD = nil then
+      SemanticError(Format('Unknown index type ''%s''', [IdxName]), 0, 0)
+    else if IdxTD.Kind <> tyEnum then
+      SemanticError(Format('''%s'' is not an enumeration type', [IdxName]), 0, 0);
+    Exit;
+  end;
+  { Range-indexed static array: 'array[L..H] of TypeName' — create on demand.
     L and H may be integer literals, named constants, or constant
     expressions (e.g. N-1).  ResolveArrayBound folds them to integers. }
   if (Length(AName) > 6) and (StrHead(AName, 6) = 'array[') then

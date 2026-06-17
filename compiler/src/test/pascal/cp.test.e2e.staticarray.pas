@@ -77,6 +77,10 @@ type
     procedure TestRun_NamedConstBound_Simple;
     procedure TestRun_NamedConstBound_Expression;
     procedure TestRun_NamedConstBound_TypeAlias;
+
+    { Enum-indexed var/type static arrays (issue #114) }
+    procedure TestRun_EnumIndex_VarDecl;
+    procedure TestRun_EnumIndex_TypeDecl;
   end;
 
 implementation
@@ -839,6 +843,39 @@ begin
       WriteLn(B[0]); WriteLn(B[4])
     end.
     ''', '100' + LE + '500' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_EnumIndex_VarDecl;
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll('''
+    program P;
+    type TColor = (Red, Green, Blue);
+    var A: array[TColor] of string;
+    begin
+      A[Red] := 'R'; A[Green] := 'G'; A[Blue] := 'B';
+      WriteLn(A[Red]); WriteLn(A[Blue])
+    end.
+    ''', 'R' + LE + 'B' + LE, 0);
+end;
+
+procedure TE2EStaticArrayTests.TestRun_EnumIndex_TypeDecl;
+var LE: string;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  LE := LineEnding;
+  AssertRunsOnAll('''
+    program P;
+    type TDir = (North, South, East, West);
+    type TDirCost = array[TDir] of Integer;
+    var C: TDirCost;
+    begin
+      C[North] := 1; C[South] := 2; C[East] := 3; C[West] := 4;
+      WriteLn(C[North]); WriteLn(C[West])
+    end.
+    ''', '1' + LE + '4' + LE, 0);
 end;
 
 initialization

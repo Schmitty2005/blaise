@@ -1100,11 +1100,11 @@ Blaise supports fixed-size, stack-allocated arrays declared as
 | `array[L..H] of T` — non-zero-based
 | Supported
 
-| `array[Word] of T` — ordinal-type index
-| Deferred
+| `array[TEnum] of T` — enum-type index
+| Supported
 
 | `array[L..H, M..N] of T` — multi-dimensional
-| Deferred
+| Supported
 
 | `array of array of T` — multi-dim open array
 | Separate feature
@@ -4766,3 +4766,46 @@ expressions are parsed and folded via the existing `EvalConstIntExpr` machinery.
 * *Resolve bounds at parse time.*  Rejected.  The parser runs before the semantic
   pass, so named constants are not yet resolved.  Deferring to the semantic pass
   is the natural point where all constant values are available.
+
+== Enum-Indexed Static Arrays in Var and Type Declarations
+
+=== Decision
+
+Static-array declarations in `var` and `type` sections accept an enumeration
+type as the index, matching the form already supported for const-array
+declarations:
+
+[source,pascal]
+----
+type
+  TColor = (Red, Green, Blue);
+  TColorNames = array[TColor] of string;   { type declaration }
+var
+  Costs: array[TColor] of Integer;         { var declaration }
+----
+
+The array is sized `0..High(TColor)` (i.e. `0..Members.Count-1`), and
+subscript access uses the enum ordinal value directly.
+
+=== Rationale
+
+Enum-indexed const arrays (`const Names: array[TColor] of string = (...)`) were
+already supported; extending the same syntax to `var` and `type` declarations
+completes the feature and eliminates the asymmetry.  The codegen required no
+changes — enum values are integer ordinals and the subscript arithmetic already
+handles the zero-based static-array case correctly.
+
+The parser detects the `array[Ident]` pattern (identifier followed by `]` with
+no `..`) and encodes it as a special marker in the type-name string.  The
+semantic pass resolves the enum type, reads its member count, and creates a
+standard `TStaticArrayTypeDesc` with bounds `0..N-1`.
+
+=== Alternatives considered
+
+* *Support non-enum ordinal index types (`array[Byte]`, `array[Boolean]`).*
+  Deferred.  These require a different size-computation path (256 elements for
+  `Byte`, 2 for `Boolean`) and the enum form covers the primary use case.
+* *Store the enum type in `TStaticArrayTypeDesc`.*  Rejected.  The type
+  descriptor erases the index origin after semantic analysis, storing only
+  integer bounds.  This simplifies the codegen and is consistent with how
+  const-array enum indexing already works.
