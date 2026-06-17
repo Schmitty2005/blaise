@@ -163,6 +163,8 @@ type
       references are resolved against the symbol table, so this must run after
       the referenced consts are declared. }
     function  EvalConstIntExpr(AExpr: TASTExpr; ALine, ACol: Integer): Int64;
+    function  EvalConstFloatExpr(AExpr: TASTExpr; ALine, ACol: Integer): string;
+    function  IsFloatConstExpr(AExpr: TASTExpr): Boolean;
     procedure AnalyseTypeDecls(ABlock: TBlock);
     procedure LinkClassMethodImpls(ABlock: TBlock);
     procedure LinkGenericClassMethodImpls(ABlock: TBlock);
@@ -454,6 +456,22 @@ type
   end;
 
 implementation
+
+function _strtod(S: PChar; EndPtr: Pointer): Double; external name 'strtod';
+function _snprintf(Buf: PChar; Size: Int64; Fmt: PChar; V: Double): Integer; external name 'snprintf';
+
+function RawDoubleToStr(V: Double): string;
+var
+  Buf: array[0..63] of Byte;
+begin
+  _snprintf(PChar(@Buf[0]), 64, PChar('%.15g'), V);
+  Result := string(PChar(@Buf[0]));
+end;
+
+function RawStrToDouble(const S: string): Double;
+begin
+  Result := _strtod(PChar(S), nil);
+end;
 
 function TSemanticAnalyser.GetSymbolTable: TSymbolTable;
 begin
@@ -3664,6 +3682,99 @@ begin
     'Constant expression is not a compile-time integer', ALine, ACol);
 end;
 
+function TSemanticAnalyser.IsFloatConstExpr(AExpr: TASTExpr): Boolean;
+var
+  Bin: TBinaryExpr;
+  Sym: TSymbol;
+begin
+  Result := False;
+  if AExpr = nil then Exit;
+  if AExpr is TFloatLiteral then
+    Exit(True);
+  if AExpr is TIdentExpr then
+  begin
+    Sym := FTable.Lookup(TIdentExpr(AExpr).Name);
+    if (Sym <> nil) and (Sym.Kind = skConstant) and
+       (Sym.TypeDesc <> nil) and Sym.TypeDesc.IsFloat() then
+      Exit(True);
+    Exit;
+  end;
+  if AExpr is TBinaryExpr then
+  begin
+    Bin := TBinaryExpr(AExpr);
+    if Bin.Op = boSlash then
+      Exit(True);
+    if IsFloatConstExpr(Bin.Left) or IsFloatConstExpr(Bin.Right) then
+      Exit(True);
+  end;
+end;
+
+function TSemanticAnalyser.EvalConstFloatExpr(AExpr: TASTExpr;
+                                               ALine, ACol: Integer): string;
+var
+  Bin:   TBinaryExpr;
+  IdSym: TSymbol;
+  L, R:  Double;
+  LStr:  string;
+  RStr:  string;
+begin
+  Result := '0';
+  if AExpr = nil then Exit;
+
+  if AExpr is TFloatLiteral then
+    Exit(TFloatLiteral(AExpr).Value);
+
+  if AExpr is TIntLiteral then
+    Exit(IntToStr(TIntLiteral(AExpr).Value));
+
+  if AExpr is TIdentExpr then
+  begin
+    IdSym := FTable.Lookup(TIdentExpr(AExpr).Name);
+    if (IdSym = nil) or (IdSym.Kind <> skConstant) then
+    begin
+      SemanticError(Format(
+        'Constant expression references ''%s'', which is not a constant',
+        [TIdentExpr(AExpr).Name]), ALine, ACol);
+      Exit;
+    end;
+    if (IdSym.TypeDesc <> nil) and IdSym.TypeDesc.IsFloat() then
+      Exit(IdSym.ConstString)
+    else
+      Exit(IntToStr(IdSym.ConstValue));
+  end;
+
+  if AExpr is TBinaryExpr then
+  begin
+    Bin  := TBinaryExpr(AExpr);
+    LStr := EvalConstFloatExpr(Bin.Left,  ALine, ACol);
+    RStr := EvalConstFloatExpr(Bin.Right, ALine, ACol);
+    L    := RawStrToDouble(LStr);
+    R    := RawStrToDouble(RStr);
+    case Bin.Op of
+      boAdd: L := L + R;
+      boSub: L := L - R;
+      boMul: L := L * R;
+      boSlash, boDiv:
+        begin
+          if R = 0.0 then
+          begin
+            SemanticError('Division by zero in constant expression', ALine, ACol);
+            Exit;
+          end;
+          L := L / R;
+        end;
+    else
+      SemanticError(
+        'Unsupported operator in floating-point constant expression', ALine, ACol);
+      Exit;
+    end;
+    Exit(RawDoubleToStr(L));
+  end;
+
+  SemanticError(
+    'Constant expression is not a compile-time float', ALine, ACol);
+end;
+
 procedure TSemanticAnalyser.AnalyseSetConstDecl(ACD: TConstDecl);
 var
   I:         Integer;
@@ -3837,9 +3948,13 @@ begin
       named-constant values in scope. }
     if CD.IntExprTokens <> nil then
       CD.IntVal := FoldConstBitOpExpr(CD.IntExprTokens, CD.Line, CD.Col);
-    { Compile-time integer expression (arithmetic/bitwise with precedence):
-      fold the AST now that prior consts in scope are resolvable. }
-    if CD.IntValueExpr <> nil then
+    if (CD.IntValueExpr <> nil) and IsFloatConstExpr(CD.IntValueExpr) then
+    begin
+      CD.StrVal  := EvalConstFloatExpr(CD.IntValueExpr, CD.Line, CD.Col);
+      CD.IsFloat := True;
+      CD.IsString := False;
+    end
+    else if CD.IntValueExpr <> nil then
       CD.IntVal := EvalConstIntExpr(CD.IntValueExpr, CD.Line, CD.Col);
     { Set-valued constants reference enum members, which are not registered
       until AnalyseTypeDecls runs — so they are resolved in the second pass

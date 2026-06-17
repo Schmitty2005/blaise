@@ -515,32 +515,45 @@ ConstArrayValue
              { COMMA ( ConstArrayValue | ConstExpr ) } RPAREN
     ;
 
-(* A constant value position.  A scalar const may be a string/float literal or
- * a compile-time INTEGER expression: integer literals, named-constant
- * references, the binary operators ( + - * div mod and or xor shl shr ), unary
- * minus, and parentheses, with the usual operator precedence.  The integer
- * expression is folded to a single value by the semantic pass (which resolves
- * named-constant references), so it may appear anywhere a constant is required. *)
+(* A constant value position.  A scalar const may be a string/float literal, a
+ * compile-time integer expression, or a compile-time float expression.
+ *
+ * INTEGER expressions: integer literals, named integer-constant references,
+ * binary operators ( + - * div mod and or xor shl shr ), unary minus, and
+ * parentheses, with the usual operator precedence.
+ *
+ * FLOAT expressions: any expression that contains at least one float literal,
+ * a named float constant, or uses the '/' operator (which always yields a
+ * float result, even with integer operands — matching Delphi/FPC semantics).
+ * Supports the arithmetic operators + - * / div, unary minus, named-constant
+ * references, and parentheses.
+ *
+ * Both integer and float expressions are folded to a single value by the
+ * semantic pass, which resolves named-constant references. *)
 ConstExpr
-    = ConstIntExpr
-    | [ MINUS ] FloatLit
+    = ConstArithExpr
     | StrLit { PLUS StrLit }    (* string constant, with concatenation *)
     | IDENT                    (* named constant reference, e.g. True / False *)
     ;
 
-ConstIntExpr
-    = ConstIntTerm { ( PLUS | MINUS | OR | XOR ) ConstIntTerm }
+(* Arithmetic constant expression — covers both integer and float.  The
+ * semantic pass inspects the AST: if any leaf is a float literal, a named
+ * float constant, or the '/' operator is used, the expression is folded as
+ * a float; otherwise it is folded as an integer. *)
+ConstArithExpr
+    = ConstArithTerm { ( PLUS | MINUS | OR | XOR ) ConstArithTerm }
     ;
 
-ConstIntTerm
-    = ConstIntFactor { ( STAR | DIV | MOD | AND | SHL | SHR ) ConstIntFactor }
+ConstArithTerm
+    = ConstArithFactor { ( STAR | SLASH | DIV | MOD | AND | SHL | SHR ) ConstArithFactor }
     ;
 
-ConstIntFactor
+ConstArithFactor
     = IntLit
-    | IDENT                    (* named integer constant *)
-    | MINUS ConstIntFactor     (* unary minus *)
-    | LPAREN ConstIntExpr RPAREN
+    | FloatLit
+    | IDENT                        (* named integer or float constant *)
+    | MINUS ConstArithFactor       (* unary minus *)
+    | LPAREN ConstArithExpr RPAREN
     ;
 
 (* ConstDecl supports untyped, scalar-typed, array-typed, and set-typed forms:

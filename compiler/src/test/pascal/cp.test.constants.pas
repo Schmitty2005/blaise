@@ -132,6 +132,16 @@ type
     procedure TestConstExpr_UnaryMinus_Folds;
     procedure TestConstExpr_MixedArithAndBitwise_Folds;
     procedure TestArrayConst_OrChainElement_FoldsToFinalInteger;
+
+    { Compile-time floating-point constant expressions (issue #108) }
+    procedure TestConstExpr_FloatMultiply_Folds;
+    procedure TestConstExpr_FloatDivide_Folds;
+    procedure TestConstExpr_FloatAddSub_Folds;
+    procedure TestConstExpr_FloatParens_Folds;
+    procedure TestConstExpr_FloatMixedIntFloat_Folds;
+    procedure TestConstExpr_FloatNamedConst_Folds;
+    procedure TestConstExpr_NegativeFloat_Folds;
+    procedure TestConstExpr_IntSlash_ProducesFloat;
   end;
 
 implementation
@@ -1538,6 +1548,124 @@ begin
   { Element 0 should land as 3 in the emitted $T data item. }
   AssertTrue('folded 3 in $T data item', IRContains(IR, 'w 3'));
   AssertTrue('99 also in $T data item',  IRContains(IR, 'w 99'));
+end;
+
+{ ------------------------------------------------------------------ }
+{ Compile-time floating-point constant expressions (issue #108)       }
+{ ------------------------------------------------------------------ }
+
+procedure TConstTests.TestConstExpr_FloatMultiply_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const X = 3.0 * 2.0;
+    var V: Double;
+    begin V := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('folded to 6', IRContains(IR, 'd_6'));
+end;
+
+procedure TConstTests.TestConstExpr_FloatDivide_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const X = 10.0 / 4.0;
+    var V: Double;
+    begin V := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('folded to 2.5', IRContains(IR, 'd_2.5'));
+end;
+
+procedure TConstTests.TestConstExpr_FloatAddSub_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const X = 1.5 + 2.5;
+    var V: Double;
+    begin V := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('folded to 4', IRContains(IR, 'd_4'));
+end;
+
+procedure TConstTests.TestConstExpr_FloatParens_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const X = (1.0 + 2.0) * 3.0;
+    var V: Double;
+    begin V := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('folded to 9', IRContains(IR, 'd_9'));
+end;
+
+procedure TConstTests.TestConstExpr_FloatMixedIntFloat_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const X = 2 * 1.5;
+    var V: Double;
+    begin V := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('folded to 3', IRContains(IR, 'd_3'));
+end;
+
+procedure TConstTests.TestConstExpr_FloatNamedConst_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const
+      PI = 3.14;
+      TAU = PI * 2.0;
+    var V: Double;
+    begin V := TAU end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('folded to 6.28', IRContains(IR, 'd_6.28'));
+end;
+
+procedure TConstTests.TestConstExpr_NegativeFloat_Folds;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const X = -1.5 * 2.0;
+    var V: Double;
+    begin V := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('folded to -3', IRContains(IR, 'd_-3'));
+end;
+
+procedure TConstTests.TestConstExpr_IntSlash_ProducesFloat;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+    program P;
+    const X = 10 / 4;
+    var V: Double;
+    begin V := X end.
+    ''');
+  AssertTrue('IR non-empty', IR <> '');
+  AssertTrue('folded to 2.5', IRContains(IR, 'd_2.5'));
 end;
 
 initialization

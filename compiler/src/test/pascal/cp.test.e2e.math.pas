@@ -155,6 +155,12 @@ type
     { Integer arguments to float builtins + float typecasts }
     procedure TestRun_Trig_IntegerArgs;
     procedure TestRun_FloatCast_FromInteger;
+
+    { Float constant expressions (issue #108) }
+    procedure TestRun_FloatConstExpr_MulDiv;
+    procedure TestRun_FloatConstExpr_MixedIntFloat;
+    procedure TestRun_FloatConstExpr_NamedRef;
+    procedure TestRun_FloatConstExpr_IntSlash;
   end;
 
 implementation
@@ -1533,6 +1539,63 @@ begin
       WriteLn(Round(d * 1000));
     end.
     ''', '32' + LE + '64' + LE + '1000' + LE, 0);
+end;
+
+{ ------------------------------------------------------------------ }
+{ Float constant expressions (issue #108)                             }
+{ ------------------------------------------------------------------ }
+
+procedure TE2EMathTests.TestRun_FloatConstExpr_MulDiv;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll('''
+    program P;
+    const
+      X = 3.0 * 2.0;
+      Y = 10.0 / 4.0;
+    begin
+      WriteLn(Round(X));
+      WriteLn(Y)
+    end.
+    ''', '6' + LE + '2.5' + LE, 0);
+end;
+
+procedure TE2EMathTests.TestRun_FloatConstExpr_MixedIntFloat;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll('''
+    program P;
+    const X = 2 * 1.5;
+    begin
+      WriteLn(X)
+    end.
+    ''', '3' + LE, 0);
+end;
+
+procedure TE2EMathTests.TestRun_FloatConstExpr_NamedRef;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll('''
+    program P;
+    const
+      PI = 3.14;
+      TAU = PI * 2.0;
+    begin
+      WriteLn(TAU)
+    end.
+    ''', '6.28' + LE, 0);
+end;
+
+procedure TE2EMathTests.TestRun_FloatConstExpr_IntSlash;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll('''
+    program P;
+    const X = 10 / 4;
+    begin
+      WriteLn(X)
+    end.
+    ''', '2.5' + LE, 0);
 end;
 
 initialization

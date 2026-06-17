@@ -777,7 +777,7 @@ end;
 function TParser.IsConstExprOp(AKind: TTokenKind): Boolean;
 begin
   Result := (AKind = tkPlus) or (AKind = tkMinus) or (AKind = tkStar)
-         or (AKind = tkDiv)  or (AKind = tkMod)
+         or (AKind = tkSlash) or (AKind = tkDiv)  or (AKind = tkMod)
          or (AKind = tkOr)   or (AKind = tkAnd)   or (AKind = tkXor)
          or (AKind = tkShl)  or (AKind = tkShr);
 end;
@@ -789,7 +789,12 @@ begin
     Result := True
   else if Check(tkIntLit) and Self.IsConstExprOp(PeekKind()) then
     Result := True
+  else if Check(tkFloatLit) and Self.IsConstExprOp(PeekKind()) then
+    Result := True
   else if Check(tkMinus) and (PeekKind() = tkIntLit)
+       and Self.IsConstExprOp(PeekKind2()) then
+    Result := True
+  else if Check(tkMinus) and (PeekKind() = tkFloatLit)
        and Self.IsConstExprOp(PeekKind2()) then
     Result := True
   { Ident-led integer expression (e.g. BASE * 2).  Only the unambiguously
@@ -797,8 +802,9 @@ begin
     string-concat consts ('a' + b) keep their existing behaviour, and the
     legacy ident-bitop chain handles or/and/xor/shl/shr starting on an ident. }
   else if Check(tkIdent) and
-          ((PeekKind() = tkStar) or (PeekKind() = tkDiv) or
-           (PeekKind() = tkMod)  or (PeekKind() = tkMinus)) then
+          ((PeekKind() = tkStar) or (PeekKind() = tkSlash) or
+           (PeekKind() = tkDiv)  or (PeekKind() = tkMod) or
+           (PeekKind() = tkMinus)) then
     Result := True;
 end;
 

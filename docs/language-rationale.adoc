@@ -4676,3 +4676,50 @@ serialised and re-instantiated later.
   are tracked separately (see `docs/future-improvements.adoc`); because range
   expansion is base-type-agnostic, `[1..3]` will work automatically once they
   land.
+
+== Floating-Point Constant Expressions
+
+=== Decision
+
+Constant declarations accept compile-time floating-point expressions, not only
+bare float literals.  The following forms are supported:
+
+[source,pascal]
+----
+const
+  Pi     = 3.14159;          { bare literal — already supported }
+  Tau    = Pi * 2.0;         { named const × literal }
+  Half   = 10 / 4;           { integer / integer → float (2.5) }
+  Mixed  = 2 * 1.5 + 0.5;   { integer × float + float → float }
+  Neg    = -1.5 * 2.0;       { unary minus propagates through float }
+----
+
+The `/` operator (real division) always produces a float result, even when both
+operands are integers.  This matches Delphi and FPC semantics and matches the
+existing runtime behaviour of the `/` operator on variables.  Integer division
+is expressed via `div`.
+
+=== Rationale
+
+Before this change, any expression involving a float literal or the `/` operator
+in a constant declaration was rejected — the constant folding path only handled
+integer arithmetic.  Users had to inline magic numbers or break them into
+separate `var` initialisations, losing the self-documenting benefit of named
+constants.
+
+The semantic pass detects a float expression (at least one float literal, a
+named float constant, or use of `/`) and dispatches to a float-specific
+constant folder.  The folder performs arithmetic using the host's IEEE 754
+`Double` type and stores the result as a string in the constant declaration,
+exactly as bare float literals are stored.
+
+=== Alternatives considered
+
+* *Defer to runtime evaluation.*  Rejected.  Constants must be folded at compile
+  time; emitting runtime arithmetic for `const X = 3.14 * 2.0` would violate
+  the constant contract and prevent their use in contexts requiring true constants
+  (e.g. array bounds, case labels).
+* *Support only the four arithmetic operators.*  Adopted.  Bitwise operators
+  (`and`, `or`, `xor`, `shl`, `shr`) have no meaningful float semantics.  The
+  `mod` operator could theoretically map to `fmod`, but there is no demonstrated
+  need.  Integer-only operators remain available in integer constant expressions.
