@@ -54,6 +54,11 @@ type
     EmitIR: Boolean;
     EmitAsm: Boolean;
     Backend: TBackendKind;
+    { True only when --backend was given explicitly.  Lets the emit-mode/
+      backend compatibility check distinguish "user asked for this backend"
+      from the silent QBE default, so --emit-ir under an explicit
+      --backend native is an error rather than a silent backend switch. }
+    BackendExplicit: Boolean;
 
     constructor Create;
     destructor Destroy; override;

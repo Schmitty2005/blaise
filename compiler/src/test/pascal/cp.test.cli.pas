@@ -68,6 +68,14 @@ type
     procedure TestWrongBackendAssemblerRejected;   { addendum 2: qbe + --assembler }
     procedure TestEmitIrStillValidatesAssembler;   { addendum 1: validate runs in stdout mode }
     procedure TestAssemblerLineInHelp;             { DescribeOptions drives --help }
+    { ---- emit-mode must match the explicitly chosen backend ----
+      --emit-ir is a QBE-only output mode; --emit-asm is native-only.  When
+      the user explicitly selects a backend that cannot produce that output,
+      the driver must error instead of silently switching backends. }
+    procedure TestEmitIr_WithExplicitNativeBackend_Rejected;
+    procedure TestEmitAsm_WithExplicitQbeBackend_Rejected;
+    procedure TestEmitIr_WithoutBackend_StillWorks;
+    procedure TestEmitIr_WithExplicitQbeBackend_StillWorks;
     { ---- div/mod by zero raises a catchable EDivByZero (needs stdlib) ---- }
     procedure TestDivByZeroCaught_QBE;
     procedure TestDivByZeroCaught_Native;
@@ -372,6 +380,66 @@ begin
   AssertEquals('--help exits 0', 0, EC);
   AssertTrue('--help must list --assembler (via DescribeOptions)',
     Pos('--assembler', Out_) >= 0);
+end;
+
+procedure TCLIContractTests.TestEmitIr_WithExplicitNativeBackend_Rejected;
+var
+  Src, Out_: string;
+  EC: Integer;
+begin
+  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
+  { --emit-ir is a QBE-only output mode.  Asking for it under an explicit
+    --backend native must fail loudly, not silently emit QBE IR (which
+    ignores the requested backend).  --emit-asm is the native equivalent. }
+  Src := WriteScratchSource(
+    'program cli_ei;' + LineEnding + 'begin WriteLn(1) end.');
+  EC := RunCompiler([
+    '--source', Src, '--backend', 'native', '--emit-ir'], Out_);
+  AssertTrue('--emit-ir + --backend native must be rejected: ' + Out_, EC <> 0);
+  AssertTrue('error mentions emit-ir/native mismatch',
+    (Pos('--emit-ir', Out_) >= 0) and (Pos('native', Out_) >= 0));
+end;
+
+procedure TCLIContractTests.TestEmitAsm_WithExplicitQbeBackend_Rejected;
+var
+  Src, Out_: string;
+  EC: Integer;
+begin
+  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
+  { Symmetric case: --emit-asm is native-only; requesting it under an
+    explicit --backend qbe must fail rather than silently switch to native. }
+  Src := WriteScratchSource(
+    'program cli_ea;' + LineEnding + 'begin WriteLn(1) end.');
+  EC := RunCompiler([
+    '--source', Src, '--backend', 'qbe', '--emit-asm'], Out_);
+  AssertTrue('--emit-asm + --backend qbe must be rejected: ' + Out_, EC <> 0);
+end;
+
+procedure TCLIContractTests.TestEmitIr_WithoutBackend_StillWorks;
+var
+  Src, Out_: string;
+  EC: Integer;
+begin
+  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
+  { No --backend given: --emit-ir resolves to the QBE default as before.
+    The new validation must only fire on an EXPLICIT incompatible backend. }
+  Src := WriteScratchSource(
+    'program cli_ei2;' + LineEnding + 'begin WriteLn(1) end.');
+  EC := RunCompiler(['--source', Src, '--emit-ir'], Out_);
+  AssertEquals('--emit-ir with no --backend still emits QBE IR: ' + Out_, 0, EC);
+end;
+
+procedure TCLIContractTests.TestEmitIr_WithExplicitQbeBackend_StillWorks;
+var
+  Src, Out_: string;
+  EC: Integer;
+begin
+  if not CompilerAvailable() then begin Ignore('<toolchain-missing>'); Exit; end;
+  { Explicit --backend qbe + --emit-ir is consistent — must succeed. }
+  Src := WriteScratchSource(
+    'program cli_ei3;' + LineEnding + 'begin WriteLn(1) end.');
+  EC := RunCompiler(['--source', Src, '--backend', 'qbe', '--emit-ir'], Out_);
+  AssertEquals('--emit-ir + --backend qbe is consistent: ' + Out_, 0, EC);
 end;
 
 function TCLIContractTests.RunBinary(const AExe: string;

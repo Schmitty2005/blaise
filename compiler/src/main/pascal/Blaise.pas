@@ -151,6 +151,7 @@ begin
   AFront.EmitAsm        := False;
   AFront.DumpAST        := False;
   AFront.Backend        := bkQBE;
+  AFront.BackendExplicit := False;
   AFront.SkipDepCodegen := False;
   AFront.EmitIfaceDir   := '';
   AFront.Incremental    := False;
@@ -223,6 +224,7 @@ begin
           ' is not a registered backend (', BackendUsageLine(), ')');
         Exit;
       end;
+      AFront.BackendExplicit := True;
     end
     else if (Arg = '--target') and (I < ParamCount()) then
     begin
@@ -497,6 +499,26 @@ begin
 
   if (UnitCacheDir <> '') and (SearchPaths.IndexOf(UnitCacheDir) < 0) then
     SearchPaths.Add(UnitCacheDir);
+
+  { Emit-mode / backend compatibility.  --emit-ir prints QBE IR and
+    --emit-asm prints native assembly; PickTopDriver routes each to the
+    backend that produces it, ignoring --backend.  That silent override is
+    fine for the default backend, but when the user EXPLICITLY asked for a
+    backend that cannot produce the requested output we must reject it
+    rather than quietly switch — backend-specific output modes belong to
+    their backend. }
+  if Front.BackendExplicit and EmitIR and (not GetDriver(Backend).ClaimsEmitIR()) then
+  begin
+    WriteLn(StdErr, 'Error: --emit-ir prints QBE IR and is not supported by ',
+      '--backend native; use --emit-asm for native assembly');
+    Halt(1);
+  end;
+  if Front.BackendExplicit and EmitAsm and (Backend <> bkNative) then
+  begin
+    WriteLn(StdErr, 'Error: --emit-asm prints native assembly and is not ',
+      'supported by --backend qbe; use --emit-ir for QBE IR');
+    Halt(1);
+  end;
 
   { Resolve the top-program driver once.  All backend-selection policy
     lives in PickTopDriver; everything downstream dispatches through
