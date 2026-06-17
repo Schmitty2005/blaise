@@ -60,6 +60,12 @@ type
     procedure TestSemantic_PtrUInt_FromPointer_ReturnsUInt64Type;
     procedure TestCodegen_Pointer_FromInt_EmitsExtuw;
     procedure TestCodegen_PtrUInt_FromPointer_EmitsCopy;
+
+    { ------------------------------------------------------------------ }
+    { p^.field[index] := value (issue #118)                               }
+    { ------------------------------------------------------------------ }
+    procedure TestParse_DerefFieldSubscript_Parses;
+    procedure TestCodegen_DerefFieldSubscript_InIR;
   end;
 
 implementation
@@ -492,6 +498,40 @@ begin
   IR := GenIR(SrcPtrUIntFromPtr);
   AssertTrue('PtrUInt(Pointer) should emit copy (l→l)',
     Pos('copy', IR) >= 0);
+end;
+
+const
+  SrcDerefFieldSubscript =
+    '''
+    program P;
+    type
+      PRec = ^TRec;
+      TRec = record
+        DA: array of Integer;
+      end;
+    var
+      Ptr: PRec;
+      R: TRec;
+    begin
+      Ptr := @R;
+      SetLength(R.DA, 3);
+      Ptr^.DA[0] := 100
+    end.
+    ''';
+
+procedure TPointerTests.TestParse_DerefFieldSubscript_Parses;
+var Prog: TProgram;
+begin
+  Prog := ParseSrc(SrcDerefFieldSubscript);
+  AssertNotNull('program parsed', Prog);
+  Prog.Free();
+end;
+
+procedure TPointerTests.TestCodegen_DerefFieldSubscript_InIR;
+var IR: string;
+begin
+  IR := GenIR(SrcDerefFieldSubscript);
+  AssertTrue('IR non-empty', IR <> '');
 end;
 
 initialization

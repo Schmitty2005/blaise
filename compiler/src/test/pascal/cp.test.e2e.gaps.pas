@@ -65,6 +65,10 @@ type
     procedure TestRun_StaticArrayReturn_12Bytes;
     procedure TestRun_StaticArrayReturn_16Bytes;
 
+    { Pointer deref field subscript (GitHub #118) }
+    procedure TestRun_DerefFieldSubscript_Write;
+    procedure TestRun_DerefFieldSubscript_ReadAndWrite;
+
     { Multi-arg WriteLn }
     procedure TestRun_WriteLn_MultipleArgs_MixedTypes;
   end;
@@ -660,6 +664,61 @@ const
     ''';
 begin
   AssertRunsOnAll(Src, '111' + Chr(10) + '222' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_DerefFieldSubscript_Write;
+const
+  Src =
+    '''
+    program P;
+    type
+      PRec = ^TRec;
+      TRec = record
+        DA: array of Integer;
+      end;
+    var
+      Ptr: PRec;
+      R: TRec;
+    begin
+      Ptr := @R;
+      SetLength(R.DA, 3);
+      R.DA[0] := 10;
+      Ptr^.DA[1] := 20;
+      Ptr^.DA[2] := 30;
+      WriteLn(R.DA[0]);
+      WriteLn(R.DA[1]);
+      WriteLn(R.DA[2])
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, '10' + Chr(10) + '20' + Chr(10) + '30' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_DerefFieldSubscript_ReadAndWrite;
+const
+  Src =
+    '''
+    program P;
+    type
+      PRec = ^TRec;
+      TRec = record
+        DA: array of Integer;
+      end;
+    var
+      Ptr: PRec;
+      R: TRec;
+      I: Integer;
+    begin
+      Ptr := @R;
+      SetLength(R.DA, 2);
+      Ptr^.DA[0] := 100;
+      Ptr^.DA[1] := 200;
+      I := Ptr^.DA[0] + Ptr^.DA[1];
+      WriteLn(I)
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, '300' + Chr(10), 0);
 end;
 
 procedure TE2EGapTests.TestRun_WriteLn_MultipleArgs_MixedTypes;

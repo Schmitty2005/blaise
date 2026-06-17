@@ -2646,6 +2646,12 @@ begin
       FldAssign.FieldName := FldNode.FieldName;
       FldNode.Base      := nil;
       FldNode.Free();
+      if Check(tkLBracket) then
+      begin
+        Advance();
+        FldAssign.PropIndexExpr := ParseExpr();
+        Expect(tkRBracket);
+      end;
       Expect(tkAssign);
       FldAssign.Expr := ParseExpr();
       Result := FldAssign;
