@@ -52,6 +52,10 @@ type
     procedure TestRun_DynToOpen_Empty;
     procedure TestRun_DynToOpen_OfString;
     procedure TestRun_DynToOpen_PassToNested;
+
+    { Empty bracket literal [] as an open-array argument }
+    procedure TestRun_EmptyLiteral_ToOpenArray;
+    procedure TestRun_EmptyLiteral_OverloadDisambiguation;
   end;
 
 implementation
@@ -482,6 +486,54 @@ procedure TE2EOpenArrayTests.TestRun_DynToOpen_PassToNested;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcDynNested, '100' + #10, 0);
+end;
+
+procedure TE2EOpenArrayTests.TestRun_EmptyLiteral_ToOpenArray;
+{ An empty bracket literal [] passed to a plain open-array parameter — both for a
+  string and an integer open array — is a valid zero-length open array.  This
+  previously failed overload resolution ("No matching overload"). }
+const Src = '''
+    program P;
+    procedure ShowS(const A: array of string);
+    begin WriteLn(Length(A)) end;
+    procedure ShowI(const A: array of Integer);
+    var i, s: Integer;
+    begin
+      s := 0;
+      for i := 0 to Length(A) - 1 do s := s + A[i];
+      WriteLn(Length(A), ' ', s)
+    end;
+    begin
+      ShowS([]);
+      ShowS(['a', 'b']);
+      ShowI([]);
+      ShowI([10, 20, 30])
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src,
+    '0' + #10 + '2' + #10 + '0 0' + #10 + '3 60' + #10, 0);
+end;
+
+procedure TE2EOpenArrayTests.TestRun_EmptyLiteral_OverloadDisambiguation;
+{ [] selects the open-array overload over a non-array one; a non-bracket
+  argument still picks the scalar overload. }
+const Src = '''
+    program P;
+    procedure F(X: Integer); overload;
+    begin WriteLn('int') end;
+    procedure F(const A: array of string); overload;
+    begin WriteLn('oa ', Length(A)) end;
+    begin
+      F([]);
+      F(['x']);
+      F(5)
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'oa 0' + #10 + 'oa 1' + #10 + 'int' + #10, 0);
 end;
 
 initialization

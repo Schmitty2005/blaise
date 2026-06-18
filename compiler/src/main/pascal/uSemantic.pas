@@ -8000,6 +8000,15 @@ begin
       TArrayLiteralExpr(Arg).IsConstArray := True;
       Arg.ResolvedType := Par.ResolvedType;
     end;
+    { Empty bracket literal [] bound to a plain open-array formal: pin its type
+      to the formal so codegen emits a zero-length open array (data=nil, high=-1)
+      of the right element type.  The untyped [] would otherwise reach codegen
+      with no ResolvedType. }
+    if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyOpenArray) and
+       (Arg is TArrayLiteralExpr) and
+       (TArrayLiteralExpr(Arg).Elements.Count = 0) and
+       (Arg.ResolvedType = nil) then
+      Arg.ResolvedType := Par.ResolvedType;
   end;
 end;
 
@@ -8069,6 +8078,17 @@ begin
      (TOpenArrayTypeDesc(AParam).ElementType <> nil) and
      SameText(TOpenArrayTypeDesc(AParam).ElementType.Name, 'TVarRec') and
      (AArgExpr is TArrayLiteralExpr) then
+  begin
+    Result := 2;
+    Exit;
+  end;
+  { An EMPTY bracket literal [] passed to a plain open-array parameter (array of
+    T) is a valid empty open array of any element type — it has no elements to
+    infer a type from, so AnalyseArrayLiteralExpr left it untyped (nil).  Match
+    it here, before the nil-arg bail; AnalyseProcCall re-types it to the formal's
+    open-array type so codegen emits a zero-length (data=nil, high=-1) array. }
+  if (AParam.Kind = tyOpenArray) and (AArgExpr is TArrayLiteralExpr) and
+     (TArrayLiteralExpr(AArgExpr).Elements.Count = 0) then
   begin
     Result := 2;
     Exit;
