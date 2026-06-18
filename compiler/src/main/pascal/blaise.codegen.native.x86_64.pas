@@ -4612,6 +4612,17 @@ var
   IsS: Boolean;
 begin
   Result := True;
+  { StrToDouble(S): the RTL helper takes a string pointer in %rdi and returns
+    the Double in %xmm0.  It MUST be handled here in the float emitter — if it
+    falls through to the integer EmitExprToEax path, the result (already in
+    %xmm0) is discarded and the leftover %rax is cvtsi2sd'd into garbage. }
+  if SameText(FC.Name, 'StrToDouble') and (FC.Args.Count = 1) then
+  begin
+    Self.EmitExprToEax(TASTExpr(FC.Args.Items[0]));
+    Self.Emit(#9'movq %rax, %rdi');
+    Self.Emit(#9'callq _StrToDouble');
+    Exit;
+  end;
   if SameText(FC.Name, 'Sqrt') and (FC.Args.Count = 1) then
   begin
     Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));

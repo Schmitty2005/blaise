@@ -1144,11 +1144,13 @@ begin
   AssertEquals('DoubleToStr(0.0001)', '0.0001', Trim(Output));
 end;
 
+{ StrToDouble tests run on BOTH backends (AssertRunsOnAll) — they pinned the
+  native StrToDouble float-return bug where the result was read from %rax instead
+  of %xmm0.  WriteLn(DoubleToStr(D)) emits 'value' + newline. }
 procedure TE2EMathTests.TestRun_StrToDouble_Simple;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(
+  AssertRunsOnAll(
     '''
     program P;
     var D: Double; S: String;
@@ -1157,16 +1159,13 @@ begin
       D := StrToDouble(S);
       WriteLn(DoubleToStr(D))
     end.
-    ''', Output, RCode));
-  AssertEquals('exit code', 0, RCode);
-  AssertEquals('StrToDouble(3.14)', '3.14', Trim(Output));
+    ''', '3.14' + Chr(10), 0);
 end;
 
 procedure TE2EMathTests.TestRun_StrToDouble_Negative;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(
+  AssertRunsOnAll(
     '''
     program P;
     var D: Double; S: String;
@@ -1175,16 +1174,13 @@ begin
       D := StrToDouble(S);
       WriteLn(DoubleToStr(D))
     end.
-    ''', Output, RCode));
-  AssertEquals('exit code', 0, RCode);
-  AssertEquals('StrToDouble(-1.5)', '-1.5', Trim(Output));
+    ''', '-1.5' + Chr(10), 0);
 end;
 
 procedure TE2EMathTests.TestRun_StrToDouble_ScientificPos;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(
+  AssertRunsOnAll(
     '''
     program P;
     var D: Double; S: String;
@@ -1193,16 +1189,13 @@ begin
       D := StrToDouble(S);
       WriteLn(DoubleToStr(D))
     end.
-    ''', Output, RCode));
-  AssertEquals('exit code', 0, RCode);
-  AssertEquals('StrToDouble(1e10)', '10000000000', Trim(Output));
+    ''', '10000000000' + Chr(10), 0);
 end;
 
 procedure TE2EMathTests.TestRun_StrToDouble_ScientificNeg;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(
+  AssertRunsOnAll(
     '''
     program P;
     var D: Double; S: String;
@@ -1211,16 +1204,13 @@ begin
       D := StrToDouble(S);
       WriteLn(DoubleToStr(D))
     end.
-    ''', Output, RCode));
-  AssertEquals('exit code', 0, RCode);
-  AssertEquals('StrToDouble(1e-10)', '1e-10', Trim(Output));
+    ''', '1e-10' + Chr(10), 0);
 end;
 
 procedure TE2EMathTests.TestRun_StrToDouble_LargeMantissa;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(
+  AssertRunsOnAll(
     '''
     program P;
     var D: Double; S: String;
@@ -1229,16 +1219,13 @@ begin
       D := StrToDouble(S);
       WriteLn(DoubleToStr(D))
     end.
-    ''', Output, RCode));
-  AssertEquals('exit code', 0, RCode);
-  AssertEquals('StrToDouble large mantissa', '1234567890.12345', Trim(Output));
+    ''', '1234567890.12345' + Chr(10), 0);
 end;
 
 procedure TE2EMathTests.TestRun_StrToDouble_Zero;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(
+  AssertRunsOnAll(
     '''
     program P;
     var D: Double; S: String;
@@ -1247,16 +1234,13 @@ begin
       D := StrToDouble(S);
       WriteLn(DoubleToStr(D))
     end.
-    ''', Output, RCode));
-  AssertEquals('exit code', 0, RCode);
-  AssertEquals('StrToDouble(0)', '0', Trim(Output));
+    ''', '0' + Chr(10), 0);
 end;
 
 procedure TE2EMathTests.TestRun_StrToDouble_RoundTrip;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(
+  AssertRunsOnAll(
     '''
     program P;
     var D: Double;
@@ -1264,9 +1248,7 @@ begin
       D := StrToDouble(DoubleToStr(3.14159265358979));
       WriteLn(DoubleToStr(D))
     end.
-    ''', Output, RCode));
-  AssertEquals('exit code', 0, RCode);
-  AssertEquals('roundtrip pi', '3.14159265358979', Trim(Output));
+    ''', '3.14159265358979' + Chr(10), 0);
 end;
 
 procedure TE2EMathTests.TestRun_AbsInt_Positive;

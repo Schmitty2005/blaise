@@ -324,6 +324,14 @@ function TE2ETestCase.CompileAndRun(const ASrc: string;
                                     out AStdout: string;
                                     out AExitCode: Integer): Boolean;
 begin
+  { QBE-only.  A blanket dual-backend flip here is unsafe: some inline e2e
+    programs print non-deterministic values (e.g. GetProcessID) that cannot be
+    compared across two separate process runs, and several genuine native gaps
+    (StrToDouble/DoubleToStr formatting, InheritsFrom/ToString builtins, class
+    const-array, interface-field-assignment-RHS) are still open — see bugs.txt.
+    Suites whose programs ARE deterministic and native-clean use AssertRunsOnAll
+    instead, which runs both backends.  As the native gaps close, more inline
+    suites can migrate to AssertRunsOnAll. }
   Result := Self.CompileAndRunOn(beQBE, ASrc, AStdout, AExitCode)
 end;
 
