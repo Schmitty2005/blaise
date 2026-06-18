@@ -5325,12 +5325,22 @@ begin
     end;
     if SameText(FC.Name, 'Round') and (FC.Args.Count = 1) then
     begin
+      { Round half-away-from-zero, matching Delphi/FPC Round() and the QBE
+        backend.  cvtsd2si/cvtss2si alone would honour the FPU rounding mode
+        (round-half-to-even / banker's), which disagrees with QBE — so route
+        through C99 round()/roundf() first, then truncate the integral result. }
       Self.EmitExprToXmm0(TASTExpr(FC.Args.Items[0]));
       if (TASTExpr(FC.Args.Items[0]).ResolvedType <> nil) and
          (TASTExpr(FC.Args.Items[0]).ResolvedType.Kind = tySingle) then
-        Self.Emit(#9'cvtss2si %xmm0, %rax')
+      begin
+        Self.Emit(#9'callq roundf');
+        Self.Emit(#9'cvttss2si %xmm0, %rax');
+      end
       else
-        Self.Emit(#9'cvtsd2si %xmm0, %rax');
+      begin
+        Self.Emit(#9'callq round');
+        Self.Emit(#9'cvttsd2si %xmm0, %rax');
+      end;
       Exit;
     end;
     if SameText(FC.Name, 'Trunc') and (FC.Args.Count = 1) then

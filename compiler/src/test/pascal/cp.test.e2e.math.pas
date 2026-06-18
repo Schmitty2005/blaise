@@ -287,10 +287,9 @@ begin
 end;
 
 procedure TE2EMathTests.TestRun_Round_HalfUp;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(
+  AssertRunsOnAll(
     '''
     program P;
     var R: Integer;
@@ -298,16 +297,13 @@ begin
       R := Round(2.5);
       WriteLn(IntToStr(R))
     end.
-    ''', Output, RCode));
-  AssertEquals('exit code', 0, RCode);
-  AssertEquals('round(2.5)', '3', Trim(Output));
+    ''', '3' + Chr(10), 0);
 end;
 
 procedure TE2EMathTests.TestRun_Round_HalfDown;
-var Output: string; RCode: Integer;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
-  AssertTrue('compile+run', CompileAndRun(
+  AssertRunsOnAll(
     '''
     program P;
     var R: Integer;
@@ -315,9 +311,7 @@ begin
       R := Round(-2.5);
       WriteLn(IntToStr(R))
     end.
-    ''', Output, RCode));
-  AssertEquals('exit code', 0, RCode);
-  AssertEquals('round(-2.5)', '-3', Trim(Output));
+    ''', '-3' + Chr(10), 0);
 end;
 
 procedure TE2EMathTests.TestRun_Trunc_Positive;
