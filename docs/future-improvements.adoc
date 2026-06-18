@@ -34,24 +34,25 @@ prioritise them.
 - reference to function/procedure (anonymous methods)
 - cdecl/stdcall calling-convention markers on procedural types
 
-=== Ordinal-based set types (`set of byte`, `set of 0..255`)
+=== Set types over an integer subrange (`set of 0..255`)
 
-Set types currently require an enumeration base type; `set of byte` (and,
-more generally, a set over an integer subrange) is rejected with
-"Set base type 'byte' must be an enumeration type".  FPC and Delphi accept
-ordinal base types, so `set of byte` is standard Pascal.
+`set of byte` and `set of Boolean` are *implemented* (issue #105): the named
+ordinal base types lower to a bit set — `set of byte` uses the 256-bit jumbo
+path, membership/Include/Exclude and `[lo..hi]` range literals all work on both
+backends.  See `docs/language-rationale.adoc` and the `set of Byte` tests in
+`cp.test.sets.pas` / `cp.test.e2e.sets.pas`.
 
-Supporting it means teaching the set machinery to treat an ordinal range as
-an implicit member set: the bit count is the range width (0..255 → 256 bits,
-the jumbo-set path), element ordinals are the integer values themselves, and
-membership/include/exclude lower exactly as they do for enum sets.  The work
-spans the semantic pass (base-type validation, bit-count derivation) and both
-codegen backends, including the jumbo-set path for `set of byte`.
+What remains is the *anonymous integer-subrange* base form,
+`set of 0..255` / `set of 1..10`, which is still rejected at parse time
+("Expected enum type or '(' after 'set of'").  Standard Pascal accepts a
+subrange there; the bit count is the range width and element ordinals are the
+integer values themselves — the same machinery `set of byte` already uses, so
+this is mostly parser + base-type-resolution work, not new codegen.
 
-This was surfaced by issue #105, whose example used `set of byte`.  The set
-range syntax `[lo..hi]` requested by that issue was implemented independently
-(see `docs/language-rationale.adoc`) and is base-type-agnostic — ranges will
-work for ordinal sets automatically once this lands.
+Minor follow-on: for `set of Boolean`, a Boolean operand on the left of `in`
+(e.g. `True in s`) is rejected by the `in` type-check ("operand must be
+numeric"); `Ord(b) in s` works.  The check should accept a Boolean (or any
+ordinal) operand against a matching ordinal-base set.
 
 === Method level attributes
 
