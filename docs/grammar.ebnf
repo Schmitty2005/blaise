@@ -788,7 +788,14 @@ Stmt
 
 (* A multi-dimensional element write addresses nested static arrays.  Both the
  * comma form a[i, j] := v and the chained form a[i][j] := v are accepted and
- * lower to the same element write through the inner-array address. *)
+ * lower to the same element write through the inner-array address.
+ *
+ * The same single-subscript form also covers an indexed write into a string
+ * (S[I] := <byte>), a PChar (P[I] := <byte>), a dynamic array, and a default
+ * indexed property.  The base kind is resolved by the semantic pass, not the
+ * grammar.  For a string the write is copy-on-write (the buffer is made
+ * uniquely owned before the byte store) — see the "String Subscript S[N]"
+ * section of language-rationale.adoc. *)
 StaticSubscriptAssign
     = IDENT LBRACKET Expr { COMMA Expr } RBRACKET
             { LBRACKET Expr { COMMA Expr } RBRACKET } ASSIGN Expr

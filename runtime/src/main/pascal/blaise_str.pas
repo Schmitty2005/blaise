@@ -47,6 +47,10 @@ procedure _BlaiseFreeMem(Ptr: Pointer);          external name '_BlaiseFreeMem';
 function  _BlaiseReallocMem(Ptr: Pointer; NewSize: Integer): Pointer;
   external name '_BlaiseReallocMem';
 
+{ ARC primitive from blaise_arc — used by _StringUnique to drop the old
+  reference when copy-on-write replaces a shared/immortal string. }
+procedure _StringRelease(Ptr: Pointer);                external name '_StringRelease';
+
 { blaise_float binding — used by Format()'s %f/%e/%g handling. }
 function  _FormatFloatSpec(V: Double; Spec: Integer; Prec: Integer): Pointer;
   external name '_FormatFloatSpec';
@@ -58,6 +62,7 @@ function  _StringLength(S: Pointer): Integer;
 function  _StringPos(Sub, S: Pointer): Integer;
 function  _StringPosEx(Sub, S: Pointer; StartPos: Integer): Integer;
 function  _StringCopy(S: Pointer; From, Count: Integer): Pointer;
+function  _StringUnique(S: Pointer): Pointer;
 function  _StringDelete(S: Pointer; Idx, Count: Integer): Pointer;
 function  _StringSetLength(S: Pointer; N: Integer): Pointer;
 function  _StringUpperCase(S: Pointer): Pointer;
@@ -318,6 +323,42 @@ begin
     Data := StrData(S);
     MemCopy(StrData(Result), Data + From, Count);
   end;
+end;
+
+{ ------------------------------------------------------------------ }
+{ _StringUnique(S) : string                                           }
+{                                                                      }
+{ Copy-on-write for in-place mutation (S[I] := ch).  Returns a string  }
+{ the caller can write into safely, and which the caller's slot owns    }
+{ with exactly one reference:                                          }
+{   * S = nil                  → nil (the caller's index store faults,  }
+{                                 same as any nil deref — not our bug). }
+{   * RefCount = 1 (unique)    → S unchanged; already mutable & owned.  }
+{   * RefCount = -1 (immortal) → fresh rc=1 heap copy.  Literals live   }
+{     or RefCount > 1 (shared)   in read-only memory / are shared, so   }
+{                                a mutation must not touch them.        }
+{ When a copy is made the old S is released, so the slot that stores    }
+{ the result still holds exactly one reference (no leak, no UAF).      }
+{ Matches Delphi/FPC UniqueString semantics.                          }
+{ ------------------------------------------------------------------ }
+
+function _StringUnique(S: Pointer): Pointer;
+var
+  RC:   ^Integer;
+  SLen: Integer;
+begin
+  if S = nil then Exit(nil);
+  RC := Pointer(S) - HDR_SIZE;      { RefCount at data_ptr - 12 }
+  if RC^ = 1 then Exit(S);          { already uniquely owned & mutable }
+
+  { Immortal (-1) or shared (>1): make a private, writable rc=1 copy. }
+  SLen   := StrLen(S);
+  Result := StrAlloc(SLen);
+  if (Result <> nil) and (SLen > 0) then
+    MemCopy(StrData(Result), StrData(S), SLen);
+  RC := Pointer(Result) - HDR_SIZE;
+  RC^ := 1;                         { the caller's slot owns this ref }
+  _StringRelease(S);                { drop the old reference }
 end;
 
 { ------------------------------------------------------------------ }

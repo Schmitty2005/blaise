@@ -14297,6 +14297,7 @@ var
   ElemPtr:    string;
   ElemVal:    string;
   OldVal:     string;
+  OldStr:     string;
   PCharBase:  string;
   ObjTemp:    string;   { interface RHS obj slot }
   ItabTemp:   string;   { interface RHS itab slot or itab name literal }
@@ -14334,10 +14335,51 @@ begin
       [PropTgt, RecvTemp, IdxQType, IdxW, ValQType, ElemVal]));
     Exit;
   end;
-  { PChar subscript write: P[I] := Integer — storeb at ptr + I.
+  { PChar / string subscript write: P[I] := Integer — storeb at ptr + I.
+    Both use the data-pointer convention (the variable slot holds a pointer
+    straight to the first byte), so the lowering is identical: load the
+    pointer, dereference once more for a var/out param, add the index, storeb.
     EmitByteRhs short-circuits Chr(N) so we store N directly instead of
     truncating the low byte of a _Chr-allocated string pointer. }
-  if AStmt.ResolvedArrayType.Kind = tyPChar then
+  if (AStmt.ResolvedArrayType.Kind = tyString) then
+  begin
+    { String subscript write S[I] := ch with copy-on-write.  AddrTemp is the
+      memory location that holds the string's data pointer: a local/global
+      slot directly, or — for a var/out param — the caller's variable address
+      reached through one dereference of the param slot.  Pass the current
+      pointer through _StringUnique (returns it unchanged when uniquely owned,
+      else a fresh rc=1 copy and releases the old ref), store the result back
+      so the slot keeps exactly one owned reference, then storeb into it.
+      Without this, S[I] := ch into a literal-backed string would write
+      read-only memory (segfault) or silently mutate a shared buffer. }
+    IdxW    := EmitExpr(AStmt.IndexExpr);
+    ElemVal := EmitByteRhs(AStmt.ValueExpr);
+    OldVal  := AllocTemp();   { the address that holds the data pointer }
+    if AStmt.IsGlobal then
+      EmitLine(Format('  %s =l copy $%s', [OldVal, AStmt.ArrayName]))
+    else
+      EmitLine(Format('  %s =l copy %%_var_%s', [OldVal, AStmt.ArrayName]));
+    if AStmt.IsVarParam then
+    begin
+      ElemPtr := AllocTemp();
+      EmitLine(Format('  %s =l loadl %s', [ElemPtr, OldVal]));
+      OldVal := ElemPtr;      { caller variable's address }
+    end;
+    OldStr := AllocTemp();
+    EmitLine(Format('  %s =l loadl %s', [OldStr, OldVal]));
+    PCharBase := AllocTemp();
+    EmitLine(Format('  %s =l call $_StringUnique(l %s)', [PCharBase, OldStr]));
+    EmitLine(Format('  storel %s, %s', [PCharBase, OldVal]));  { write back }
+    IdxL := AllocTemp();
+    EmitLine(Format('  %s =l extuw %s', [IdxL, IdxW]));
+    ElemPtr := AllocTemp();
+    EmitLine(Format('  %s =l add %s, %s', [ElemPtr, PCharBase, IdxL]));
+    EmitLine(Format('  storeb %s, %s', [ElemVal, ElemPtr]));
+    Exit;
+  end;
+  { PChar subscript write: P[I] := Integer — storeb at ptr + I.  PChar is a
+    raw pointer with no ARC header, written in place. }
+  if (AStmt.ResolvedArrayType.Kind = tyPChar) then
   begin
     IdxW     := EmitExpr(AStmt.IndexExpr);
     IdxL     := AllocTemp();

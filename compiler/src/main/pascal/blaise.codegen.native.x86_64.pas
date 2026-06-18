@@ -11849,10 +11849,49 @@ begin
       Exit;
     end;
     if (SSA.ResolvedArrayType <> nil) and
+       (SSA.ResolvedArrayType.Kind = tyString) then
+    begin
+      { String subscript write S[I] := ch with copy-on-write.  %rbx holds the
+        address of the slot that stores the string's data pointer (a
+        local/global slot directly, or the caller's variable address for a
+        var/out param).  _StringUnique returns a uniquely-owned writable
+        pointer (releasing the old one when it copies); store it back so the
+        slot keeps exactly one owned reference, then storeb into it.  Without
+        the COW, writing a literal-backed string would hit read-only memory. }
+      Self.EmitByteRhsToEax(SSA.ValueExpr);
+      Self.Emit(#9'pushq %rax');                  { [rsp] = byte value }
+      Self.EmitExprToEax(SSA.IndexExpr);
+      Self.Emit(#9'pushq %rax');                  { [rsp] = index }
+      { Preserve %rbx and keep %rsp 16-aligned across the call: pushing %rbx
+        alone (3rd push) would misalign, so reserve a paired 8-byte pad. }
+      Self.Emit(#9'pushq %rbx');                  { preserve %rbx }
+      Self.Emit(#9'subq $8, %rsp');               { align to 16 }
+      { %rbx := address of the slot holding the data pointer. }
+      if Self.IsLocal(SSA.ArrayName) then
+        Self.Emit(Format(#9'leaq %s, %%rbx', [Self.VarOperand(SSA.ArrayName)]))
+      else
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rbx', [SSA.ArrayName]));
+      if SSA.IsVarParam then
+        { var/out param: slot holds the caller variable's address; that is
+          where the string pointer actually lives. }
+        Self.Emit(#9'movq (%rbx), %rbx');
+      Self.Emit(#9'movq (%rbx), %rdi');           { old data pointer }
+      Self.Emit(#9'callq _StringUnique');         { %rax = unique pointer }
+      Self.Emit(#9'movq %rax, (%rbx)');           { write back to slot }
+      Self.Emit(#9'movq %rax, %rcx');             { %rcx = unique base }
+      Self.Emit(#9'addq $8, %rsp');               { drop alignment pad }
+      Self.Emit(#9'popq %rbx');                   { restore %rbx }
+      Self.Emit(#9'popq %rax');                   { index }
+      Self.Emit(#9'addq %rax, %rcx');
+      Self.Emit(#9'popq %rax');                   { byte value }
+      Self.Emit(#9'movb %al, (%rcx)');
+      Exit;
+    end;
+    if (SSA.ResolvedArrayType <> nil) and
        (SSA.ResolvedArrayType.Kind = tyPChar) then
     begin
-      { PChar subscript write: P[I] := byte — storeb at base + I.  The PChar
-        value lives directly in the variable slot (an 8-byte pointer). }
+      { PChar subscript write: P[I] := byte — storeb at base + I.  PChar is a
+        raw pointer with no ARC header (the slot holds it directly). }
       Self.EmitByteRhsToEax(SSA.ValueExpr);
       Self.Emit(#9'pushq %rax');
       Self.EmitExprToEax(SSA.IndexExpr);

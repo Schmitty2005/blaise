@@ -11616,6 +11616,33 @@ begin
     AnalyseExpr(AStmt.ValueExpr);
     Exit;
   end;
+  { String subscript write: S[I] := <byte> — storeb at data_ptr + I.
+    Blaise strings are mutable 0-based UTF-8 byte buffers (data-pointer
+    convention, see docs/language-rationale.adoc), so an in-place byte write
+    is a single storeb with no header skip — the symmetric counterpart of the
+    S[I] read.  The value is a byte ordinal (string subscripts read/write
+    Byte-as-Integer; there is no Char type). }
+  if Sym.TypeDesc.Kind = tyString then
+  begin
+    AStmt.IsGlobal := Sym.IsGlobal;
+    AStmt.IsVarParam := Sym.Kind = skVarParameter;
+    AStmt.ResolvedArrayType := FTable.TypeString;
+    IdxType := AnalyseExpr(AStmt.IndexExpr);
+    if not IdxType.IsNumeric() then
+      SemanticError('String subscript index must be numeric',
+        AStmt.Line, AStmt.Col);
+    { The RHS is a single byte.  Accept a numeric ordinal, or the
+      Char-shaped forms the language uses in place of a Char type: Chr(n)
+      and single-character string literals (the codegen's byte-RHS path
+      stores their first byte).  Mirrors the read side, where S[I] yields a
+      byte ordinal. }
+    ValType := AnalyseExpr(AStmt.ValueExpr);
+    if not (ValType.IsNumeric() or (ValType.Kind = tyString)) then
+      SemanticError(
+        'String element assignment requires a byte, Chr(...), or ' +
+        'single-character value', AStmt.Line, AStmt.Col);
+    Exit;
+  end;
   { Dynamic array subscript write: A[I] := V }
   if Sym.TypeDesc.Kind = tyDynArray then
   begin

@@ -41,6 +41,9 @@ type
     procedure TestRun_StringOps_Format_FloatGeneral;
     procedure TestRun_StringOps_Format_FloatMixedWithIntStr;
     procedure TestRun_StringSubscript_ReadByte;
+    procedure TestRun_StringSubscript_Write;
+    procedure TestRun_StringSubscript_WriteCOW;
+    procedure TestRun_StringSubscript_WriteVarParam;
     procedure TestRun_StringConcat_TwoStrings;
     procedure TestRun_StringConcat_WithInt;
     procedure TestRun_StringDelete_Modifies;
@@ -301,6 +304,53 @@ const
     end.
     ''';
 
+  { Writable string subscript: S[I] := <byte>.  Copy-on-write must replace
+    the literal-backed buffer before writing so this does not fault on the
+    read-only literal.  Accepts a numeric ordinal, Chr(n), and a single-char
+    literal as the RHS. }
+  SrcStringSubscriptWrite = '''
+    program P;
+    var S: string;
+    begin
+      S := 'AAAAA';
+      S[0] := Chr(90);
+      S[2] := 67;
+      S[4] := 'E';
+      WriteLn(S)
+    end.
+    ''';
+
+  { Copy-on-write correctness: mutating an aliased string must not disturb
+    the other reference, and a reused literal must stay pristine. }
+  SrcStringSubscriptCOW = '''
+    program P;
+    var A, B: string;
+    begin
+      A := 'HELLO';
+      B := A;
+      A[0] := Chr(74);
+      WriteLn(A);
+      WriteLn(B);
+      B := 'WORLD';
+      WriteLn(B)
+    end.
+    ''';
+
+  { Writable subscript through a var-string parameter. }
+  SrcStringSubscriptVarParam = '''
+    program P;
+    procedure PutByte(var ABuf: string; AOff: Integer; AVal: Integer);
+    begin
+      ABuf[AOff] := Chr(AVal)
+    end;
+    var S: string;
+    begin
+      S := 'AAAA';
+      PutByte(S, 1, 66);
+      WriteLn(S)
+    end.
+    ''';
+
   SrcStringConcatStr = '''
     program P;
     var A, B, C: string;
@@ -515,6 +565,26 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcStringSubscript, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('65 66 67', '65' + LE + '66' + LE + '67' + LE, Output);
+end;
+
+procedure TE2EStringOpsTests.TestRun_StringSubscript_Write;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  { Both backends: writing into a literal-backed string must copy-on-write
+    rather than fault on read-only memory. }
+  AssertRunsOnAll(SrcStringSubscriptWrite, 'ZACAE' + LE, 0);
+end;
+
+procedure TE2EStringOpsTests.TestRun_StringSubscript_WriteCOW;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcStringSubscriptCOW, 'JELLO' + LE + 'HELLO' + LE + 'WORLD' + LE, 0);
+end;
+
+procedure TE2EStringOpsTests.TestRun_StringSubscript_WriteVarParam;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcStringSubscriptVarParam, 'ABAA' + LE, 0);
 end;
 
 procedure TE2EStringOpsTests.TestRun_StringConcat_TwoStrings;

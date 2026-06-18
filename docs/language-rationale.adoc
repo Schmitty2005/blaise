@@ -204,11 +204,36 @@ indexing is correct for all such uses.
 Byte indexing also matches Go's `string[N]` semantics, which has proven
 workable in practice.
 
+==== Writable subscript — `S[N] := <byte>`
+
+`S[N]` is also assignable: it overwrites the Nth byte of the string in
+place.  The right-hand side is a single byte ordinal — a numeric value, a
+`Chr(n)` call, or a one-character string literal (Blaise has no `Char`
+type, so these are the byte-shaped forms used in its place), symmetric with
+what the read side yields.
+
+Because Blaise strings are reference-counted and string literals are
+immortal (RefCount = −1, stored in read-only memory), an in-place byte
+write must not touch a buffer that is shared or constant.  `S[N] := b`
+therefore performs *copy-on-write*: the RTL helper `_StringUnique(S)`
+returns the string unchanged when it is uniquely owned (RefCount = 1), and
+otherwise allocates a fresh RefCount = 1 copy, releases the old reference,
+and returns the copy.  The compiler stores the (possibly new) pointer back
+into the variable slot before the `storeb`, so the slot keeps exactly one
+owned reference.  This matches Delphi/FPC `UniqueString` semantics: mutating
+one alias never disturbs another, and a literal reused elsewhere stays
+pristine.  Both backends emit the same `_StringUnique` → write-back →
+`storeb` sequence.
+
 ==== What is not supported
 
 Codepoint-level indexing is not supported via subscript syntax.  Use
 `CodePointAt(S, N)` from the `StrUtils` unit for O(N) codepoint-indexed
 access, or `for CP: Integer in S do` for sequential codepoint iteration.
+
+Assigning a multi-byte value through `S[N] :=` is not meaningful: the
+subscript addresses a single byte, so only a byte-sized right-hand side is
+accepted.
 
 ==== Implementation note — string memory layout and pointer convention
 
