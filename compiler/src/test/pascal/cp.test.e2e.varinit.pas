@@ -32,6 +32,8 @@ type
     procedure TestRun_ArrayInit_NonZeroBased;
     procedure TestRun_MultipleInits;
     procedure TestRun_InitThenReassign;
+    procedure TestRun_FloatConstFold_Parens;
+    procedure TestRun_FloatConstFold_NegativeMul;
   end;
 
 implementation
@@ -179,6 +181,41 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
   LE := LineEnding;
   AssertRunsOnAll(Src, '10' + LE + '15' + LE, 0);
+end;
+
+{ Compile-time float-const folding crosses the codegen->run boundary here: the
+  compiler folds the expression (uSemantic.RawDoubleToStr) and bakes the literal
+  into the IR, then the running program prints it.  An IR-only test cannot catch
+  a folding bug that depends on the host ABI — the compiler's own RawDoubleToStr
+  once called libc snprintf through a fixed-arg declaration, which violates the
+  SysV variadic ABI (%al unset) and mis-folded on some hosts.  These run-and-
+  compare tests pin the actual folded value on every backend. }
+procedure TE2EVarInitTests.TestRun_FloatConstFold_Parens;
+const Src =
+  '''
+  program P;
+  const X = (1.0 + 2.0) * 3.0;
+  begin
+    WriteLn(X)
+  end.
+  ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertRunsOnAll(Src, '9' + LineEnding, 0);
+end;
+
+procedure TE2EVarInitTests.TestRun_FloatConstFold_NegativeMul;
+const Src =
+  '''
+  program P;
+  const X = -1.5 * 2.0;
+  begin
+    WriteLn(X)
+  end.
+  ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertRunsOnAll(Src, '-3' + LineEnding, 0);
 end;
 
 initialization

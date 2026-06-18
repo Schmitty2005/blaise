@@ -458,15 +458,19 @@ type
 
 implementation
 
+{ Double->string conversion uses the RTL's pure-Pascal _DoubleToStr, NOT libc's
+  snprintf.  snprintf is a genuinely variadic function; declaring it with a fixed
+  Double parameter violates the SysV x86-64 variadic ABI (the %al vector-register
+  count is left unset), so glibc may read the double from the wrong place and emit
+  a wrong string.  The symptom is environment-dependent miscompilation of folded
+  float constants (passes locally, fails in CI).  _DoubleToStr is FormatFloat(.,15),
+  i.e. %.15g, and is ABI-safe.  strtod is NOT variadic, so it is kept as-is. }
 function _strtod(S: PChar; EndPtr: Pointer): Double; external name 'strtod';
-function _snprintf(Buf: PChar; Size: Int64; Fmt: PChar; V: Double): Integer; external name 'snprintf';
+function _DoubleToStr(V: Double): string; external name '_DoubleToStr';
 
 function RawDoubleToStr(V: Double): string;
-var
-  Buf: array[0..63] of Byte;
 begin
-  _snprintf(PChar(@Buf[0]), 64, PChar('%.15g'), V);
-  Result := string(PChar(@Buf[0]));
+  Result := _DoubleToStr(V);
 end;
 
 function RawStrToDouble(const S: string): Double;
