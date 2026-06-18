@@ -153,6 +153,8 @@ type
     { Resolve a set-valued const decl (IsSet): fold the member bitmask into
       CD.IntVal and register the const symbol with its tySet type. }
     procedure AnalyseSetConstDecl(ACD: TConstDecl);
+    function  ResolveSetMemberOrd(const AMember: string; ACD: TConstDecl;
+                                  var AEnumDesc: TEnumTypeDesc): Integer;
     procedure AnalyseArrayConstDecls(ABlock: TBlock);
     { Build the (possibly nested) static-array type for a range-indexed array
       const and validate that the flat row-major element count matches the
@@ -3968,6 +3970,38 @@ begin
     ALine, ACol);
 end;
 
+function TSemanticAnalyser.ResolveSetMemberOrd(const AMember: string;
+  ACD: TConstDecl; var AEnumDesc: TEnumTypeDesc): Integer;
+{ Resolve one set-constant member (an integer literal, an enum constant, or a
+  named integer constant) to its ordinal.  Enum members must all share one base
+  enum, tracked through AEnumDesc; integer members do not set it (the set's base
+  type then comes from the declared TypeName, e.g. set of Byte). }
+var
+  Sym: TSymbol;
+begin
+  if IsPlainInt(AMember) then
+    Exit(Integer(StrToInt(AMember)));
+  Sym := FTable.Lookup(AMember);
+  if (Sym = nil) or (Sym.Kind <> skConstant) then
+  begin
+    SemanticError(Format(
+      'Set constant ''%s'' member ''%s'' is not a constant value',
+      [ACD.Name, AMember]), ACD.Line, ACD.Col);
+    Exit(0);
+  end;
+  { Enum member: pin / check the shared base enum. }
+  if (Sym.TypeDesc <> nil) and (Sym.TypeDesc.Kind = tyEnum) then
+  begin
+    if AEnumDesc = nil then
+      AEnumDesc := TEnumTypeDesc(Sym.TypeDesc)
+    else if Sym.TypeDesc <> AEnumDesc then
+      SemanticError(Format(
+        'Set constant ''%s'' mixes members of ''%s'' and ''%s''',
+        [ACD.Name, AEnumDesc.Name, Sym.TypeDesc.Name]), ACD.Line, ACD.Col);
+  end;
+  Result := Integer(Sym.ConstValue);
+end;
+
 procedure TSemanticAnalyser.AnalyseSetConstDecl(ACD: TConstDecl);
 var
   I:         Integer;
@@ -3982,6 +4016,8 @@ var
   Sym:       TSymbol;
   Ords:      TStringList;
   Ord, BIdx, NB, BVal: Integer;
+  DotPos, Lo, Hi: Integer;
+  LoStr, HiStr: string;
 begin
   Mask     := 0;
   EnumDesc := nil;
@@ -3994,25 +4030,24 @@ begin
   for I := 0 to ACD.SetElements.Count - 1 do
   begin
     MemName := ACD.SetElements.Strings[I];
-    MemSym  := FTable.Lookup(MemName);
-    if (MemSym = nil) or (MemSym.Kind <> skConstant) or
-       (MemSym.TypeDesc = nil) or (MemSym.TypeDesc.Kind <> tyEnum) then
+    DotPos  := Pos('..', MemName);
+    if DotPos >= 0 then
     begin
-      SemanticError(Format(
-        'Set constant ''%s'' member ''%s'' is not an enum constant',
-        [ACD.Name, MemName]), ACD.Line, ACD.Col);
-      Exit;
-    end;
-    if EnumDesc = nil then
-      EnumDesc := TEnumTypeDesc(MemSym.TypeDesc)
-    else if MemSym.TypeDesc <> EnumDesc then
-    begin
-      SemanticError(Format(
-        'Set constant ''%s'' mixes members of ''%s'' and ''%s''',
-        [ACD.Name, EnumDesc.Name, MemSym.TypeDesc.Name]), ACD.Line, ACD.Col);
-      Exit;
-    end;
-    Ords.Add(IntToStr(MemSym.ConstValue));
+      { Inclusive range lo..hi — resolve both endpoints to ordinals and add
+        every value in between. }
+      LoStr := Copy(MemName, 0, DotPos);
+      HiStr := Copy(MemName, DotPos + 2, Length(MemName) - DotPos - 2);
+      Lo := Self.ResolveSetMemberOrd(LoStr, ACD, EnumDesc);
+      Hi := Self.ResolveSetMemberOrd(HiStr, ACD, EnumDesc);
+      if Hi < Lo then
+        SemanticError(Format(
+          'Set constant ''%s'' range %s..%s is descending', [ACD.Name, LoStr, HiStr]),
+          ACD.Line, ACD.Col);
+      for Ord := Lo to Hi do
+        Ords.Add(IntToStr(Ord));
+    end
+    else
+      Ords.Add(IntToStr(Self.ResolveSetMemberOrd(MemName, ACD, EnumDesc)));
   end;
 
   { Determine the set type descriptor. }

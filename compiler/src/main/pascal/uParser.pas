@@ -1208,6 +1208,7 @@ procedure TParser.ParseConstValue(CD: TConstDecl);
 var
   CastVal:      Int64;
   FirstOperand: string;
+  ElemStr:      string;
 begin
     { Array const value list: flat (e, e, ...) or nested ((..),(..)). }
     if CD.IsArrayConst then
@@ -1321,20 +1322,40 @@ begin
     else if Check(tkLBracket) then
     begin
       { Set-valued constant: const Name [: SetType] = [member, member, ...]
-        or the empty set [].  Members are enum-constant identifiers; semantic
-        resolves their ordinals and folds the bitmask. }
+        or the empty set [].  A member is an enum-constant identifier, an integer
+        literal, or an inclusive range `lo..hi` (either endpoint an identifier or
+        an integer literal).  Each member is stored as a string in SetElements; a
+        range is stored as the two endpoints joined by '..' so the semantic pass
+        (AnalyseSetConstDecl) can resolve and expand it.  Semantic folds the
+        bitmask. }
       CD.IsSet       := True;
       CD.SetElements := TStringList.Create();
       Advance();   { consume '[' }
       if not Check(tkRBracket) then
         while True do
         begin
-          if not Check(tkIdent) then
+          if Check(tkIdent) then
+            ElemStr := FCurrent.Value
+          else if Check(tkIntLit) then
+            ElemStr := FCurrent.Value
+          else
             raise EParseError.Create(Format(
-              'Expected set member identifier at line %d col %d in %s',
+              'Expected set member (identifier or integer) at line %d col %d in %s',
               [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
-          CD.SetElements.Add(FCurrent.Value);
           Advance();
+          { Optional range continuation: lo..hi. }
+          if Check(tkDotDot) then
+          begin
+            Advance();
+            if Check(tkIdent) or Check(tkIntLit) then
+              ElemStr := ElemStr + '..' + FCurrent.Value
+            else
+              raise EParseError.Create(Format(
+                'Expected set range upper bound at line %d col %d in %s',
+                [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+            Advance();
+          end;
+          CD.SetElements.Add(ElemStr);
           if Check(tkComma) then
             Advance()
           else

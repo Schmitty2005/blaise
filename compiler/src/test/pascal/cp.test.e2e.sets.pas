@@ -53,6 +53,13 @@ type
     procedure TestRun_SetOfByte_InOperator;
     procedure TestRun_SetOfByte_RangeLiteral;
     procedure TestRun_SetOfByte_Union;
+
+    { const-decl set literals: integer literals + ranges (not just enum idents) }
+    procedure TestRun_ConstSet_IntLiterals;
+    procedure TestRun_ConstSet_IntRange;
+    procedure TestRun_ConstSet_MixedRangeAndLiteral;
+    procedure TestRun_ConstSet_JumboWithRange;
+    procedure TestRun_ConstSet_EnumStillWorks;
   end;
 
 implementation
@@ -470,6 +477,91 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcSetOfByteUnion,
     '1' + LE + '2' + LE + '3' + LE, 0);
+end;
+
+{ ---- const-decl set literals (integer literals + ranges) ---- }
+
+procedure TE2ESetOpsTests.TestRun_ConstSet_IntLiterals;
+const Src = '''
+    program P;
+    type TByteSet = set of Byte;
+    const C: TByteSet = [1, 2, 3];
+    begin
+      if 2 in C then WriteLn('y') else WriteLn('n');
+      if 5 in C then WriteLn('y') else WriteLn('n')
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'y' + LE + 'n' + LE, 0);
+end;
+
+procedure TE2ESetOpsTests.TestRun_ConstSet_IntRange;
+const Src = '''
+    program P;
+    type TByteSet = set of Byte;
+    const C: TByteSet = [1..3];
+    var I: Integer;
+    begin
+      for I := 0 to 4 do
+        if I in C then WriteLn('y') else WriteLn('n')
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'n' + LE + 'y' + LE + 'y' + LE + 'y' + LE + 'n' + LE, 0);
+end;
+
+procedure TE2ESetOpsTests.TestRun_ConstSet_MixedRangeAndLiteral;
+const Src = '''
+    program P;
+    type TByteSet = set of Byte;
+    const C: TByteSet = [10..12, 20];
+    begin
+      if 11 in C then WriteLn('y') else WriteLn('n');
+      if 20 in C then WriteLn('y') else WriteLn('n');
+      if 15 in C then WriteLn('y') else WriteLn('n')
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'y' + LE + 'y' + LE + 'n' + LE, 0);
+end;
+
+procedure TE2ESetOpsTests.TestRun_ConstSet_JumboWithRange;
+{ Edge case: a jumbo (>64-member) Byte set built from a const with a range and
+  high values — exercises the byte-bitmap const path. }
+const Src = '''
+    program P;
+    type TByteSet = set of Byte;
+    const C: TByteSet = [200, 201..205, 0];
+    begin
+      if 203 in C then WriteLn('y') else WriteLn('n');
+      if 0 in C then WriteLn('y') else WriteLn('n');
+      if 100 in C then WriteLn('y') else WriteLn('n')
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'y' + LE + 'y' + LE + 'n' + LE, 0);
+end;
+
+procedure TE2ESetOpsTests.TestRun_ConstSet_EnumStillWorks;
+{ Regression: enum-member const sets (the original supported form) still work. }
+const Src = '''
+    program P;
+    type
+      TColor = (Red, Green, Blue, Yellow);
+      TColors = set of TColor;
+    const Warm: TColors = [Red, Yellow];
+    begin
+      if Red in Warm then WriteLn('y') else WriteLn('n');
+      if Green in Warm then WriteLn('y') else WriteLn('n')
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'y' + LE + 'n' + LE, 0);
 end;
 
 initialization
