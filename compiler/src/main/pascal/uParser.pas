@@ -269,9 +269,23 @@ begin
       Highs := TStringList.Create();
       try
         repeat
-          Lows.Add(Self.ReadConstBoundText());
-          Expect(tkDotDot);
-          Highs.Add(Self.ReadConstBoundText());
+          { An enum-type dimension is a bare identifier NOT followed by '..'
+            (e.g. the TEnum dimensions in 'array[TEnum, 0..1]').  Encode it as
+            0 .. @TEnum so the range-indexed type resolver folds the high bound
+            to the enum's last ordinal — the same '@TEnum' convention used for
+            the single-dimension 'array[TEnum]' form above. }
+          if Check(tkIdent) and (PeekKind() <> tkDotDot) then
+          begin
+            Lows.Add('0');
+            Highs.Add('@' + FCurrent.Value);
+            Advance();
+          end
+          else
+          begin
+            Lows.Add(Self.ReadConstBoundText());
+            Expect(tkDotDot);
+            Highs.Add(Self.ReadConstBoundText());
+          end;
           if not Check(tkComma) then
             Break;
           Advance();  { consume ',' — next dimension }
@@ -1031,6 +1045,18 @@ procedure TParser.ReadConstArrayDim(CD: TConstDecl);
 var
   LoText, HiText: string;
 begin
+  { An enum-type dimension is a bare identifier NOT followed by '..' (e.g. the
+    TEnum in 'array[TEnum, 0..1]').  Encode it as the range 0 .. @TEnum so the
+    semantic pass resolves the high bound to the enum's last ordinal — the same
+    convention used for single-dimension 'array[@TEnum]'. }
+  if Check(tkIdent) and (PeekKind() <> tkDotDot) then
+  begin
+    CD.ArrayDimLows.Add('0');
+    CD.ArrayDimHighs.Add('@' + FCurrent.Value);
+    Advance();
+    CD.ArrayIsRangeIndexed := True;
+    Exit;
+  end;
   LoText := Self.ReadConstBoundText();
   Expect(tkDotDot);
   HiText := Self.ReadConstBoundText();

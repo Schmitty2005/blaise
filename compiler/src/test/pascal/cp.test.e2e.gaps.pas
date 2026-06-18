@@ -68,6 +68,11 @@ type
     procedure TestRun_ArrayConst_ElementWidths;
     procedure TestRun_ArrayConst_NegativeInts;
     procedure TestRun_ArrayConst_EnumIndexedBool;
+    { Enum-indexed multi-dimensional arrays (GitHub #128) }
+    procedure TestRun_EnumBidimArray_Const;
+    procedure TestRun_EnumBidimArray_MixedDims;
+    procedure TestRun_EnumBidimArray_TypeAndVar;
+    procedure TestRun_EnumBidimArray_ThreeDims;
 
     { Static array return by value (GitHub #112) }
     procedure TestRun_StaticArrayReturn_12Bytes;
@@ -913,6 +918,90 @@ const
 begin
   AssertRunsOnAll(Src,
     'open' + Chr(10) + 'closed' + Chr(10) + 'open' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_EnumBidimArray_Const;
+{ GitHub #128: a 2-D array const indexed by an enum in both dimensions —
+  array[TEnum, TEnum] — previously failed to parse ("Expected '..' but got
+  ','"). }
+const
+  Src =
+    '''
+    program P;
+    type TEnum = (one, two);
+    const d: array[TEnum, TEnum] of byte = ((1, 2), (3, 4));
+    begin
+      WriteLn(d[one, one]);
+      WriteLn(d[one, two]);
+      WriteLn(d[two, one]);
+      WriteLn(d[two, two])
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src,
+    '1' + Chr(10) + '2' + Chr(10) + '3' + Chr(10) + '4' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_EnumBidimArray_MixedDims;
+{ Mixed dimensions: an enum dimension and an integer-range dimension together,
+  in both orders. }
+const
+  Src =
+    '''
+    program P;
+    type TE = (a, b);
+    const
+      e: array[TE, 0..1] of byte = ((5, 6), (7, 8));
+      f: array[0..1, TE] of byte = ((10, 20), (30, 40));
+    begin
+      WriteLn(e[a, 0]);
+      WriteLn(e[b, 1]);
+      WriteLn(f[0, a]);
+      WriteLn(f[1, b])
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src,
+    '5' + Chr(10) + '8' + Chr(10) + '10' + Chr(10) + '40' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_EnumBidimArray_TypeAndVar;
+{ The same enum-indexed multi-dim form in a type declaration and a var. }
+const
+  Src =
+    '''
+    program P;
+    type
+      TE = (a, b, c);
+      TGrid = array[TE, TE] of byte;
+    var g: TGrid;
+    begin
+      g[a, c] := 5;
+      g[c, a] := 9;
+      WriteLn(g[a, c]);
+      WriteLn(g[c, a])
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, '5' + Chr(10) + '9' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_EnumBidimArray_ThreeDims;
+{ Three dimensions, enum + range + enum. }
+const
+  Src =
+    '''
+    program P;
+    type TE = (a, b);
+    const m: array[TE, 0..1, TE] of byte =
+      (((1,2),(3,4)), ((5,6),(7,8)));
+    begin
+      WriteLn(m[a, 0, a]);
+      WriteLn(m[b, 1, b])
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, '1' + Chr(10) + '8' + Chr(10), 0);
 end;
 
 procedure TE2EGapTests.TestRun_IntfSret_SixArgs_DirectClassCall;

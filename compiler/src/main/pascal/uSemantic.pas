@@ -3907,6 +3907,18 @@ var
 begin
   if IsPlainInt(ABoundText) then
     Exit(Integer(StrToInt(ABoundText)));
+  { Enum-type dimension marker '@TEnum' (see ReadConstArrayDim): the high bound
+    of an enum-indexed dimension is the enum's last ordinal (member count - 1).
+    The low bound is always 0, stored as plain '0'. }
+  if (Length(ABoundText) > 0) and (ABoundText[0] = '@') then
+  begin
+    Sym := FTable.Lookup(Copy(ABoundText, 1, Length(ABoundText) - 1));
+    if (Sym <> nil) and (Sym.Kind = skType) and (Sym.TypeDesc <> nil) and
+       (Sym.TypeDesc.Kind = tyEnum) then
+      Exit(TEnumTypeDesc(Sym.TypeDesc).Members.Count - 1);
+    SemanticError(Format('Unknown enum type ''%s'' in array dimension',
+      [Copy(ABoundText, 1, Length(ABoundText) - 1)]), 0, 0);
+  end;
   Sym := FTable.Lookup(ABoundText);
   if (Sym <> nil) and (Sym.Kind = skConstant) then
     Exit(Integer(Sym.ConstValue));
