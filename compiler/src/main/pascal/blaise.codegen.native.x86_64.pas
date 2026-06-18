@@ -589,6 +589,10 @@ type
     function CountArgSlots(AParams: TObjectList): Integer;
     { Bounds-checked System V integer-arg-register accessor (raises if > 5). }
     function SysVArg64(AIndex: Integer): string;
+    { Consume ASlots pushed arg slots into SysV registers from index ABase,
+      spilling any overflow to the stack.  Returns overflow bytes to clean up
+      after the call.  Used by the interface/class sret call emitters. }
+    function EmitSretRegArgs(ASlots, ABase: Integer): Integer;
     { Emit a method-pointer (of-object) call: load Code from offset 0 and Data
       from offset 8 of the TMethod block at APtrOperand; call Code with Data as
       Self (%rdi) and the remaining args shifted. }
@@ -3424,6 +3428,29 @@ begin
   Offset   := 0;
   StackOff := 16;  { first stack arg: +16(%rbp) — above saved %rbp and ret addr }
 
+  { Determine sret-ness UP FRONT.  The hidden sret buffer pointer consumes an
+    integer register (%rdi), which shifts where the visible params land — so the
+    param-register accounting below must know this before assigning slots.  This
+    classification was historically done only when allocating the Result slot
+    (further down), i.e. AFTER the param loop, leaving FSretFunc stale from the
+    previous function and mis-placing a stack-passed param of an sret method as
+    the last register param. }
+  FSretFunc := False;
+  FRecRetClass := rcSret;
+  if ADecl.ResolvedReturnType <> nil then
+  begin
+    if (ADecl.ResolvedReturnType.Kind = tyInterface) or
+       IsJumboSet(ADecl.ResolvedReturnType) or
+       (ADecl.ResolvedReturnType.Kind = tyStaticArray) then
+      FSretFunc := True
+    else if ADecl.ResolvedReturnType.Kind = tyRecord then
+    begin
+      FRecRetClass := ClassifyRecordReturn(
+        TRecordTypeDesc(ADecl.ResolvedReturnType));
+      FSretFunc := FRecRetClass = rcSret;
+    end;
+  end;
+
   { Captured outer-scope variables are prepended as implicit leading pointer
     params before Self and normal params.  Each captured var gets a pointer-size
     slot named '_cap_<VarName>' in the frame. }
@@ -3442,11 +3469,18 @@ begin
     high index.  Track IntIdx2 separately from the logical param index I. }
   begin
     IntIdx2 := 0;
-    { Captured vars, Self and sret each consume one integer register slot. }
+    { Captured vars, the sret buffer pointer, and Self EACH consume one integer
+      register slot, and they stack: an sret-returning class/interface method
+      uses %rdi for the buffer AND %rsi for Self, so the count must include
+      BOTH (not one or the other).  This mirrors the prologue spill loop, which
+      sets IntIdx := 1 for sret then Inc's again for Self; the two must agree or
+      a stack-passed param is mistaken for the last register param. }
     if (ADecl.CapturedVars <> nil) then
       Inc(IntIdx2, ADecl.CapturedVars.Count);
-    if (ADecl.OwnerTypeName <> '') or FSretFunc then
-      Inc(IntIdx2);  { Self / sret already consumed one register }
+    if FSretFunc then
+      Inc(IntIdx2);  { sret buffer pointer in %rdi }
+    if (ADecl.OwnerTypeName <> '') then
+      Inc(IntIdx2);  { Self in the next integer register }
     for I := 0 to ADecl.Params.Count - 1 do
     begin
       P := TMethodParam(ADecl.Params.Items[I]);
@@ -3537,33 +3571,14 @@ begin
     VarOperand returns the slot address (not the record address).
     For small POD records that qualify for register return, Result is a local
     buffer and the epilogue loads it into rax/rdx/xmm0/xmm1. }
+  { FSretFunc / FRecRetClass were classified up front (see top of BuildFrame).
+    Here we only allocate the Result slot: an sret return stores the incoming
+    hidden buffer pointer (record/interface/jumbo-set/static-array), so the slot
+    is pointer-sized; a register-returned record / scalar gets a typed slot. }
   if ADecl.ResolvedReturnType <> nil then
   begin
-    if (ADecl.ResolvedReturnType.Kind = tyInterface) or
-       IsJumboSet(ADecl.ResolvedReturnType) then
-    begin
-      { Interface and jumbo-set returns are sret: a hidden pointer arg; the
-        Result slot holds that pointer. }
-      FSretFunc := True;
-      Self.AddSlot('Result', nil, Offset);
-    end
-    else if ADecl.ResolvedReturnType.Kind = tyStaticArray then
-    begin
-      FSretFunc := True;
-      Self.AddSlot('Result', nil, Offset);
-    end
-    else if ADecl.ResolvedReturnType.Kind = tyRecord then
-    begin
-      FRecRetClass := ClassifyRecordReturn(
-        TRecordTypeDesc(ADecl.ResolvedReturnType));
-      if FRecRetClass = rcSret then
-      begin
-        FSretFunc := True;
-        Self.AddSlot('Result', nil, Offset);
-      end
-      else
-        Self.AddSlot('Result', ADecl.ResolvedReturnType, Offset);
-    end
+    if FSretFunc then
+      Self.AddSlot('Result', nil, Offset)
     else
       Self.AddSlot('Result', ADecl.ResolvedReturnType, Offset);
   end;
@@ -7882,6 +7897,71 @@ begin
     else
       Inc(Result);
   end;
+end;
+
+{ Consume ASlots argument slots already pushed onto the stack (slot 0 pushed
+  first, so slot 0 is at the highest address and slot ASlots-1 is on top) into
+  the System V integer argument registers starting at register index ABase
+  (ABase = 1 when only %rdi is pre-reserved for the sret buffer, ABase = 2 when
+  %rdi=sret buffer and %rsi=receiver/Self are both pre-reserved).
+
+  The first (6 - ABase) slots map to the remaining integer registers; any
+  further slots overflow onto the stack per the System V ABI.
+
+  Stack geometry (offsets from %rsp on entry, all in bytes):
+    slot i lives at (ASlots-1-i)*8.  So the RegSlots register-mapped slots
+    (i = 0..RegSlots-1) occupy the HIGH offsets and the overflow slots
+    (i = RegSlots..ASlots-1) occupy the LOW offsets — but in reverse order
+    (slot ASlots-1 at offset 0).  System V wants the lowest-indexed overflow
+    slot at the lowest address at call time.
+
+  Strategy: load the register slots with `movq` (not pop).  Then relocate the
+  overflow slots into the HIGH part of the region (just below the sret buffer)
+  in ascending index order, and raise %rsp past the vacated register-slot
+  space so the overflow ends up at 0(%rsp).., slot RegSlots first.  The
+  relocation runs highest-target-first so a target never overwrites an
+  as-yet-unmoved source.
+
+  Returns the number of stack bytes occupied by overflow arguments at call time;
+  the caller must `addq` this back after the call (before any sret-buffer slide).
+  For ASlots <= (6 - ABase) the result is 0 and the stack is fully consumed. }
+function TX86_64Backend.EmitSretRegArgs(ASlots, ABase: Integer): Integer;
+var
+  RegSlots, OverflowSlots, K, SrcOff, DstOff: Integer;
+begin
+  RegSlots := 6 - ABase;
+  if RegSlots < 0 then RegSlots := 0;
+  if ASlots <= RegSlots then
+  begin
+    { Fast path: everything fits in registers — pop top-down as before. }
+    for K := ASlots - 1 downto 0 do
+      Self.Emit(#9'popq ' + Self.SysVArg64(K + ABase));
+    Result := 0;
+    Exit;
+  end;
+  OverflowSlots := ASlots - RegSlots;
+  { Load the register-mapped slots (slots 0 .. RegSlots-1). }
+  for K := 0 to RegSlots - 1 do
+    Self.Emit(Format(#9'movq %d(%%rsp), %s',
+      [(ASlots - 1 - K) * 8, Self.SysVArg64(K + ABase)]));
+  { Relocate overflow slot (RegSlots + K) from its source offset to its final
+    offset (RegSlots + K)*8.  Highest target first so live low-offset sources
+    are not clobbered. }
+  for K := OverflowSlots - 1 downto 0 do
+  begin
+    SrcOff := (ASlots - 1 - (RegSlots + K)) * 8;
+    DstOff := (RegSlots + K) * 8;
+    if SrcOff <> DstOff then
+    begin
+      Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [SrcOff]));
+      Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [DstOff]));
+    end;
+  end;
+  { Raise %rsp past the vacated register-slot space; overflow now sits at
+    0(%rsp).. with slot RegSlots first. }
+  if RegSlots > 0 then
+    Self.Emit(Format(#9'addq $%d, %%rsp', [RegSlots * 8]));
+  Result := OverflowSlots * 8;
 end;
 
 { Emit a TMethodCallStmt (class method call in statement position).
@@ -13339,6 +13419,7 @@ var
   HK:     TList<Integer>;
   HTotal: Integer;
   Pushed: Integer;
+  OverflowBytes: Integer;
 begin
   MD := TMethodDecl(ACall.ResolvedDecl);
   FSym := FuncSymbolOf(ACall);
@@ -13381,13 +13462,15 @@ begin
       end;
     end;
     Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
-    for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
-      Self.Emit(#9'popq ' + SysVArg64(I + 2));
+    { Consume args (base 2: %rdi = sret buffer, %rsi = Self); spill overflow. }
+    OverflowBytes := Self.EmitSretRegArgs(Self.CountArgSlots(MD.Params), 2);
     Self.Emit(#9'movq %r10, %rsi');
     Self.Emit(#9'movq %rsp, %rdi');
+    if OverflowBytes > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rdi', [OverflowBytes]));
     Self.Emit(#9'callq ' + FSym);
   end
-  else if ArgCnt <= 5 then
+  else
   begin
     Pushed := 0;
     for I := 0 to ArgCnt - 1 do
@@ -13401,14 +13484,16 @@ begin
       Self.Emit(#9'pushq %rax');
       Pushed := Pushed + 8;
     end;
-    for I := ArgCnt - 1 downto 0 do
-      Self.Emit(#9'popq ' + SysVArg64(I + 1));
+    { Consume args (base 1: %rdi = sret buffer); spill overflow. }
+    OverflowBytes := Self.EmitSretRegArgs(ArgCnt, 1);
     Self.Emit(#9'movq %rsp, %rdi');
+    if OverflowBytes > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rdi', [OverflowBytes]));
     Self.Emit(#9'callq ' + FSym);
-  end
-  else
-    raise ENativeCodeGenError.Create(
-      'native backend: interface sret with >5 args not yet supported');
+  end;
+  { Reclaim overflow stack args before touching the sret buffer. }
+  if OverflowBytes > 0 then
+    Self.Emit(Format(#9'addq $%d, %%rsp', [OverflowBytes]));
   { Post-call: release hoisted values (the 16-byte buffer sits between %rsp
     and the region), then slide the buffer down over the region so the
     caller's contract holds. }
@@ -13435,6 +13520,7 @@ var
   HTotal, Pushed: Integer;
   VFlags: string;
   IE: TIdentExpr;
+  OverflowBytes: Integer;
 begin
   IntfD := TInterfaceTypeDesc(ACall.ResolvedClassType);
   ArgN := 0;
@@ -13580,11 +13666,17 @@ begin
     else
       Inc(SlotOff);
   end;
-  for I := SlotOff - 1 downto 0 do
-    Self.Emit(#9'popq ' + SysVArg64(I + 2));
+  { Consume args (base 2: %rdi = sret buffer, %rsi = receiver obj); spill
+    overflow slots beyond the 4 remaining registers to the stack. }
+  OverflowBytes := Self.EmitSretRegArgs(SlotOff, 2);
   Self.Emit(#9'movq %r10, %rsi');
   Self.Emit(#9'movq %rsp, %rdi');
+  if OverflowBytes > 0 then
+    Self.Emit(Format(#9'addq $%d, %%rdi', [OverflowBytes]));
   Self.Emit(#9'callq *%r11');
+  { Reclaim overflow stack args before touching the sret buffer. }
+  if OverflowBytes > 0 then
+    Self.Emit(Format(#9'addq $%d, %%rsp', [OverflowBytes]));
   { Post-call: release hoisted values, then slide the buffer down over the
     hoist region so the caller's `fat pointer at (%rsp)` contract holds. }
   Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 16, False);
@@ -13612,6 +13704,7 @@ var
   HK: TList<Integer>;
   HTotal: Integer;
   Pushed: Integer;
+  OverflowBytes: Integer;
 begin
   MD := TMethodDecl(ACall.ResolvedMethod);
   if MD = nil then
@@ -13620,10 +13713,8 @@ begin
       ACall.Name + ')');
   Sym := MethodEmitNameNative(MD, MD.OwnerTypeName, ACall.Name);
   UserSlots := Self.CountArgSlots(MD.Params);
-  { %rdi = sret buffer, %rsi = Self leave four integer arg registers. }
-  if UserSlots > 4 then
-    raise ENativeCodeGenError.Create(
-      'native backend: class sret interface call with >4 arg slots not yet supported');
+  { %rdi = sret buffer, %rsi = Self leave four integer arg registers; further
+    slots spill to the stack via EmitSretRegArgs (ABase = 2). }
   { Hoist region BELOW the sret buffer — same layout rationale as
     EmitIntfSretCall. }
   HD := TList<Integer>.Create();
@@ -13675,11 +13766,13 @@ begin
   end
   else
     Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
-  { Pop args shifted by 2: %rdi = sret buffer, %rsi = receiver. }
-  for I := UserSlots - 1 downto 0 do
-    Self.Emit(#9'popq ' + SysVArg64(I + 2));
+  { Consume args into registers (shifted by 2: %rdi = sret buffer,
+    %rsi = receiver); slots beyond the 4 remaining registers spill. }
+  OverflowBytes := Self.EmitSretRegArgs(UserSlots, 2);
   Self.Emit(#9'movq %r10, %rsi');
   Self.Emit(#9'movq %rsp, %rdi');
+  if OverflowBytes > 0 then
+    Self.Emit(Format(#9'addq $%d, %%rdi', [OverflowBytes]));
   if MD.VTableSlot >= 0 then
   begin
     { Virtual dispatch through the receiver's vtable (slot 0 is the
@@ -13690,6 +13783,9 @@ begin
   end
   else
     Self.Emit(#9'callq ' + Sym);
+  { Reclaim any overflow stack args before touching the sret buffer. }
+  if OverflowBytes > 0 then
+    Self.Emit(Format(#9'addq $%d, %%rsp', [OverflowBytes]));
   { Post-call: release hoisted values, then slide the buffer down over the
     hoist region so the caller's `fat pointer at (%rsp)` contract holds. }
   Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 16, False);

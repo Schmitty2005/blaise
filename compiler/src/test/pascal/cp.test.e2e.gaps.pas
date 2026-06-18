@@ -74,6 +74,11 @@ type
 
     { Multi-arg WriteLn }
     procedure TestRun_WriteLn_MultipleArgs_MixedTypes;
+
+    { Interface-returning method with >5 args (native sret spill) }
+    procedure TestRun_IntfSret_SixArgs_DirectClassCall;
+    procedure TestRun_IntfSret_SixArgs_InterfaceDispatch;
+    procedure TestRun_IntfSret_SevenArgs_InterfaceDispatch;
   end;
 
 implementation
@@ -783,6 +788,123 @@ const
     ''';
 begin
   AssertRunsOnAll(Src, '10' + Chr(10) + '20' + Chr(10) + '30' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_IntfSret_SixArgs_DirectClassCall;
+{ Class instance whose method returns an interface and takes 6 Integer args.
+  On native this is the class-sret interface call path (>4 user arg slots);
+  it must spill the overflow args to the stack rather than raising. }
+const
+  Src =
+    '''
+    program P;
+    type
+      IFoo = interface
+        function Make(a, b, c, d, e, f: Integer): IFoo;
+        function Sum: Integer;
+      end;
+      TFoo = class(TObject, IFoo)
+        FTotal: Integer;
+        function Make(a, b, c, d, e, f: Integer): IFoo;
+        function Sum: Integer;
+      end;
+    function TFoo.Make(a, b, c, d, e, f: Integer): IFoo;
+    begin
+      FTotal := a + b + c + d + e + f;
+      Result := Self;
+    end;
+    function TFoo.Sum: Integer;
+    begin
+      Result := FTotal;
+    end;
+    var
+      F: TFoo;
+      R: IFoo;
+    begin
+      F := TFoo.Create();
+      R := F.Make(1, 2, 3, 4, 5, 6);
+      WriteLn(R.Sum)
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, '21' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_IntfSret_SixArgs_InterfaceDispatch;
+{ Same method called through an interface reference — the interface-dispatch
+  sret path (receiver + sret buffer + 6 args overflow the registers). }
+const
+  Src =
+    '''
+    program P;
+    type
+      IFoo = interface
+        function Make(a, b, c, d, e, f: Integer): IFoo;
+        function Sum: Integer;
+      end;
+      TFoo = class(TObject, IFoo)
+        FTotal: Integer;
+        function Make(a, b, c, d, e, f: Integer): IFoo;
+        function Sum: Integer;
+      end;
+    function TFoo.Make(a, b, c, d, e, f: Integer): IFoo;
+    begin
+      FTotal := a + b + c + d + e + f;
+      Result := Self;
+    end;
+    function TFoo.Sum: Integer;
+    begin
+      Result := FTotal;
+    end;
+    var
+      F: IFoo;
+      R: IFoo;
+    begin
+      F := TFoo.Create();
+      R := F.Make(10, 20, 30, 40, 50, 60);
+      WriteLn(R.Sum)
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, '210' + Chr(10), 0);
+end;
+
+procedure TE2EGapTests.TestRun_IntfSret_SevenArgs_InterfaceDispatch;
+{ Seven args through an interface reference — two overflow slots. }
+const
+  Src =
+    '''
+    program P;
+    type
+      IFoo = interface
+        function Make(a, b, c, d, e, f, g: Integer): IFoo;
+        function Sum: Integer;
+      end;
+      TFoo = class(TObject, IFoo)
+        FTotal: Integer;
+        function Make(a, b, c, d, e, f, g: Integer): IFoo;
+        function Sum: Integer;
+      end;
+    function TFoo.Make(a, b, c, d, e, f, g: Integer): IFoo;
+    begin
+      FTotal := a + b + c + d + e + f + g;
+      Result := Self;
+    end;
+    function TFoo.Sum: Integer;
+    begin
+      Result := FTotal;
+    end;
+    var
+      F: IFoo;
+      R: IFoo;
+    begin
+      F := TFoo.Create();
+      R := F.Make(1, 2, 3, 4, 5, 6, 7);
+      WriteLn(R.Sum)
+    end.
+    ''';
+begin
+  AssertRunsOnAll(Src, '28' + Chr(10), 0);
 end;
 
 initialization
