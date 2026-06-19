@@ -608,17 +608,35 @@ begin
   S := TrimStr(ALine);
   if (Length(S) = 0) or (S[0]= Ord('#')) then Exit;
 
-  { Strip trailing comment }
+  { Strip trailing comment, but skip over quoted strings so that '#'
+    inside .ascii "..." is not mistaken for a comment start. }
   P := 0;
   while P < Length(S) do
   begin
-    if S[P]= Ord('#') then
+    if S[P] = Ord('"') then
+    begin
+      P := P + 1;
+      while P < Length(S) do
+      begin
+        if S[P] = Ord('\') then
+          P := P + 2
+        else if S[P] = Ord('"') then
+        begin
+          P := P + 1;
+          break;
+        end
+        else
+          P := P + 1;
+      end;
+    end
+    else if S[P] = Ord('#') then
     begin
       S := Copy(S, 0, P);
       S := TrimStr(S);
       break;
-    end;
-    P := P + 1;
+    end
+    else
+      P := P + 1;
   end;
   if Length(S) = 0 then Exit;
 
@@ -2387,6 +2405,29 @@ begin
             else if C = Ord('0') then Buf := Buf + #0
             else if C = '\' then Buf := Buf + '\'
             else if C = Ord('"') then Buf := Buf + '"'
+            else if (C = Ord('x')) or (C = Ord('X')) then
+            begin
+              { Hex escape: \xHH — 1 or 2 hex digits }
+              Val := 0;
+              if (I + 1 < Len) and IsHexDigit(Args[I + 1]) then
+              begin
+                I := I + 1;
+                C := Args[I];
+                if IsDigit(C) then Val := Ord(C) - Ord('0')
+                else if (C >= Ord('a')) and (C <= Ord('f')) then Val := 10 + Ord(C) - Ord('a')
+                else Val := 10 + Ord(C) - Ord('A');
+                if (I + 1 < Len) and IsHexDigit(Args[I + 1]) then
+                begin
+                  I := I + 1;
+                  C := Args[I];
+                  Val := Val * 16;
+                  if IsDigit(C) then Val := Val + Ord(C) - Ord('0')
+                  else if (C >= Ord('a')) and (C <= Ord('f')) then Val := Val + 10 + Ord(C) - Ord('a')
+                  else Val := Val + 10 + Ord(C) - Ord('A');
+                end;
+              end;
+              Buf := Buf + Chr(Integer(Val));
+            end
             else if IsDigit(C) then
             begin
               { Octal escape }
