@@ -4897,3 +4897,64 @@ standard `TStaticArrayTypeDesc` with bounds `0..N-1`.
   descriptor erases the index origin after semantic analysis, storing only
   integer bounds.  This simplifies the codegen and is consistent with how
   const-array enum indexing already works.
+
+== Native Backend and Internal Toolchain as Default
+
+=== Decision
+
+As of v0.12.0, the *native* x86-64 backend is the default code generator, and
+the in-process *internal assembler* (`blaise.assembler.x86_64`) and *internal
+linker* (`blaise.linker.elf`) are the default toolchain.  A complete
+source-to-executable build invokes no external tools — only the host's C
+runtime startup objects (`crt1.o`, `crti.o`, `crtn.o` from the distribution's
+libc development package) are read from disk.
+
+The QBE backend (`--backend qbe`) is retained but *deprecated*.  It continues to
+serve as a differential oracle for the native backend in the e2e test suite
+(every `AssertRunsOnAll` program is compiled and run under both backends, and
+their output is asserted equal), and the QBE self-hosting fixpoint
+(`scripts/fixpoint.sh`) remains a guard.  QBE is scheduled for removal in a
+later release once the native backend has accumulated sufficient field exposure.
+
+=== Rationale
+
+* *Toolchain independence.*  The original pipeline shelled out to `qbe`, then
+  `cc` to assemble, then `cc`/`ld` to link.  Each is an external dependency a
+  user must install and keep version-compatible.  The native backend plus
+  internal assembler and linker reduce the hard dependency to the C runtime
+  startup objects alone, which simplifies installation and makes the compiler's
+  output reproducible independent of the host toolchain version.
+
+* *Exact debug information.*  Only the native backend records precise codegen
+  facts (real frame-pointer offsets, per-statement line labels) consumed by the
+  OPDF debugger.  The QBE backend emits approximate AST-walk debug records.
+  Making native the default aligns the default build with the debuggable build.
+
+* *Self-hosting closure.*  The native pipeline reaches a clean self-hosting
+  fixpoint (`scripts/fixpoint-native.sh` — stage-2 and stage-3 native assembly
+  are byte-identical), so the compiler can rebuild itself end to end without QBE.
+
+=== Alternatives considered
+
+* *Remove QBE immediately.*  Rejected for v0.12.0.  QBE's value as an
+  independent second implementation — the parity oracle that surfaces native
+  codegen bugs the single-backend tests cannot — is highest precisely while the
+  native backend is still maturing.  Removal is deferred to a later release.
+
+* *Keep QBE as the default and ship native opt-in.*  Rejected.  This was the
+  prior state; it left the default build path different from the debuggable
+  build path and kept the external-tool dependency on the common path.
+
+=== Escape hatches
+
+The internal toolchain can be bypassed per invocation when diagnosing a
+suspected internal-assembler or internal-linker defect:
+
+* `--assembler external` — assemble the native `.s` with the host `cc` instead
+  of the internal assembler.
+* `--linker external` — link with the host `cc`/`ld` instead of the internal
+  linker.
+* `--backend qbe` — fall back to the QBE pipeline entirely (deprecated).
+
+The default native build emits a single whole-program object; `--incremental`
+opts in to per-unit object emission with a warm cache.

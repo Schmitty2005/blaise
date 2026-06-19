@@ -1,28 +1,35 @@
 #!/bin/bash
-# Internal-assembler conformance check for the Blaise self-hosting toolchain.
+# Internal-toolchain conformance check for the Blaise self-hosting toolchain.
 #
-# WHY THIS EXISTS, separately from fixpoint-native.sh:
+# WHAT IT GUARDS:
+#   The DEFAULT native pipeline since v0.12.0 is the in-process internal
+#   assembler (blaise.assembler.x86_64) + internal linker (blaise.linker.elf):
+#   source -> native .s -> internal assembler -> .o -> internal linker ->
+#   executable, with zero external tools (only distro CRT objects are read).
+#   This script asserts that the fully-internal pipeline produces a binary
+#   that BEHAVES identically to the trusted all-external (gcc assemble + gcc
+#   link) reference.
+#
+# WHY IT EXISTS, separately from fixpoint-native.sh:
 #   fixpoint-native.sh validates native CODEGEN by diffing the emitted .s
-#   text, but it assembles that text with the EXTERNAL assembler (gcc).
-#   The in-process internal assembler (blaise.assembler.x86_64, reached via
-#   --assembler internal) is a DIFFERENT .s -> object path that NEITHER
-#   fixpoint exercises.  A miscompilation that only corrupts the internal
-#   assembler's object output therefore passes both fixpoints cleanly
-#   (this is exactly how the sret-Result field-read bug hid; see bugs.txt
-#   2026-06-16).
+#   text, but it assembles + links that text with EXTERNAL gcc.  Neither the
+#   internal assembler nor the internal linker is on that path, so a defect
+#   in either silently passes both fixpoints (this is exactly how the
+#   sret-Result field-read bug hid; see bugs.txt 2026-06-16).  This script is
+#   the only fixpoint-level guard that drives both internal tools end to end.
 #
-# WHY THIS IS A DIFFERENTIAL CHECK, NOT A SELF-HOSTING FIXPOINT:
+# WHY IT IS A DIFFERENTIAL CHECK, NOT A SELF-HOSTING FIXPOINT:
 #   The internal assembler currently buffers the whole assembly + ELF
 #   object in memory, so assembling the compiler's own ~631k-line .s needs
-#   ~53 GB and OOM-kills.  A true "compile the compiler with itself via
-#   --assembler internal" fixpoint is therefore not feasible until the
-#   internal assembler streams its output.  Instead we compile a
-#   representative program that exercises the bug-prone paths (record-return
-#   sret-Result field reads, immutable string literals) BOTH ways and assert
-#   the internal-assembler binary BEHAVES identically (stdout + exit code) to
-#   the trusted external-assembler binary.  Note: the two assemblers may emit
-#   different-but-valid encodings, so a byte-level section compare would
-#   false-positive; behavioural equivalence is the sound invariant.
+#   ~53 GB and OOM-kills.  A true "compile the compiler with itself via the
+#   internal toolchain" fixpoint is therefore not feasible until the internal
+#   assembler streams its output.  Instead we compile a representative program
+#   that exercises the bug-prone paths (record-return sret-Result field reads,
+#   immutable string literals) BOTH ways and assert the internal-toolchain
+#   binary BEHAVES identically (stdout + exit code) to the all-external
+#   reference.  Note: the internal and external tools may emit
+#   different-but-valid encodings / section layouts, so a byte-level compare
+#   would false-positive; behavioural equivalence is the sound invariant.
 #
 # Requires: a native compiler at compiler/target/blaise (run the QBE
 # fixpoint or `pasbuild compile` first) and compiler/target/blaise_rtl.a.
@@ -99,25 +106,27 @@ PROBE_EOF
 
 echo "compiler: $COMPILER"
 
-echo "[1/3] compile probe with INTERNAL assembler"
+echo "[1/3] compile probe with INTERNAL assembler + INTERNAL linker (default pipeline)"
 if ! "$COMPILER" --source "$PROBE" $UNIT_ARGS \
-     --backend native --assembler internal --output /tmp/fpni_int 2>/tmp/fpni_int.err; then
+     --backend native --assembler internal --linker internal \
+     --output /tmp/fpni_int 2>/tmp/fpni_int.err; then
   echo "INTERNAL_COMPILE_FAIL"; head -5 /tmp/fpni_int.err; exit 2
 fi
 
-echo "[2/3] compile probe with EXTERNAL assembler (reference)"
+echo "[2/3] compile probe with EXTERNAL assembler + EXTERNAL linker (reference)"
 if ! "$COMPILER" --source "$PROBE" $UNIT_ARGS \
-     --backend native --assembler external --output /tmp/fpni_ext 2>/tmp/fpni_ext.err; then
+     --backend native --assembler external --linker external \
+     --output /tmp/fpni_ext 2>/tmp/fpni_ext.err; then
   echo "EXTERNAL_COMPILE_FAIL"; head -5 /tmp/fpni_ext.err; exit 3
 fi
 
 echo "[3/3] run both and compare stdout + exit code"
 # Behavioural equivalence is the sound invariant: the internal and external
-# assemblers may emit DIFFERENT-but-valid encodings for the same .s (so a
+# toolchains may emit DIFFERENT-but-valid encodings / section layouts (so a
 # byte-level .text/.rodata compare would false-positive), but a binary built
-# by the internal assembler must BEHAVE identically to the external-assembler
-# reference.  The sret-Result bug broke exactly this (corrupted string
-# headers => wrong / garbage output), so stdout + exit code catch it.
+# by the internal assembler + internal linker must BEHAVE identically to the
+# all-external reference.  The sret-Result bug broke exactly this (corrupted
+# string headers => wrong / garbage output), so stdout + exit code catch it.
 # Disable -e around the runs: a miscompiled internal binary may crash
 # (e.g. SIGSEGV from a corrupted string header), and we must REPORT that as
 # a guard failure rather than let -e abort the script mid-diagnostic.

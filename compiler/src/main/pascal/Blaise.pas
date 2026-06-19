@@ -61,8 +61,13 @@ begin
       if I > 0 then
         Result := Result + ' | ';
       Result := Result + Names.Strings[I];
-      if ParseBackendName(Names.Strings[I], K) and (K = bkNative) then
-        Result := Result + ' (default)';
+      if ParseBackendName(Names.Strings[I], K) then
+      begin
+        if K = bkNative then
+          Result := Result + ' (default)'
+        else if K = bkQBE then
+          Result := Result + ' (deprecated)';
+      end;
     end;
   finally
     Names.Free();
