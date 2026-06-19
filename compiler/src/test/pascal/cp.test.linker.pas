@@ -95,6 +95,30 @@ type
     procedure TestRun_DynHelloWorld;
   end;
 
+  TInternalLinkerE2ETests = class(TTestCase)
+  private
+    FScratch: string;
+    FCompiler: string;
+    FRTLPath: string;
+    FStdlibPath: string;
+    FCounter: Integer;
+    function ProjectRoot: string;
+    function CompilerAvailable: Boolean;
+    function RunProc(const AExe: string; AArgs: array of string;
+      out AStdout: string): Integer;
+    function RunProcNoArgs(const AExe: string;
+      out AStdout: string): Integer;
+    function CompileAndRun(const ASrc: string;
+      out AStdout: string; out AExitCode: Integer): Boolean;
+  protected
+    procedure SetUp; override;
+  published
+    procedure TestRun_HelloWorld;
+    procedure TestRun_StringOps;
+    procedure TestRun_ExceptionHandling;
+    procedure TestRun_ClassAndVirtual;
+  end;
+
 implementation
 
 function TElfReaderTests.ProjectRoot: string;
@@ -1119,6 +1143,250 @@ begin
   AssertEquals('stdout', 'Hello, dynlink!' + Chr(10), Output);
 end;
 
+{ ---- TInternalLinkerE2ETests ---- }
+
+var
+  GIntLinkSkipNoted: Boolean = False;
+
+function TInternalLinkerE2ETests.ProjectRoot: string;
+var
+  Dir, Parent: string;
+  Steps: Integer;
+begin
+  Result := GetEnvironmentVariable('BLAISE_PROJECT_ROOT');
+  if Result <> '' then
+  begin
+    Result := IncludeTrailingPathDelimiter(Result);
+    Exit;
+  end;
+  Dir := GetCurrentDir();
+  for Steps := 0 to 5 do
+  begin
+    if DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'vendor/qbe') and
+       DirectoryExists(IncludeTrailingPathDelimiter(Dir) + 'runtime') then
+    begin
+      Result := IncludeTrailingPathDelimiter(Dir);
+      Exit;
+    end;
+    Parent := ExtractFileDir(Dir);
+    if (Parent = '') or (Parent = Dir) then Break;
+    Dir := Parent;
+  end;
+  Result := IncludeTrailingPathDelimiter(GetCurrentDir());
+end;
+
+procedure TInternalLinkerE2ETests.SetUp;
+begin
+  inherited SetUp();
+  FCompiler := ProjectRoot() + 'compiler/target/blaise';
+  FRTLPath := ProjectRoot() + 'runtime/src/main/pascal';
+  FStdlibPath := ProjectRoot() + 'stdlib/src/main/pascal';
+  FScratch := ProjectRoot() + 'compiler/target/intlink_scratch/';
+  ForceDirectories(FScratch);
+  FCounter := 0;
+end;
+
+function TInternalLinkerE2ETests.CompilerAvailable: Boolean;
+begin
+  Result := FileExists(FCompiler) and
+            FileExists(ProjectRoot() + 'compiler/target/blaise_rtl.a');
+  if (not Result) and (not GIntLinkSkipNoted) then
+  begin
+    GIntLinkSkipNoted := True;
+    WriteLn(StdErr, 'note: TInternalLinkerE2ETests skipped — compiler binary "',
+            FCompiler, '" not found');
+  end;
+end;
+
+function TInternalLinkerE2ETests.RunProc(const AExe: string;
+  AArgs: array of string; out AStdout: string): Integer;
+var
+  Proc: TProcess;
+  I: Integer;
+  Chunk: string;
+begin
+  Proc := TProcess.Create(nil);
+  try
+    Proc.Executable := AExe;
+    for I := 0 to High(AArgs) do
+      Proc.Parameters.Add(AArgs[I]);
+    Proc.Execute();
+    AStdout := '';
+    repeat
+      Chunk := Proc.ReadOutput();
+      AStdout := AStdout + Chunk;
+    until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit();
+    Result := Proc.ExitCode;
+  finally
+    Proc.Free();
+  end;
+end;
+
+function TInternalLinkerE2ETests.RunProcNoArgs(const AExe: string;
+  out AStdout: string): Integer;
+var
+  Proc: TProcess;
+  Chunk: string;
+begin
+  Proc := TProcess.Create(nil);
+  try
+    Proc.Executable := AExe;
+    Proc.Execute();
+    AStdout := '';
+    repeat
+      Chunk := Proc.ReadOutput();
+      AStdout := AStdout + Chunk;
+    until (Chunk = '') and not Proc.Running;
+    Proc.WaitOnExit();
+    Result := Proc.ExitCode;
+  finally
+    Proc.Free();
+  end;
+end;
+
+function TInternalLinkerE2ETests.CompileAndRun(const ASrc: string;
+  out AStdout: string; out AExitCode: Integer): Boolean;
+var
+  SrcFile, OutFile, CompOut: string;
+  Rc: Integer;
+begin
+  Result := False;
+  if not Self.CompilerAvailable() then Exit;
+
+  FCounter := FCounter + 1;
+  SrcFile := FScratch + 'test_il_' + IntToStr(FCounter) + '.pas';
+  OutFile := FScratch + 'test_il_' + IntToStr(FCounter);
+
+  WriteFile(SrcFile, ASrc);
+
+  Rc := Self.RunProc(FCompiler, [
+    '--source', SrcFile,
+    '--unit-path', FRTLPath,
+    '--unit-path', FStdlibPath,
+    '--output', OutFile,
+    '--backend', 'native',
+    '--assembler', 'internal',
+    '--linker', 'internal'
+  ], CompOut);
+  if Rc <> 0 then
+    Fail('compile failed (rc=' + IntToStr(Rc) + '): ' + CompOut);
+
+  AExitCode := Self.RunProcNoArgs(OutFile, AStdout);
+  Result := True;
+end;
+
+procedure TInternalLinkerE2ETests.TestRun_HelloWorld;
+var
+  Out_: string;
+  EC: Integer;
+begin
+  if not CompileAndRun(
+    'program test_hello;' + LineEnding +
+    'begin' + LineEnding +
+    '  WriteLn(''Hello from internal linker'')' + LineEnding +
+    'end.',
+    Out_, EC) then
+  begin
+    Ignore('<toolchain-missing>');
+    Exit;
+  end;
+  AssertEquals('exit code', 0, EC);
+  AssertEquals('stdout', 'Hello from internal linker' + LineEnding, Out_);
+end;
+
+procedure TInternalLinkerE2ETests.TestRun_StringOps;
+var
+  Out_: string;
+  EC: Integer;
+begin
+  if not CompileAndRun(
+    'program test_str;' + LineEnding +
+    'uses SysUtils;' + LineEnding +
+    'begin' + LineEnding +
+    '  WriteLn(UpperCase(''hello''));' + LineEnding +
+    '  WriteLn(IntToStr(42));' + LineEnding +
+    '  WriteLn(Format(''%d+%d=%d'', [1, 2, 3]))' + LineEnding +
+    'end.',
+    Out_, EC) then
+  begin
+    Ignore('<toolchain-missing>');
+    Exit;
+  end;
+  AssertEquals('exit code', 0, EC);
+  AssertEquals('stdout',
+    'HELLO' + LineEnding +
+    '42' + LineEnding +
+    '1+2=3' + LineEnding, Out_);
+end;
+
+procedure TInternalLinkerE2ETests.TestRun_ExceptionHandling;
+var
+  Out_: string;
+  EC: Integer;
+begin
+  if not CompileAndRun(
+    'program test_exc;' + LineEnding +
+    'uses SysUtils;' + LineEnding +
+    'begin' + LineEnding +
+    '  try' + LineEnding +
+    '    raise Exception.Create(''boom'');' + LineEnding +
+    '  except' + LineEnding +
+    '    on E: Exception do' + LineEnding +
+    '      WriteLn(E.Message);' + LineEnding +
+    '  end;' + LineEnding +
+    '  WriteLn(''OK'')' + LineEnding +
+    'end.',
+    Out_, EC) then
+  begin
+    Ignore('<toolchain-missing>');
+    Exit;
+  end;
+  AssertEquals('exit code', 0, EC);
+  AssertEquals('stdout', 'boom' + LineEnding + 'OK' + LineEnding, Out_);
+end;
+
+procedure TInternalLinkerE2ETests.TestRun_ClassAndVirtual;
+var
+  Out_: string;
+  EC: Integer;
+begin
+  if not CompileAndRun(
+    'program test_cls;' + LineEnding +
+    'type' + LineEnding +
+    '  TBase = class' + LineEnding +
+    '    function Name: string; virtual;' + LineEnding +
+    '  end;' + LineEnding +
+    '  TChild = class(TBase)' + LineEnding +
+    '    function Name: string; override;' + LineEnding +
+    '  end;' + LineEnding +
+    'function TBase.Name: string;' + LineEnding +
+    'begin' + LineEnding +
+    '  Result := ''base'';' + LineEnding +
+    'end;' + LineEnding +
+    'function TChild.Name: string;' + LineEnding +
+    'begin' + LineEnding +
+    '  Result := ''child'';' + LineEnding +
+    'end;' + LineEnding +
+    'var' + LineEnding +
+    '  B: TBase;' + LineEnding +
+    'begin' + LineEnding +
+    '  B := TChild.Create();' + LineEnding +
+    '  try' + LineEnding +
+    '    WriteLn(B.Name())' + LineEnding +
+    '  finally' + LineEnding +
+    '    B.Free()' + LineEnding +
+    '  end' + LineEnding +
+    'end.',
+    Out_, EC) then
+  begin
+    Ignore('<toolchain-missing>');
+    Exit;
+  end;
+  AssertEquals('exit code', 0, EC);
+  AssertEquals('stdout', 'child' + LineEnding, Out_);
+end;
+
 initialization
   RegisterTest(TElfReaderTests);
   RegisterTest(TSectionMergerTests);
@@ -1126,5 +1394,6 @@ initialization
   RegisterTest(TLinkerE2ETests);
   RegisterTest(TDynLinkerTests);
   RegisterTest(TDynLinkerE2ETests);
+  RegisterTest(TInternalLinkerE2ETests);
 
 end.
