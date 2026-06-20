@@ -4282,6 +4282,14 @@ begin
       TD := FTable.TypeString
     else if CD.IsFloat then
       TD := FTable.TypeDouble
+    { Untyped integer constant: pick the width by magnitude so a value that does
+      not fit in 32 bits is NOT silently truncated to Integer (issue #133).  A
+      UInt64-range bit pattern (above High(Int64)) types as UInt64; a value
+      outside the signed 32-bit range types as Int64; otherwise Integer. }
+    else if CD.IsUInt64 then
+      TD := FTable.TypeUInt64
+    else if (CD.IntVal > 2147483647) or (CD.IntVal < -2147483648) then
+      TD := FTable.TypeInt64
     else
       TD := FTable.TypeInteger;
     Sym              := TSymbol.Create(CD.Name, skConstant, TD);

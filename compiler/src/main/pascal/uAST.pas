@@ -574,7 +574,8 @@ type
   public
     Name:           string;
     TypeName:       string;   { non-empty when a type annotation was written }
-    IntVal:         Int64;    { used when kind = integer }
+    IntVal:         Int64;    { used when kind = integer (bit pattern when IsUInt64) }
+    IsUInt64:       Boolean;  { value exceeded High(Int64): IntVal is the UInt64 bit pattern }
     StrVal:         string;   { used when IsString = True or IsFloat = True (raw text) }
     IsString:       Boolean;
     IsFloat:        Boolean;  { set when the rhs is a float literal }

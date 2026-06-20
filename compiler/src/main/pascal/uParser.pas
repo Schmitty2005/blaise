@@ -1395,13 +1395,18 @@ begin
     end
     else if Check(tkIntLit) then
     begin
-      CD.IntVal   := ParseIntLiteral(FCurrent.Value);
+      { Accept the full 64-bit unsigned range as a bit pattern (e.g.
+        $8080808080808080): ParseIntOrUInt64Literal yields the bit pattern and
+        flags when the value exceeded High(Int64).  This is the Int64/UInt64
+        hex-constant case from issue #133. }
+      ParseIntOrUInt64Literal(FCurrent.Value, CD.IntVal, CD.IsUInt64);
       CD.IsString := False;
       Advance();
       if CurrentIsConstBitOp() then
       begin
         CD.IntExprTokens := CollectConstBitOpExpr(IntToStr(CD.IntVal), False);
         CD.IntVal := 0;
+        CD.IsUInt64 := False;
       end;
     end
     else if Check(tkIdent) and (PeekKind() = tkLParen)

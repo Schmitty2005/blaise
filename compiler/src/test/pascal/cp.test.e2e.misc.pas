@@ -122,6 +122,15 @@ type
     { forward; in a program decl section (issue #130 bug2): the forward decl
       used to swallow the following implementation as a nested-proc body. }
     procedure TestRun_Forward_MutualRecursion;
+
+    { Large / 64-bit integer constants (issue #133): a hex value above 32 bits
+      was truncated (inferred Integer); a value above High(Int64) was rejected.
+      Untyped consts now widen by magnitude; typed Int64/UInt64 accept the full
+      64-bit bit pattern. }
+    procedure TestRun_Const_LargeHex_NotTruncated;
+    procedure TestRun_Const_Int64BitPattern;
+    procedure TestRun_Const_UInt64BitPattern;
+    procedure TestRun_Const_UntypedAboveInt64_IsUInt64;
   end;
 
 implementation
@@ -1222,6 +1231,58 @@ const
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src, '200 -7 250' + LE, 0);
+end;
+
+procedure TE2EMiscTests.TestRun_Const_LargeHex_NotTruncated;
+const
+  { $080808080808 = 8830587504648, needs 64 bits — must not truncate to 32. }
+  Src = '''
+    program P;
+    const DECI = $080808080808;
+    begin WriteLn(DECI) end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '8830587504648' + LE, 0);
+end;
+
+procedure TE2EMiscTests.TestRun_Const_Int64BitPattern;
+const
+  { $8080808080808080 as Int64 is the bit pattern -9187201950435737472. }
+  Src = '''
+    program P;
+    const A: Int64 = $8080808080808080;
+    begin WriteLn(A) end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '-9187201950435737472' + LE, 0);
+end;
+
+procedure TE2EMiscTests.TestRun_Const_UInt64BitPattern;
+const
+  { Same bits as UInt64 = 9259542123273814144. }
+  Src = '''
+    program P;
+    const A: UInt64 = $8080808080808080;
+    begin WriteLn(A) end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '9259542123273814144' + LE, 0);
+end;
+
+procedure TE2EMiscTests.TestRun_Const_UntypedAboveInt64_IsUInt64;
+const
+  { An untyped literal above High(Int64) types as UInt64 (matches Delphi). }
+  Src = '''
+    program P;
+    const A = $8080808080808080;
+    begin WriteLn(A) end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '9259542123273814144' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_Forward_MutualRecursion;
