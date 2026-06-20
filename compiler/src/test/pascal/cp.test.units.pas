@@ -41,6 +41,11 @@ type
     procedure TestParse_Unit_ForwardDeclHasNilBody;
     procedure TestParse_Unit_ImplHasFullBodies;
     procedure TestParse_Unit_ImplBodyIsNotNil;
+    { Nested procedure as the FIRST item in an impl routine's body must not be
+      mistaken for a second top-level decl (impl-section parser).  Andrew's
+      fix 82e770ac. }
+    procedure TestParse_Unit_ImplNestedProcFirst_SingleDecl;
+    procedure TestParse_Unit_ImplNestedProcFirst_HasBody;
     procedure TestParse_Unit_IntfTypeDecl;
     procedure TestParse_Unit_ForwardDeclParamCount;
     procedure TestParse_Unit_MultipleForwardDecls;
@@ -205,6 +210,29 @@ const
         end.
         ''';
 
+  { Implementation-section routine whose body leads with a nested procedure
+    declaration (no preceding var/const/type).  The outer routine must parse
+    as a single decl WITH a body, not split into two bodyless decls. }
+  SrcUnitNestedProcFirst =
+    '''
+        unit Nested;
+        interface
+        function Outer(N: Integer): Integer;
+        implementation
+        function Outer(N: Integer): Integer;
+          function Inner(X: Integer): Integer;
+          begin
+            Result := X + 1
+          end;
+        var
+          T: Integer;
+        begin
+          T := Inner(N);
+          Result := T
+        end;
+        end.
+        ''';
+
 { ------------------------------------------------------------------ }
 { Lexer tests                                                          }
 { ------------------------------------------------------------------ }
@@ -296,6 +324,28 @@ begin
   try
     MD := TMethodDecl(U.ImplBlock.ProcDecls[0]);
     AssertNotNull('impl body is not nil', MD.Body);
+  finally U.Free(); end;
+end;
+
+procedure TUnitTests.TestParse_Unit_ImplNestedProcFirst_SingleDecl;
+var U: TUnit;
+begin
+  U := ParseUnit(SrcUnitNestedProcFirst);
+  try
+    AssertEquals('impl has 1 decl (outer routine only)',
+      1, U.ImplBlock.ProcDecls.Count);
+  finally U.Free(); end;
+end;
+
+procedure TUnitTests.TestParse_Unit_ImplNestedProcFirst_HasBody;
+var U: TUnit; MD: TMethodDecl;
+begin
+  U := ParseUnit(SrcUnitNestedProcFirst);
+  try
+    MD := TMethodDecl(U.ImplBlock.ProcDecls[0]);
+    AssertNotNull('outer routine has a body', MD.Body);
+    AssertEquals('outer body holds the nested proc',
+      1, MD.Body.ProcDecls.Count);
   finally U.Free(); end;
 end;
 

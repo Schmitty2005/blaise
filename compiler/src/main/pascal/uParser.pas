@@ -3954,7 +3954,7 @@ begin
           Check(tkVar) or Check(tkThreadVar) or Check(tkConst) or Check(tkType) do
     begin
       if Check(tkFunction) then
-        Result.ImplBlock.ProcDecls.Add(ParseMethodDecl(True))
+        Result.ImplBlock.ProcDecls.Add(ParseMethodDecl(True, True))
       else if Check(tkVar) or Check(tkThreadVar) then
         ParseVarBlock(Result.ImplBlock)
       else if Check(tkConst) then
@@ -3962,7 +3962,12 @@ begin
       else if Check(tkType) then
         ParseTypeSection(Result.ImplBlock)
       else
-        Result.ImplBlock.ProcDecls.Add(ParseMethodDecl(False));
+        { ACanHaveNestedProcs=True: an impl routine whose body opens with a
+          nested procedure/function (before any var/const/type) must parse as
+          one routine WITH a body, not split into two bodyless decls.  The
+          IsForward guard inside ParseMethodDecl stops a forward decl from
+          swallowing the following sibling.  (Andrew's fix 82e770ac.) }
+        Result.ImplBlock.ProcDecls.Add(ParseMethodDecl(False, True));
     end;
 
     { Optional initialization / finalization sections }
