@@ -29,7 +29,8 @@ type
 
   TUnitLoader = class
   public
-    constructor Create(const ASearchPaths: TStringList);
+    constructor Create(const ASearchPaths: TStringList;
+                       const ADefines: TStringList = nil);
     destructor Destroy; override;
     { Returns an owned TObjectList of TUnit in dependency order (leaves
       first).  The caller is responsible for freeing the list.
@@ -54,6 +55,7 @@ type
     property PrebuiltObjectPaths: TStringList read FPrebuiltObjectPaths;
   private
     FSearchPaths:          TStringList;  { not owned }
+    FDefines:              TStringList;  { not owned — conditional symbols for each unit's lexer }
     FLoading:              TStringList;  { units currently on the load stack — cycle detection }
     FLoadedNames:          TStringList;  { units already fully loaded }
     FResult:               TObjectList;  { the in-progress output list (not owned here) }
@@ -214,11 +216,17 @@ var
   SL: TStringList;
   L:  TLexer;
   P:  TParser;
+  DI: Integer;
 begin
   SL := TStringList.Create();
   try
     SL.LoadFromFile(APath);
     L := TLexer.Create(SL.Text, APath);
+    { Apply the same -d/--define symbols the main program got, so IFDEF
+      directives resolve consistently across the program and all its units. }
+    if FDefines <> nil then
+      for DI := 0 to FDefines.Count - 1 do
+        L.AddDefine(FDefines.Strings[DI]);
     try
       P := TParser.Create(L);
       try
@@ -316,10 +324,12 @@ begin
   end;
 end;
 
-constructor TUnitLoader.Create(const ASearchPaths: TStringList);
+constructor TUnitLoader.Create(const ASearchPaths: TStringList;
+                               const ADefines: TStringList = nil);
 begin
   inherited Create();
   FSearchPaths := ASearchPaths;
+  FDefines     := ADefines;
   FLoading     := TStringList.Create();
   FLoading.CaseSensitive := False;
   FLoadedNames := TStringList.Create();

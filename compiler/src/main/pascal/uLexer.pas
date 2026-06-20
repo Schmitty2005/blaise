@@ -15,7 +15,7 @@ unit uLexer;
 interface
 
 uses
-  SysUtils, uPasTokeniser, uStrCompat;
+  SysUtils, Classes, uPasTokeniser, uStrCompat;
 
 type
   TTokenKind = (
@@ -125,16 +125,25 @@ type
   private
     FTok:  TFpgPascalTokeniser;
     FFilename: string;
+    FDefines:  TStringList;   { conditional-compilation symbols, case-insensitive }
     function MapKeyword(const AUpper: string): TTokenKind;
     function UnescapeString(const ARaw: string): string;
     function ProcessTextBlock(const ARaw: string): string;
     function DirectiveName(const AText: string): string;
+    function DirectiveArg(const AText: string): string;
+    function IsDefined(const ASym: string): Boolean;
+    procedure DefineSymbol(const ASym: string);
+    procedure UndefSymbol(const ASym: string);
+    procedure SeedPredefines;
     procedure SkipToElseOrEndif;
     procedure SkipToEndif;
   public
     constructor Create(const ASource: string; const AFilename: string = '');
     destructor Destroy; override;
     property Filename: string read FFilename;
+    { Define a conditional-compilation symbol before lexing (e.g. from the
+      -d command-line flag).  Case-insensitive. }
+    procedure AddDefine(const ASym: string);
     function Next: TToken;
   end;
 
@@ -157,12 +166,54 @@ begin
   FTok := TFpgPascalTokeniser.Create();
   FTok.SetSource(ASource);
   FFilename := AFilename;
+  FDefines := TStringList.Create();
+  FDefines.CaseSensitive := False;   { conditional symbols are case-insensitive }
+  Self.SeedPredefines();
 end;
 
 destructor TLexer.Destroy;
 begin
+  FDefines.Free();
   FTok.Free();
   inherited Destroy();
+end;
+
+{ Seed the always-on predefined conditional symbols.  BLAISE identifies this
+  compiler (the headline use case: cross-compiler IFDEF BLAISE / ELSE / ENDIF);
+  the CPU/OS symbols mirror the FPC family so portable source compiles
+  unchanged.  Targets beyond Linux/x86-64 will extend this set. }
+procedure TLexer.SeedPredefines;
+begin
+  Self.DefineSymbol('BLAISE');
+  Self.DefineSymbol('CPUX86_64');
+  Self.DefineSymbol('CPUAMD64');   { FPC's alias for the same target }
+  Self.DefineSymbol('LINUX');
+  Self.DefineSymbol('UNIX');
+end;
+
+function TLexer.IsDefined(const ASym: string): Boolean;
+begin
+  Result := FDefines.IndexOf(ASym) >= 0;
+end;
+
+procedure TLexer.DefineSymbol(const ASym: string);
+begin
+  if (ASym <> '') and (FDefines.IndexOf(ASym) < 0) then
+    FDefines.Add(ASym);
+end;
+
+procedure TLexer.UndefSymbol(const ASym: string);
+var
+  Idx: Integer;
+begin
+  Idx := FDefines.IndexOf(ASym);
+  if Idx >= 0 then
+    FDefines.Delete(Idx);
+end;
+
+procedure TLexer.AddDefine(const ASym: string);
+begin
+  Self.DefineSymbol(UpperCase(ASym));
 end;
 
 function TLexer.MapKeyword(const AUpper: string): TTokenKind;
@@ -392,6 +443,35 @@ begin
   end;
 end;
 
+{ The argument after the directive name, upper-cased: for an IFDEF Foo directive
+  returns 'FOO'.  Skips the name and any spaces, stops at the closing brace or
+  whitespace.  Returns '' when there is no argument. }
+function TLexer.DirectiveArg(const AText: string): string;
+var
+  I, C: Integer;
+begin
+  Result := '';
+  I := 2;  { skip '{$' }
+  { skip the directive name }
+  while I < Length(AText) do
+  begin
+    C := OrdAt(AText, I);
+    if (C = Ord('}')) or (C = Ord(' ')) then Break;
+    I := I + 1;
+  end;
+  { skip spaces between name and argument }
+  while (I < Length(AText)) and (OrdAt(AText, I) = Ord(' ')) do
+    I := I + 1;
+  { read the argument up to the closing brace or whitespace }
+  while I < Length(AText) do
+  begin
+    C := OrdAt(AText, I);
+    if (C = Ord('}')) or (C = Ord(' ')) then Break;
+    Result := Result + UpCase(Chr(C));
+    I := I + 1;
+  end;
+end;
+
 // Skip tokens from inside a FALSE conditional block until the matching
 // ELSE or ENDIF at depth 1 (handles nesting). Stops after consuming the token.
 procedure TLexer.SkipToElseOrEndif;
@@ -459,19 +539,31 @@ begin
     begin
       text  := FTok.TokenText();
       dname := DirectiveName(text);
-      if dname = 'IFDEF' then
+      if dname = 'DEFINE' then
+        Self.DefineSymbol(DirectiveArg(text))
+      else if dname = 'UNDEF' then
+        Self.UndefSymbol(DirectiveArg(text))
+      else if dname = 'IFDEF' then
       begin
-        { Blaise defines no FPC-specific symbols — always skip the body }
-        SkipToElseOrEndif();
+        { Keep the body when the symbol is defined; otherwise skip to the
+          matching ELSE/ENDIF. }
+        if not Self.IsDefined(DirectiveArg(text)) then
+          SkipToElseOrEndif();
       end
       else if dname = 'IFNDEF' then
       begin
-        { Symbol is never defined in Blaise — always execute the body }
+        { Keep the body when the symbol is NOT defined. }
+        if Self.IsDefined(DirectiveArg(text)) then
+          SkipToElseOrEndif();
       end
       else if dname = 'ELSE' then
-        SkipToEndif()   { we were in the true branch; skip the else }
+        { Reaching an ELSE in normal token flow means the preceding IFDEF/IFNDEF
+          branch was taken (we only get here from inside an active branch), so
+          skip the else body to the matching ENDIF. }
+        SkipToEndif()
       ;
-      { ENDIF and all other directives: silently consumed }
+      { ENDIF and all other directives (e.g. H+, mode ...): silently
+        consumed. }
       Continue;
     end;
     Break;

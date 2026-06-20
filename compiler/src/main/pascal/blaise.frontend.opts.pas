@@ -41,6 +41,7 @@ type
     SourceFile: string;
     OutputFile: string;
     SearchPaths: TStringList;   { owned }
+    Defines: TStringList;       { owned — conditional-compilation symbols from -d }
     EmitIfaceDir: string;
     Incremental: Boolean;
     UnitCacheDir: string;
@@ -69,10 +70,12 @@ implementation
 constructor TFrontEndOpts.Create;
 begin
   Self.SearchPaths := TStringList.Create();
+  Self.Defines := TStringList.Create();
 end;
 
 destructor TFrontEndOpts.Destroy;
 begin
+  Self.Defines.Free();
   Self.SearchPaths.Free();
   inherited Destroy();
 end;

@@ -93,6 +93,8 @@ begin
   WriteLn(FormatFlagLine('--output <path>', 'Output binary path'));
   WriteLn(FormatFlagLine('--unit-path <dir>',
     'Add directory to unit search path (repeatable)'));
+  WriteLn(FormatFlagLine('--define <sym> | -d <sym>',
+    'Define a conditional-compilation symbol (repeatable)'));
   WriteLn(FormatFlagLine('--backend <id>', BackendUsageLine()));
   WriteLn(FormatFlagLine('--target <os>-<cpu>',
     'linux-x86_64 (default), linux-i386, linux-arm64,'));
@@ -143,6 +145,17 @@ end;
   cross-cutting knobs a backend driver reads (Target, OPDFEnabled,
   DebugMode, UseInternalAsm).  Returns False (and writes a diagnostic) on a
   bad flag; the caller owns and frees both objects regardless. }
+{ Apply each -d/--define symbol in ADefines to ALexer's conditional-compilation
+  table.  No-op when ADefines is nil/empty. }
+procedure AddDefinesTo(ALexer: TLexer; ADefines: TStringList);
+var
+  I: Integer;
+begin
+  if ADefines = nil then Exit;
+  for I := 0 to ADefines.Count - 1 do
+    ALexer.AddDefine(ADefines.Strings[I]);
+end;
+
 function ParseArgs(AFront: TFrontEndOpts; AOpts: TBackendOpts;
   APendingFlags, APendingArgs: TStringList): Boolean;
 var
@@ -184,6 +197,13 @@ begin
     begin
       Inc(I);
       AFront.SearchPaths.Add(ParamStr(I));
+    end
+    else if ((Arg = '--define') or (Arg = '-d')) and (I < ParamCount()) then
+    begin
+      { Define a conditional-compilation symbol (FPC -dSYM / Delphi -D).
+        Visible to IFDEF directives in the program and every unit it compiles. }
+      Inc(I);
+      AFront.Defines.Add(ParamStr(I));
     end
     else if Arg = '--skip-dep-codegen' then
       { Omit dep unit bodies from the main codegen pass — every cross-
@@ -622,6 +642,7 @@ begin
   try
     try
       Lexer  := TLexer.Create(Source.Text, SourceFile);
+      AddDefinesTo(Lexer, Front.Defines);
       Parser := TParser.Create(Lexer);
       IsUnitMode := Parser.IsUnitTopLevel();
       if IsUnitMode then
@@ -642,12 +663,12 @@ begin
       begin
         if IsUnitMode and (TopUnit.UsedUnits.Count > 0) then
         begin
-          Loader := TUnitLoader.Create(SearchPaths);
+          Loader := TUnitLoader.Create(SearchPaths, Front.Defines);
           Units  := Loader.LoadAll(TopUnit.UsedUnits);
         end
         else if (Prog <> nil) and (Prog.UsedUnits.Count > 0) then
         begin
-          Loader := TUnitLoader.Create(SearchPaths);
+          Loader := TUnitLoader.Create(SearchPaths, Front.Defines);
           Units  := Loader.LoadAll(Prog.UsedUnits);
         end;
         if Units <> nil then

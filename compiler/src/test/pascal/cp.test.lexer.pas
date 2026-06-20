@@ -99,6 +99,14 @@ type
     procedure TestSeq_VarDecl;
     procedure TestSeq_Assignment;
     procedure TestSeq_ProcCall;
+
+    { Conditional compilation (issue #131) }
+    procedure TestIfdef_PredefinedBlaise_KeepsBody;
+    procedure TestIfdef_Undefined_TakesElse;
+    procedure TestIfndef_Undefined_KeepsBody;
+    procedure TestDefine_ThenIfdef_KeepsBody;
+    procedure TestUndef_ThenIfdef_TakesElse;
+    procedure TestAddDefine_KeepsBody;
   end;
 
   TParseIntLiteralTests = class(TTestCase)
@@ -563,6 +571,63 @@ begin
   AssertEquals('str value', 'hi', t[2].Value);
   AssertEquals(') kind', Ord(tkRParen), Ord(t[3].Kind));
   AssertEquals('EOF', Ord(tkEOF), Ord(t[4].Kind));
+end;
+
+{ Conditional compilation (issue #131).  Each lexes a snippet with an
+  IFDEF/ELSE/ENDIF and asserts which identifier survives — proving which branch
+  the lexer kept. }
+
+procedure TLexerTests.TestIfdef_PredefinedBlaise_KeepsBody;
+var tok: TToken;
+begin
+  { BLAISE is always predefined, so the IFDEF body (yes) is kept. }
+  SetLexer('{$IFDEF BLAISE}yes{$ELSE}no{$ENDIF}');
+  tok := FLexer.Next();
+  AssertEquals('kept branch', 'yes', tok.Value);
+end;
+
+procedure TLexerTests.TestIfdef_Undefined_TakesElse;
+var tok: TToken;
+begin
+  SetLexer('{$IFDEF NOPE}yes{$ELSE}no{$ENDIF}');
+  tok := FLexer.Next();
+  AssertEquals('else branch', 'no', tok.Value);
+end;
+
+procedure TLexerTests.TestIfndef_Undefined_KeepsBody;
+var tok: TToken;
+begin
+  SetLexer('{$IFNDEF NOPE}yes{$ELSE}no{$ENDIF}');
+  tok := FLexer.Next();
+  AssertEquals('ifndef body', 'yes', tok.Value);
+end;
+
+procedure TLexerTests.TestDefine_ThenIfdef_KeepsBody;
+var tok: TToken;
+begin
+  SetLexer('{$DEFINE FOO}{$IFDEF FOO}yes{$ELSE}no{$ENDIF}');
+  tok := FLexer.Next();
+  AssertEquals('defined body', 'yes', tok.Value);
+end;
+
+procedure TLexerTests.TestUndef_ThenIfdef_TakesElse;
+var tok: TToken;
+begin
+  { UNDEF removes a predefined symbol, so the ELSE branch is taken. }
+  SetLexer('{$UNDEF BLAISE}{$IFDEF BLAISE}yes{$ELSE}no{$ENDIF}');
+  tok := FLexer.Next();
+  AssertEquals('undefed body', 'no', tok.Value);
+end;
+
+procedure TLexerTests.TestAddDefine_KeepsBody;
+var tok: TToken;
+begin
+  { AddDefine mirrors the -d command-line flag.  SetLexer creates the lexer;
+    AddDefine then defines DEBUG so the IFDEF body is kept. }
+  SetLexer('{$IFDEF DEBUG}yes{$ELSE}no{$ENDIF}');
+  FLexer.AddDefine('DEBUG');
+  tok := FLexer.Next();
+  AssertEquals('cli-defined body', 'yes', tok.Value);
 end;
 
 { Hex literals }

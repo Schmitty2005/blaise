@@ -147,7 +147,23 @@ CARET         = "^"   ;   (* pointer dereference / pointer type prefix *)
 WHITESPACE    = { " " | "\t" | "\r" | "\n" } ;
 LINE_COMMENT  = "//" { char } newline ;
 BLOCK_COMMENT = "{" { char } "}" | "(*" { char } "*)" ;
-DIRECTIVE     = "{$" { char } "}" ;   (* compiler directives — skipped *)
+DIRECTIVE     = "{$" { char } "}" ;   (* compiler directive *)
+
+(* Conditional-compilation directives, handled in the lexer.  Symbols are
+ * case-insensitive.  Predefined: BLAISE (always), and the target's CPU/OS
+ * symbols (CPUX86_64, CPUAMD64, LINUX, UNIX on Linux/x86-64).  The -d/--define
+ * command-line flag and {$DEFINE} add symbols; {$UNDEF} removes them.
+ *
+ *   {$DEFINE sym}            define a symbol
+ *   {$UNDEF sym}             undefine a symbol
+ *   {$IFDEF sym} ... {$ENDIF}
+ *   {$IFDEF sym} ... {$ELSE} ... {$ENDIF}
+ *   {$IFNDEF sym} ... [ {$ELSE} ... ] {$ENDIF}
+ *
+ * IFDEF keeps its body when the symbol is defined (IFNDEF when not); the
+ * optional ELSE branch is taken otherwise.  IFDEF/IFNDEF blocks nest.  There
+ * is deliberately no expression form ({$IF ...}) yet — only symbol presence.
+ * All other directives (e.g. {$H+}, {$mode ...}) are accepted and ignored. *)
 
 
 (* ═══════════════════════════════════════════════════════════════════════════

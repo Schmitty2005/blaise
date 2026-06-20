@@ -5106,3 +5106,48 @@ values canonical, so equality and hashing are well-defined.
 * *A fixed-point money type (Int64 scaled).*  Already rejected for `TDecimal`
   (see the previous section); `TMoney` inherits `TDecimal`'s compact `Int64`
   fast path for the common case, so it needs no separate fixed-point design.
+
+== Conditional Compilation — Symbol-Presence `{$IFDEF}`, Predefined `BLAISE`
+
+=== Decision
+
+Blaise supports symbol-presence conditional compilation in the lexer:
+`{$DEFINE sym}`, `{$UNDEF sym}`, `{$IFDEF sym}`/`{$IFNDEF sym}` with an optional
+`{$ELSE}` and a closing `{$ENDIF}`, and a `-d`/`--define` command-line flag.
+Symbols are case-insensitive.  The compiler always predefines `BLAISE` and the
+target's CPU/OS symbols (`CPUX86_64`, `CPUAMD64`, `LINUX`, `UNIX` on
+Linux/x86-64).  There is deliberately no expression form (`{$IF expr}`) — only
+whether a symbol is defined.
+
+=== Rationale
+
+The feature was held back on purpose (the project builds itself without it,
+delegating build-time configuration to PasBuild), but it is invaluable for
+*end-user* source that must compile under FPC, Delphi and Blaise from one file:
+`{$IFDEF BLAISE} ... {$ELSE} ... {$ENDIF}`.  That cross-compiler use case is the
+whole point of predefining `BLAISE`, and the CPU/OS predefines mirror the FPC
+family so existing portable source compiles unchanged.  This is the same
+"every mainstream native compiler has it" argument the language applies to
+parenthesised calls — conditional compilation is a near-universal expectation
+for native Pascal, even though it is absent from managed languages like Java.
+
+Implementing it in the lexer (not the parser) keeps excluded source from ever
+reaching the parser or semantic pass, matching FPC/Delphi and avoiding any
+interaction with type checking.
+
+=== Alternatives considered
+
+* *No conditional compilation (status quo, rely on PasBuild).*  Rejected for
+  end-user code: writing a whole project with custom build paths to toggle one
+  line is disproportionate, and it does not help a single source file shared
+  across compilers.
+
+* *An expression form `{$IF declared(X) and (Y > 2)}`.*  Deferred.  It needs a
+  constant-expression evaluator in the lexer and a `declared()` intrinsic;
+  symbol-presence `{$IFDEF}` covers the cross-compiler and feature-flag cases
+  that motivated the request.  Can be added later without breaking `{$IFDEF}`.
+
+* *A version macro predefine (e.g. `BLAISE_0_12_0`).*  Not added yet — there is
+  no concrete use for it until the language stabilises; `BLAISE` alone serves
+  the cross-compiler case.  CPU/OS symbols are added because portable source
+  routinely keys on them.

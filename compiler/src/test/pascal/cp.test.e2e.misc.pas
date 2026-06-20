@@ -131,6 +131,11 @@ type
     procedure TestRun_Const_Int64BitPattern;
     procedure TestRun_Const_UInt64BitPattern;
     procedure TestRun_Const_UntypedAboveInt64_IsUInt64;
+
+    { Conditional compilation (issue #131): predefined BLAISE, DEFINE/UNDEF,
+      IFDEF/IFNDEF/ELSE/ENDIF, nesting. }
+    procedure TestRun_Ifdef_PredefinedBlaise;
+    procedure TestRun_Ifdef_DefineUndefIfndefNested;
   end;
 
 implementation
@@ -1231,6 +1236,44 @@ const
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src, '200 -7 250' + LE, 0);
+end;
+
+procedure TE2EMiscTests.TestRun_Ifdef_PredefinedBlaise;
+const
+  { The headline cross-compiler use case: BLAISE is predefined. }
+  Src = '''
+    program P;
+    begin
+      {$IFDEF BLAISE}
+      WriteLn('blaise')
+      {$ELSE}
+      WriteLn('other')
+      {$ENDIF}
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'blaise' + LE, 0);
+end;
+
+procedure TE2EMiscTests.TestRun_Ifdef_DefineUndefIfndefNested;
+const
+  { DEFINE/UNDEF, IFNDEF, a predefined CPU/OS symbol, and nesting together. }
+  Src = '''
+    program P;
+    {$DEFINE FOO}
+    {$UNDEF FOO}
+    begin
+      {$IFDEF FOO}WriteLn('foo'){$ELSE}WriteLn('no-foo'){$ENDIF};
+      {$IFNDEF BAR}WriteLn('no-bar'){$ENDIF};
+      {$IFDEF LINUX}
+        {$IFDEF BLAISE}WriteLn('linux-blaise'){$ENDIF}
+      {$ENDIF}
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'no-foo' + LE + 'no-bar' + LE + 'linux-blaise' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_Const_LargeHex_NotTruncated;
