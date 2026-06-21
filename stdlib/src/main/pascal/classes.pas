@@ -219,7 +219,7 @@ type
     property Duplicates:    TDuplicates read FDuplicates write FDuplicates;
     property Text:          string  read GetText        write SetText;
     property CommaText:     string  read GetCommaText   write SetCommaText;
-    property Strings[Index: Integer]: string  read Get  write Put;
+    property Strings[Index: Integer]: string  read Get  write Put; default;
     property Objects[Index: Integer]: Pointer read GetObject write SetObject;
   end;
 
