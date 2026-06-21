@@ -309,15 +309,18 @@ end;
 
 function LkZeros(ACount: Int64): string;
 var
-  I: Int64;
+  P: PChar;
+  I: Integer;
 begin
-  Result := '';
-  I := 0;
-  while I < ACount do
+  if ACount <= 0 then
   begin
-    Result := Result + Chr(0);
-    I := I + 1;
+    Result := '';
+    Exit;
   end;
+  SetLength(Result, Integer(ACount));
+  P := PChar(Result);
+  for I := 0 to Integer(ACount) - 1 do
+    P[I] := Chr(0);
 end;
 
 constructor TSectionMerger.Create;
@@ -530,10 +533,12 @@ const
 function LkLE(AVal: Int64; ANBytes: Integer): string;
 var
   I: Integer;
+  P: PChar;
 begin
-  Result := '';
+  SetLength(Result, ANBytes);
+  P := PChar(Result);
   for I := 0 to ANBytes - 1 do
-    Result := Result + Chr(Integer((AVal shr (I * 8)) and $FF));
+    P[I] := Chr(Integer((AVal shr (I * 8)) and $FF));
 end;
 
 { Overwrite ABuf[AOff..] in place with ASrc's bytes (ABuf already large
@@ -545,6 +550,7 @@ var
   P: PChar;
   I: Integer;
 begin
+  if Length(ASrc) = 0 then Exit;
   P := PChar(ABuf);
   for I := 0 to Length(ASrc) - 1 do
     P[AOff + I] := ASrc[I];
