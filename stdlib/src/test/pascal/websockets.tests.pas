@@ -1,0 +1,120 @@
+{
+  Blaise - An Object Pascal Compiler
+  Copyright (c) 2026 Graeme Geldenhuys
+  SPDX-License-Identifier: Apache-2.0 WITH Swift-exception
+  Licensed under the Apache License v2.0 with Runtime Library Exception.
+  See LICENSE file in the project root for full license terms.
+}
+
+{ Tests for Net.WebSockets: handshake accept key and frame encode/decode.
+  Self-registers via the initialization section. }
+
+unit WebSockets.Tests;
+
+interface
+
+uses
+  blaise.testing, Net.WebSockets;
+
+type
+  TWebSocketsTests = class(TTestCase)
+  published
+    procedure TestAccept;
+    procedure TestEncodeShortText;
+    procedure TestEncode126;
+    procedure TestRoundTripUnmasked;
+    procedure TestRoundTripMasked;
+    procedure TestPartialBufferIsInvalid;
+  end;
+
+implementation
+
+procedure TWebSocketsTests.TestAccept;
+begin
+  { RFC 6455 6.1 worked example. }
+  AssertEquals('accept', 's3pPLMBiTxaQ9kYGzzhZRbK+xOo=',
+    WebSocketAccept('dGhlIHNhbXBsZSBub25jZQ=='));
+end;
+
+procedure TWebSocketsTests.TestEncodeShortText;
+var F: string;
+begin
+  F := EncodeTextFrame('hi');
+  AssertEquals('len', 4, Integer(Length(F)));
+  AssertEquals('b0 fin+text', $81, Integer(Byte(F[0])));
+  AssertEquals('b1 len',      2,    Integer(Byte(F[1])));
+  AssertEquals('payload h',   104, Integer(Byte(F[2])));   { 'h' }
+end;
+
+procedure TWebSocketsTests.TestEncode126;
+var
+  Payload, F: string;
+  I: Integer;
+begin
+  { 200 bytes -> extended 16-bit length form (126 marker + 2 bytes). }
+  Payload := '';
+  for I := 1 to 200 do Payload := Payload + 'x';
+  F := EncodeTextFrame(Payload);
+  AssertEquals('b1 marker', 126, Integer(Byte(F[1])));
+  AssertEquals('len hi', 0,   Integer(Byte(F[2])));
+  AssertEquals('len lo', 200, Integer(Byte(F[3])));
+  AssertEquals('total', 4 + 200, Integer(Length(F)));
+end;
+
+procedure TWebSocketsTests.TestRoundTripUnmasked;
+var
+  F: string;
+  D: TWsFrame;
+begin
+  F := EncodeTextFrame('hello world');
+  D := DecodeFrame(F);
+  AssertTrue('valid', D.Valid);
+  AssertTrue('fin', D.Fin);
+  AssertEquals('opcode', WS_OP_TEXT, D.Opcode);
+  AssertEquals('payload', 'hello world', D.Payload);
+  AssertEquals('consumed', Length(F), D.Consumed);
+end;
+
+procedure TWebSocketsTests.TestRoundTripMasked;
+var
+  Buf: string;
+  D: TWsFrame;
+  SB: TStringBuilder;
+  Mask: array[0..3] of Byte;
+  Plain: string;
+  I: Integer;
+begin
+  { Hand-build a masked client text frame "ping" (clients must mask). }
+  Plain := 'ping';
+  Mask[0] := 10; Mask[1] := 20; Mask[2] := 30; Mask[3] := 40;
+  SB := TStringBuilder.Create();
+  SB.AppendByte($81);                 { FIN + text }
+  SB.AppendByte($80 or Length(Plain)); { MASK + len }
+  for I := 0 to 3 do SB.AppendByte(Mask[I]);
+  for I := 0 to Length(Plain) - 1 do
+    SB.AppendByte(Byte(Plain[I]) xor Mask[I and 3]);
+  Buf := SB.ToString();
+  SB.Free();
+
+  D := DecodeFrame(Buf);
+  AssertTrue('valid', D.Valid);
+  AssertEquals('unmasked payload', Plain, D.Payload);
+  AssertEquals('consumed', Length(Buf), D.Consumed);
+end;
+
+procedure TWebSocketsTests.TestPartialBufferIsInvalid;
+var
+  F, Partial: string;
+  D: TWsFrame;
+begin
+  F := EncodeTextFrame('hello world');
+  Partial := Copy(F, 0, 3);   { header + 1 payload byte, incomplete }
+  D := DecodeFrame(Partial);
+  AssertFalse('not valid', D.Valid);
+  AssertEquals('consumed 0', 0, D.Consumed);
+end;
+
+initialization
+  RegisterTest(TWebSocketsTests);
+
+end.

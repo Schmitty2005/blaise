@@ -1,0 +1,181 @@
+{
+  Blaise - An Object Pascal Compiler
+  Copyright (c) 2026 Graeme Geldenhuys
+  SPDX-License-Identifier: Apache-2.0 WITH Swift-exception
+  Licensed under the Apache License v2.0 with Runtime Library Exception.
+  See LICENSE file in the project root for full license terms.
+}
+
+{ Blaise stdlib - WebSocket (RFC 6455) framing and handshake helpers.
+
+  This unit is transport-agnostic: it turns bytes into frames and back, and
+  computes the handshake accept key.  It does NOT own a socket — pair it with
+  Net.Sockets (or any byte stream) to drive a connection.
+
+    * WebSocketAccept   — the Sec-WebSocket-Accept value for a client key.
+    * EncodeTextFrame   — build a server->client text frame (RFC 6455 5.2),
+                          unmasked, payloads up to 2^31-1.
+    * DecodeFrame       — parse one frame from a buffer, unmasking the payload
+                          (client->server frames are always masked).
+
+  Server frames are sent unmasked; client frames must be masked.  DecodeFrame
+  handles both.  Continuation/fragmentation is reported via the FIN flag but
+  not reassembled here (callers needing message reassembly concatenate the
+  payloads of a FIN=False frame followed by opcode-0 continuation frames). }
+
+unit Net.WebSockets;
+
+interface
+
+const
+  { RFC 6455 opcodes }
+  WS_OP_CONTINUATION = $0;
+  WS_OP_TEXT         = $1;
+  WS_OP_BINARY       = $2;
+  WS_OP_CLOSE        = $8;
+  WS_OP_PING         = $9;
+  WS_OP_PONG         = $A;
+
+type
+  { One decoded frame.  Payload holds the unmasked bytes (as a string). }
+  TWsFrame = record
+    Valid:   Boolean;   { False if the buffer held no complete frame }
+    Fin:     Boolean;   { final fragment of a message }
+    Opcode:  Integer;
+    Payload: string;
+    { Number of bytes consumed from the input buffer for this frame; callers
+      streaming a socket advance their buffer by this much. }
+    Consumed: Integer;
+  end;
+
+{ Compute Sec-WebSocket-Accept for a client's Sec-WebSocket-Key (the value
+  echoed back in the 101 handshake response). }
+function WebSocketAccept(const AKey: string): string;
+
+{ Build an unmasked text frame carrying APayload (server->client). }
+function EncodeTextFrame(const APayload: string): string;
+
+{ Build an unmasked frame with an explicit opcode (e.g. WS_OP_BINARY,
+  WS_OP_PING, WS_OP_CLOSE).  Server frames are never masked. }
+function EncodeFrame(AOpcode: Integer; const APayload: string): string;
+
+{ Parse the first frame in ABuffer.  Returns Valid=False (Consumed=0) if the
+  buffer does not yet hold a complete frame — read more bytes and retry. }
+function DecodeFrame(const ABuffer: string): TWsFrame;
+
+implementation
+
+uses
+  Security.Crypto, Encoding.Base64, StrUtils;
+
+const
+  { the RFC 6455 magic GUID appended to the key before hashing }
+  WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+function WebSocketAccept(const AKey: string): string;
+begin
+  Result := Base64Encode(Sha1(AKey + WS_GUID));
+end;
+
+function EncodeFrame(AOpcode: Integer; const APayload: string): string;
+var
+  SB: TStringBuilder;
+  Len: Integer;
+begin
+  SB := TStringBuilder.Create();
+  SB.AppendByte($80 or (AOpcode and $0F));   { FIN + opcode, unmasked }
+  Len := Length(APayload);
+  if Len < 126 then
+    SB.AppendByte(Len)
+  else if Len <= 65535 then
+  begin
+    SB.AppendByte(126);
+    SB.AppendByte((Len shr 8) and $FF);
+    SB.AppendByte(Len and $FF);
+  end
+  else
+  begin
+    { 64-bit length; top 4 bytes are 0 since strings here fit in 2^31-1. }
+    SB.AppendByte(127);
+    SB.AppendByte(0); SB.AppendByte(0); SB.AppendByte(0); SB.AppendByte(0);
+    SB.AppendByte((Len shr 24) and $FF);
+    SB.AppendByte((Len shr 16) and $FF);
+    SB.AppendByte((Len shr 8) and $FF);
+    SB.AppendByte(Len and $FF);
+  end;
+  SB.Append(APayload);
+  Result := SB.ToString();
+  SB.Free();
+end;
+
+function EncodeTextFrame(const APayload: string): string;
+begin
+  Result := EncodeFrame(WS_OP_TEXT, APayload);
+end;
+
+function DecodeFrame(const ABuffer: string): TWsFrame;
+var
+  N, Pos, I: Integer;
+  B0, B1: Byte;
+  Masked: Boolean;
+  PayLen: Int64;
+  Mask: array[0..3] of Byte;
+  SB: TStringBuilder;
+begin
+  Result.Valid := False;
+  Result.Consumed := 0;
+  Result.Payload := '';
+
+  N := Length(ABuffer);
+  if N < 2 then Exit;   { need at least the 2-byte header }
+
+  B0 := Byte(ABuffer[0]);
+  B1 := Byte(ABuffer[1]);
+  Result.Fin    := (B0 and $80) <> 0;
+  Result.Opcode := B0 and $0F;
+  Masked := (B1 and $80) <> 0;
+  PayLen := B1 and $7F;
+  Pos := 2;
+
+  if PayLen = 126 then
+  begin
+    if N < Pos + 2 then Exit;
+    PayLen := (Int64(Byte(ABuffer[Pos])) shl 8) or Int64(Byte(ABuffer[Pos + 1]));
+    Pos := Pos + 2;
+  end
+  else if PayLen = 127 then
+  begin
+    if N < Pos + 8 then Exit;
+    { 64-bit length; we only support the low 31 bits (string length). }
+    PayLen := 0;
+    for I := 0 to 7 do
+      PayLen := (PayLen shl 8) or Int64(Byte(ABuffer[Pos + I]));
+    Pos := Pos + 8;
+  end;
+
+  if Masked then
+  begin
+    if N < Pos + 4 then Exit;
+    for I := 0 to 3 do
+      Mask[I] := Byte(ABuffer[Pos + I]);
+    Pos := Pos + 4;
+  end;
+
+  if N < Pos + PayLen then Exit;   { payload not fully arrived }
+
+  SB := TStringBuilder.Create();
+  for I := 0 to Integer(PayLen) - 1 do
+  begin
+    if Masked then
+      SB.AppendByte(Byte(ABuffer[Pos + I]) xor Mask[I and 3])
+    else
+      SB.AppendByte(Byte(ABuffer[Pos + I]));
+  end;
+  Result.Payload := SB.ToString();
+  SB.Free();
+
+  Result.Consumed := Pos + Integer(PayLen);
+  Result.Valid := True;
+end;
+
+end.
