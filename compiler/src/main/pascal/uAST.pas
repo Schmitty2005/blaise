@@ -773,6 +773,11 @@ type
     DefaultValue: TASTExpr;   { owned — non-nil when the param has a default value
                                 ('= expr' after the type); restricted to literal forms
                                 (int/float/string/nil) and named-constant idents. }
+    HasDefault:   Boolean;    { set when this param has a default value but the value
+                                AST itself is unavailable — e.g. a method imported
+                                from a cached .bif, which records only that a default
+                                exists (so MinArity/overload resolution accept fewer
+                                args) without serialising the default expression. }
     destructor Destroy; override;
   end;
 
@@ -2313,6 +2318,7 @@ begin
   Result.IsOutParam   := ASrc.IsOutParam;
   Result.IsOpenArray  := ASrc.IsOpenArray;
   Result.DefaultValue := CloneExpr(ASrc.DefaultValue);
+  Result.HasDefault   := ASrc.HasDefault;
 end;
 
 function CloneMethodDecl(ASrc: TMethodDecl): TMethodDecl;

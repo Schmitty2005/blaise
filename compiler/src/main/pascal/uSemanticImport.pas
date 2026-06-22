@@ -62,6 +62,24 @@ implementation
 
 { ----- Type-ref resolution -------------------------------------- }
 
+{ Return the bare type name from a possibly unit-qualified name.  The
+  unit qualifier may itself be dotted (e.g. 'blaise.codegen.ICodeGen'),
+  so everything up to and including the LAST '.' is removed.  Names with
+  no '.' are returned unchanged.  Uses StrAt (0-based) per house style. }
+function StripUnitQualifier(const AName: string): string;
+var
+  I, LastDot: Integer;
+begin
+  LastDot := -1;
+  for I := 0 to Length(AName) - 1 do
+    if StrAt(AName, I) = Ord('.') then
+      LastDot := I;
+  if LastDot < 0 then
+    Result := AName
+  else
+    Result := StrCopyTail(AName, LastDot + 1);
+end;
+
 { Resolve a TQualTypeRef to a TTypeDesc by name lookup.  After topo-
   order import, every referenced symbol is already in ATable. }
 function ResolveTypeName(const ATypeName: string; ATable: TSymbolTable): TTypeDesc;
@@ -133,6 +151,34 @@ begin
       Result := ATable.NewMetaClassType('', nil);
     Exit;
   end;
+end;
+
+{ Resolve a type-name string from a cached iface entry to a TTypeDesc,
+  trying every avenue the source-compile path has: a registered symbol,
+  an inline type pattern ('^T', 'array of T', etc.), and finally the
+  semantic analyser's on-demand resolver, which instantiates generics
+  ('TList<TFoo>') and synthesises anonymous array/set types.  The last
+  step is only available when ASemantic is non-nil (the Blaise.pas
+  prebuilt-iface path always passes it); without it generic-instance
+  field types from a .bif cannot be resolved. }
+function ResolveImportTypeName(const ATypeName: string;
+                               ATable: TSymbolTable;
+                               ASemantic: TSemanticAnalyser): TTypeDesc;
+var
+  Sym: TSymbol;
+begin
+  Result := nil;
+  if ATypeName = '' then Exit;
+  Sym := ATable.Lookup(ATypeName);
+  if (Sym <> nil) and (Sym.Kind = skType) then
+  begin
+    Result := Sym.TypeDesc;
+    Exit;
+  end;
+  Result := ResolveInlineTypeName(ATypeName, ATable);
+  if Result <> nil then Exit;
+  if ASemantic <> nil then
+    Result := ASemantic.ResolveImportedTypeName(ATypeName);
 end;
 
 { ----- Type-entry registration ---------------------------------- }
@@ -415,12 +461,7 @@ begin
   for I := 0 to ClassDef.Fields.Count - 1 do
   begin
     FldDecl := TFieldDecl(ClassDef.Fields.Items[I]);
-    FldType := nil;
-    FldSym  := ATable.Lookup(FldDecl.TypeName);
-    if (FldSym <> nil) and (FldSym.Kind = skType) then
-      FldType := FldSym.TypeDesc
-    else
-      FldType := ResolveInlineTypeName(FldDecl.TypeName, ATable);
+    FldType := ResolveImportTypeName(FldDecl.TypeName, ATable, ASemantic);
     if FldType = nil then
       raise EImportError.CreateFmt(
         'Class %s field type %s unresolved',
@@ -442,7 +483,7 @@ begin
     if ASemantic <> nil then
     begin
       MDecl := SynthesiseMethodDecl(
-        TRoutineSig(AEntry.Methods.Items[I]), AUnitName, ATable);
+        TRoutineSig(AEntry.Methods.Items[I]), AUnitName, ATable, ASemantic);
       ATable.OwnImportedDecl(MDecl);
       ASemantic.RegisterImportedMethod(AEntry.Name, MDecl);
     end;
@@ -454,8 +495,11 @@ begin
   for I := 0 to AEntry.Implements.Count - 1 do
   begin
     ParentName := AEntry.Implements.Strings[I];
-    J := Pos('.', ParentName);
-    if J > 0 then ParentName := Copy(ParentName, J + 1, Length(ParentName) - J);
+    { Strip any 'Unit.' qualifier — the unit name may itself be dotted
+      (e.g. 'blaise.codegen.ICodeGen'), so take the segment after the
+      LAST '.' as the type name.  The flat symbol-table namespace carries
+      no unit qualification. }
+    ParentName := StripUnitQualifier(ParentName);
     Sym := ATable.Lookup(ParentName);
     if (Sym <> nil) and (Sym.TypeDesc is TInterfaceTypeDesc) then
       RT.AddImplements(TInterfaceTypeDesc(Sym.TypeDesc));
@@ -522,11 +566,12 @@ begin
 end;
 
 procedure RegisterRecord(AEntry: TTypeEntry; ATable: TSymbolTable;
-                         const AUnitName: string);
+                         const AUnitName: string;
+                         ASemantic: TSemanticAnalyser = nil);
 var
   RecDef:   TRecordTypeDef;
   RecDesc:  TRecordTypeDesc;
-  Sym, FldSym: TSymbol;
+  Sym:      TSymbol;
   I, J:     Integer;
   FldDecl:  TFieldDecl;
   FldType:  TTypeDesc;
@@ -552,12 +597,7 @@ begin
   for I := 0 to RecDef.Fields.Count - 1 do
   begin
     FldDecl := TFieldDecl(RecDef.Fields.Items[I]);
-    FldType := nil;
-    FldSym  := ATable.Lookup(FldDecl.TypeName);
-    if (FldSym <> nil) and (FldSym.Kind = skType) then
-      FldType := FldSym.TypeDesc
-    else
-      FldType := ResolveInlineTypeName(FldDecl.TypeName, ATable);
+    FldType := ResolveImportTypeName(FldDecl.TypeName, ATable, ASemantic);
     if FldType = nil then
       raise EImportError.CreateFmt(
         'Record %s field type %s unresolved',
@@ -696,7 +736,7 @@ begin
     else if Entry.Def is TClassTypeDef then
       RegisterClass(Entry, ATable, AIface.Name, ASemantic)
     else if Entry.Def is TRecordTypeDef then
-      RegisterRecord(Entry, ATable, AIface.Name)
+      RegisterRecord(Entry, ATable, AIface.Name, ASemantic)
     else if Entry.Def is TProceduralTypeDef then
       RegisterProcType(Entry, ATable, AIface.Name)
     else
@@ -772,20 +812,16 @@ end;
 { Build a TParamDesc for the symbol table from a cloned TMethodParam.
   Param types must already be registered in ATable (caller imported
   the dep, or it's a builtin). }
-function BuildParamDesc(AParam: TMethodParam; ATable: TSymbolTable): TParamDesc;
-var
-  Sym: TSymbol;
+function BuildParamDesc(AParam: TMethodParam; ATable: TSymbolTable;
+                        ASemantic: TSemanticAnalyser = nil): TParamDesc;
 begin
   Result := TParamDesc.Create();
   Result.Name     := AParam.ParamName;
   Result.IsConst  := AParam.IsConstParam;
   Result.IsVar    := AParam.IsVarParam;
-  Sym := ATable.Lookup(AParam.TypeName);
-  if (Sym <> nil) and (Sym.Kind = skType) then
-    Result.TypeDesc := Sym.TypeDesc;
-  { Unresolved param type leaves TypeDesc nil; downstream call-site
-    resolution would catch this — but for the cases in 6c-A scope we
-    expect all param types to resolve. }
+  { Generic-aware resolution so an instance param type (e.g.
+    'TList<TArchiveMember>') resolves rather than leaving TypeDesc nil. }
+  Result.TypeDesc := ResolveImportTypeName(AParam.TypeName, ATable, ASemantic);
 end;
 
 { Synthesise a TMethodDecl from a TRoutineSig + its return-type
@@ -797,20 +833,32 @@ end;
   symbol the exporting unit defines. }
 function SynthesiseMethodDecl(ASig: TRoutineSig;
                               const AOwningUnit: string;
-                              ATable: TSymbolTable): TMethodDecl;
+                              ATable: TSymbolTable;
+                              ASemantic: TSemanticAnalyser = nil): TMethodDecl;
 var
   J:     Integer;
   Param: TMethodParam;
   PSyn:  TMethodParam;
-  Sym:   TSymbol;
 begin
   Result := TMethodDecl.Create();
   Result.Name           := ASig.Name;
   Result.OwningUnit     := AOwningUnit;
   Result.ReturnTypeName := ASig.ReturnType.TypeName;
   Result.ResolvedReturnType :=
-    ResolveTypeName(ASig.ReturnType.TypeName, ATable);
-  Result.ResolvedQbeName := MangleUnitPrefix(AOwningUnit) + ASig.Name;
+    ResolveImportTypeName(ASig.ReturnType.TypeName, ATable, ASemantic);
+  if ASig.ResolvedQbeName <> '' then
+    Result.ResolvedQbeName := ASig.ResolvedQbeName
+  else
+    Result.ResolvedQbeName := MangleUnitPrefix(AOwningUnit) + ASig.Name;
+  { Propagate the vtable-dispatch facts.  Without these, a call to a virtual
+    method resolved from a cached .bif keeps VTableSlot = -1 (the TMethodDecl
+    default) and codegen emits a DIRECT call to the base/abstract symbol
+    instead of a vtable dispatch — e.g. an incremental rebuild miscompiles
+    Driver.CreateUnitCodeGen into a call to the abstract TBackendDriver stub,
+    aborting at run time.  The .bif already carries these (EncodeMethodSig). }
+  Result.VTableSlot := ASig.VTableSlot;
+  Result.IsVirtual  := ASig.IsVirtual;
+  Result.IsOverride := ASig.IsOverride;
   for J := 0 to ASig.Params.Count - 1 do
   begin
     Param := TMethodParam(ASig.Params.Items[J]);
@@ -820,9 +868,18 @@ begin
     PSyn.IsVarParam   := Param.IsVarParam;
     PSyn.IsConstParam := Param.IsConstParam;
     PSyn.IsOpenArray  := Param.IsOpenArray;
-    Sym := ATable.Lookup(Param.TypeName);
-    if (Sym <> nil) and (Sym.Kind = skType) then
-      PSyn.ResolvedType := Sym.TypeDesc;
+    PSyn.HasDefault   := Param.HasDefault;
+    { Carry the default-value expression through so call sites that omit
+      the trailing arguments can synthesise them (AppendDefaultArgs).  The
+      .bif round-trips the literal/ident default expression; ownership of
+      the cloned node passes to PSyn. }
+    PSyn.DefaultValue := Param.DefaultValue;
+    Param.DefaultValue := nil;
+    { Resolve the param type, including generic instances such as
+      'TList<TArchiveMember>' — a plain symbol Lookup cannot, so without the
+      generic-aware resolver the param's ResolvedType stays nil and the
+      call-site overload scorer rejects every candidate. }
+    PSyn.ResolvedType := ResolveImportTypeName(Param.TypeName, ATable, ASemantic);
     Result.Params.Add(PSyn);
   end;
 end;
@@ -844,7 +901,7 @@ begin
 
     if Sig.IsFunction then
     begin
-      RetType := ResolveTypeName(Sig.ReturnType.TypeName, ATable);
+      RetType := ResolveImportTypeName(Sig.ReturnType.TypeName, ATable, ASemantic);
       Sym := TSymbol.Create(Sig.Name, skFunction, RetType);
     end
     else
@@ -855,7 +912,7 @@ begin
     for J := 0 to Sig.Params.Count - 1 do
     begin
       Param := TMethodParam(Sig.Params.Items[J]);
-      PDesc := BuildParamDesc(Param, ATable);
+      PDesc := BuildParamDesc(Param, ATable, ASemantic);
       Sym.Params.Add(PDesc);
     end;
 
@@ -863,7 +920,7 @@ begin
       via FProcIndex.  Owned by the symbol table to outlive imports. }
     if ASemantic <> nil then
     begin
-      MDecl := SynthesiseMethodDecl(Sig, AIface.Name, ATable);
+      MDecl := SynthesiseMethodDecl(Sig, AIface.Name, ATable, ASemantic);
       ATable.OwnImportedDecl(MDecl);
       Sym.Decl := MDecl;
       ASemantic.RegisterImportedRoutine(Sig.Name, MDecl);

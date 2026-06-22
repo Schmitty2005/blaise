@@ -860,24 +860,45 @@ begin
             CG.AppendUnit(TUnit(Units.Items[I]));
         CG.AppendUnit(TopUnit);
       end
-      else if (Units <> nil) and (Units.Count > 0) then
+      else if ((Units <> nil) and (Units.Count > 0)) or
+              ((Loader <> nil) and (Loader.PrebuiltIfaces.Count > 0)) then
       begin
         CG.SetSymbolTable(Prog.SymbolTable);
+        { Prebuilt (cached) ifaces are ALWAYS compiled into their own objects —
+          their bodies are never appended here, regardless of SkipDepCodegen.
+          So they must be noted as imported units unconditionally: the program
+          startup must call each one's <Unit>_init (if it has an initialization
+          section), and the backend must treat globals owned by these units as
+          external references rather than re-defining them (otherwise the link
+          step reports a multiple definition — the cached .o owns the symbol).
+
+          They are loaded leaf-first and any source units depend on them, so
+          their inits must run before the source deps' inits.  On a full rebuild
+          every dep is cached, so this is the only loop that fires. }
+        if Loader <> nil then
+          for I := 0 to Loader.PrebuiltIfaces.Count - 1 do
+            CG.NoteDepInitUnit(
+              TUnitInterface(Loader.PrebuiltIfaces.Items[I]).Name,
+              TUnitInterface(Loader.PrebuiltIfaces.Items[I]).HasInitialization);
         if not SkipDepCodegen then
-          for I := 0 to Units.Count - 1 do
-            CG.AppendUnit(TUnit(Units.Items[I]))
+        begin
+          { Source-loaded deps are compiled inline into this object — append
+            their bodies; they are not imported, so do not note them. }
+          if Units <> nil then
+            for I := 0 to Units.Count - 1 do
+              CG.AppendUnit(TUnit(Units.Items[I]));
+        end
         else
-          { Incremental / separate-compilation: dep bodies are compiled into
-            their own objects, so AppendUnit is skipped here.  But the program
-            startup must still call each dep unit's <Unit>_init if it has an
-            initialization section, in dependency order — otherwise unit
-            initialization silently never runs.  Register the init-unit names
-            so AppendProgram's $main emits the calls (they resolve against the
-            <Unit>_init symbols exported by the per-unit objects). }
-          for I := 0 to Units.Count - 1 do
-            CG.NoteDepInitUnit(TUnit(Units.Items[I]).Name,
-              (TUnit(Units.Items[I]).InitStmts <> nil) and
-              (TUnit(Units.Items[I]).InitStmts.Count > 0));
+        begin
+          { Incremental / separate-compilation: source dep bodies are compiled
+            into their own objects (skipped here).  Note each so $main calls its
+            <Unit>_init and the backend references its globals externally. }
+          if Units <> nil then
+            for I := 0 to Units.Count - 1 do
+              CG.NoteDepInitUnit(TUnit(Units.Items[I]).Name,
+                (TUnit(Units.Items[I]).InitStmts <> nil) and
+                (TUnit(Units.Items[I]).InitStmts.Count > 0));
+        end;
         CG.AppendProgram(Prog);
       end
       else
@@ -934,8 +955,14 @@ begin
       Loader.Free wipes them — needed by the link-step dispatch
       below the finally block. }
     if Loader <> nil then
+    begin
       for I := 0 to Loader.PrebuiltObjectPaths.Count - 1 do
         PrebuiltObjPaths.Add(Loader.PrebuiltObjectPaths.Strings[I]);
+      { Impl-only dependency objects: linked but not semantically imported. }
+      for I := 0 to Loader.LinkOnlyObjects.Count - 1 do
+        if PrebuiltObjPaths.IndexOf(Loader.LinkOnlyObjects.Strings[I]) < 0 then
+          PrebuiltObjPaths.Add(Loader.LinkOnlyObjects.Strings[I]);
+    end;
     Units.Free();
     Loader.Free();
     SearchPaths.Free();

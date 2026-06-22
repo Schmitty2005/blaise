@@ -173,6 +173,14 @@ type
       AppendUnit order.  $main calls <Unit>_init for each, in order, after
       _SetArgs — mirrors the QBE backend's EmitMainHeader loop. }
     FUnitInitNames: TStringList;
+    { Names of dependency units imported from cached .bif/.o in incremental /
+      separate-compilation mode (SkipDepCodegen).  A global whose owning unit
+      is in this set is DEFINED by that unit's own object — this program/unit
+      object must only REFERENCE it (no .globl/label definition), otherwise the
+      linker reports a multiple definition.  Recorded by NoteDepInitUnit for
+      every imported unit regardless of whether it has an initialization
+      section.  Stores raw (unmangled) unit names, matching TSymbol.OwningUnit. }
+    FImportedUnits: TStringList;
     FCurrentUnitName: string;
     FProgramName: string;     { set by EmitProgram — program-scope classes keep
                                 bare symbol names (no unit prefix), matching
@@ -192,6 +200,10 @@ type
     procedure MarkWeakGlobal(const AName: string);
     function IsThreadVarGlobal(const AName: string): Boolean;
     function IsWeakGlobal(const AName: string): Boolean;
+    { True when the global's owning unit was imported from a cached .bif/.o
+      (SkipDepCodegen): the cached object DEFINES the global, so this object
+      must reference it only — emitting a definition here would clash at link. }
+    function IsImportedGlobal(const AName: string): Boolean;
     { The static type of a frame-local slot, or nil if AName is not a local. }
     function LocalType(const AName: string): TTypeDesc;
     { The static type of a program global, or nil if AName is not registered. }
@@ -794,6 +806,10 @@ begin
   FProgExcFrameCount  := 0;
   FSystemDefsEmitted  := False;
   FUnitInitNames      := TStringList.Create();
+  FImportedUnits      := TStringList.Create();
+  FImportedUnits.CaseSensitive := False;
+  FImportedUnits.Sorted := True;
+  FImportedUnits.Duplicates := dupIgnore;
   FConstArgUnsafe     := TStringList.Create();
   FConstArgUnsafe.CaseSensitive := True;
   FConstArgUnsafe.Sorted := True;
@@ -804,6 +820,7 @@ destructor TX86_64Backend.Destroy;
 begin
   Self.ClearFrame();
   FConstArgUnsafe.Free();
+  FImportedUnits.Free();
   FUnitInitNames.Free();
   FOALFrames.Free();
   FFinallyStack.Free();
@@ -869,6 +886,24 @@ begin
     Result := nil;
 end;
 
+function TX86_64Backend.IsImportedGlobal(const AName: string): Boolean;
+var
+  Sym: TSymbol;
+begin
+  { A global whose owning unit was imported from a cached .bif/.o (incremental /
+    separate compilation) is DEFINED by that unit's own object.  This object must
+    only reference it (no .globl/label here), or the linker reports a multiple
+    definition.  References (leaq Name(%rip)) resolve against the cached object's
+    exported symbol. }
+  Result := False;
+  if FImportedUnits.Count = 0 then Exit;
+  if FSymTable = nil then Exit;
+  Sym := FSymTable.Lookup(AName);
+  if Sym = nil then Exit;
+  if Sym.OwningUnit = '' then Exit;
+  Result := FImportedUnits.IndexOf(Sym.OwningUnit) >= 0;
+end;
+
 procedure TX86_64Backend.EmitDataSection;
 var
   I, Sz:    Integer;
@@ -888,6 +923,8 @@ begin
   HasTbss := False;
   for I := 0 to FDataGlobals.Count - 1 do
   begin
+    if Self.IsImportedGlobal(FDataGlobals.Keys[I]) then
+      Continue;
     if Self.IsThreadVarGlobal(FDataGlobals.Keys[I]) then
       HasTbss := True
     else
@@ -901,6 +938,7 @@ begin
   for I := 0 to FDataGlobals.Count - 1 do
   begin
     Name  := FDataGlobals.Keys[I];
+    if Self.IsImportedGlobal(Name) then Continue;
     IsTls := Self.IsThreadVarGlobal(Name);
     if IsTls then Continue;
     { Initialised global (var G: T = value): emit the folded value.  threadvars
@@ -1008,6 +1046,7 @@ begin
     for I := 0 to FDataGlobals.Count - 1 do
     begin
       Name := FDataGlobals.Keys[I];
+      if Self.IsImportedGlobal(Name) then Continue;
       if not Self.IsThreadVarGlobal(Name) then Continue;
       if (Self.GlobalType(Name) <> nil) and
          (IsJumboSet(Self.GlobalType(Name)) or
@@ -15963,6 +16002,10 @@ begin
     matches EmitUnit's FUnitInitNames.Add(NativeMangle(AUnit.Name)). }
   if AHasInit then
     FUnitInitNames.Add(NativeMangle(AUnitName));
+  { Record the imported unit (raw name, matching TSymbol.OwningUnit) so
+    EmitDataSection emits globals owned by it as references, not definitions —
+    the cached object owns the definition. }
+  FImportedUnits.Add(AUnitName);
 end;
 
 procedure TX86_64Backend.FinalizeEmit;

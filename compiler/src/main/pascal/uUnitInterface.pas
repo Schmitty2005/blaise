@@ -187,6 +187,16 @@ type
                                     that the iface is safe to trust. }
 
     UsedUnits:       TStringList; { owned — interface-section uses, in order }
+    ImplUsedUnits:   TStringList; { owned — implementation-section uses, in
+                                    order.  Needed so an incremental rebuild
+                                    that loads this unit from its cached .bif
+                                    still pulls in (and links) impl-only
+                                    dependencies. }
+    HasInitialization: Boolean;   { unit has a non-empty initialization
+                                    section.  An incremental rebuild loads this
+                                    unit from its cached .bif and must still
+                                    emit a call to <Unit>_init at program
+                                    startup, or the init section never runs. }
 
     Types:           TObjectList; { owned TTypeEntry }
     Consts:          TObjectList; { owned TConstEntry }
@@ -372,6 +382,7 @@ begin
   inherited Create();
   Name      := AName;
   UsedUnits := TStringList.Create();
+  ImplUsedUnits := TStringList.Create();
 
   Types         := TObjectList.Create(True);
   Consts        := TObjectList.Create(True);
@@ -402,6 +413,7 @@ begin
   Consts.Free();
   Types.Free();
 
+  ImplUsedUnits.Free();
   UsedUnits.Free();
   inherited Destroy();
 end;

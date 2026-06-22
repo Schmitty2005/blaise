@@ -53,7 +53,11 @@ uses
 
 const
   IFACE_MAGIC   = 'BLAISE-IFACE';
-  IFACE_VERSION = 1;
+  IFACE_VERSION = 3;  { v2: META block carries ImplUsedUnits + HasInitialization
+                        v3: EncodeBlock carries local var declarations so generic
+                            template method bodies round-trip with their locals
+                            (e.g. 'var Ptr: ^T'); without this an instantiation
+                            from a cached .bif fails with 'Undeclared variable'. }
 
 type
   EIfaceFormatError = class(Exception);
@@ -76,6 +80,11 @@ function  ReadUnitInterfaceFromFile(const APath: string): TUnitInterface;
 function ContentHashFnv1a64(const AContent: string): string;
 
 implementation
+
+{ Forward — EncodeExpr is defined far below (with the statement/expression
+  serialiser) but the method-signature writers need it to emit parameter
+  default values. }
+function EncodeExpr(AE: TASTExpr): string; forward;
 
 { ----- Writer ----------------------------------------------------- }
 
@@ -274,7 +283,8 @@ begin
     Result := Result +
               EncodeLpstr(P.ParamName) +
               EncodeLpstr(P.TypeName) +
-              EncodeParamFlags(P);
+              EncodeParamFlags(P) +
+              EncodeExpr(P.DefaultValue);
   end;
 end;
 
@@ -357,7 +367,8 @@ begin
     Result := Result +
               EncodeLpstr(P.ParamName) +
               EncodeLpstr(P.TypeName) +
-              EncodeParamFlags(P);
+              EncodeParamFlags(P) +
+              EncodeExpr(P.DefaultValue);
   end;
 end;
 
@@ -422,6 +433,10 @@ begin
       M := TMethodDecl(ClassDef.Methods.Items[J]);
       Result := Result + EncodeBlock(M.Body);
     end;
+    { Property declarations — needed so a cached template instantiates with
+      its properties (e.g. TList<T>.Count, TDictionary<K,V>.Count).  Without
+      these the instance has no properties and 'D.Count' fails to resolve. }
+    Result := Result + EncodePropertyList(ClassDef.Properties);
   end
   else
     { Defensive: encode "has-body" flag = false so the reader can
@@ -430,7 +445,8 @@ begin
               EncodeQualRefParts('', '') +
               EncodeLpstr('0') +
               EncodeCount(0) + EncodeCount(0) +
-              EncodeCount(0) + EncodeCount(0);
+              EncodeCount(0) + EncodeCount(0) +
+              EncodeCount(0);
 end;
 
 function WriteGenericInterfacePayload(AEntry: TTypeEntry): string;
@@ -562,6 +578,10 @@ begin
   if AParam.IsConstParam then B := B or 2;
   if AParam.IsOpenArray  then B := B or 4;
   if AParam.IsOutParam   then B := B or 8;
+  { Bit 16: this param has a default value.  The default expression itself
+    is not serialised; the flag is enough for MinArity / overload resolution
+    to accept calls that omit the trailing defaulted arguments. }
+  if (AParam.DefaultValue <> nil) or AParam.HasDefault then B := B or 16;
   Result := EncodeLpstr(IntToStr(B));
 end;
 
@@ -590,9 +610,16 @@ begin
         Line := Line +
                 EncodeLpstr(P.ParamName) +
                 EncodeLpstr(P.TypeName) +
-                EncodeParamFlags(P);
+                EncodeParamFlags(P) +
+                EncodeExpr(P.DefaultValue);
       end;
       Line := Line + EncodeLpstr(R.CallingConv);
+      { ResolvedQbeName — the mangled link symbol.  Required for overloaded
+        free routines (e.g. GCHashOf): each overload has a distinct mangled
+        name ('..._GCHashOf_D_S' etc.).  Without it the importer falls back
+        to the unmangled 'Unit_Name' for every overload, so a call site emits
+        a reference to a symbol that does not exist in the cached .o. }
+      Line := Line + EncodeLpstr(R.ResolvedQbeName);
       SB.AppendLine(Line);
     end;
     SB.AppendLine('END');
@@ -613,7 +640,9 @@ begin
            EncodeLpstr(AIface.SourceHash) +
            EncodeLpstr(AIface.CompilerId) +
            EncodeInt64(AIface.SourceModTime) +
-           EncodeStringList(AIface.UsedUnits));
+           EncodeStringList(AIface.UsedUnits) +
+           EncodeStringList(AIface.ImplUsedUnits) +
+           EncodeBool(AIface.HasInitialization));
     SB.AppendLine('END');
     Result := SB.ToString();
   finally
@@ -634,7 +663,6 @@ end;
   format-error fallback at read time — a structural change in the
   AST needs a matching version bump in the wire format. }
 
-function EncodeExpr(AE: TASTExpr): string; forward;
 function EncodeStmt(AStmt: TASTStmt): string; forward;
 function EncodeBlock(AB: TBlock): string; forward;
 
@@ -814,7 +842,12 @@ begin
     Result := EncodeLpstr('raise') +
               EncodeExpr(TRaiseStmt(AStmt).Expr)
   else if AStmt is TExitStmt then
-    Result := EncodeLpstr('exit')
+    { Carry the optional return value — 'Exit(expr)'.  Without it a cached
+      generic-template body's 'Exit(-1)' round-trips as a bare 'Exit',
+      leaving Result uninitialised (e.g. TDictionary.FindKey returns 0 not
+      -1, so every key appears found at slot 0). }
+    Result := EncodeLpstr('exit') +
+              EncodeExpr(TExitStmt(AStmt).Value)
   else if AStmt is TBreakStmt then
     Result := EncodeLpstr('brk')
   else if AStmt is TContinueStmt then
@@ -871,11 +904,36 @@ end;
   nested types, and the importer doesn't currently re-emit nested
   proc decls.  Add as needed; nil ABlock encodes as a single
   'nil' lpstr. }
+{ Encode a block's local var declarations (names + type name).  Only
+  the facts a downstream instantiation needs to declare the local into
+  scope are emitted — initialisers and attributes are not required for
+  generic template bodies (e.g. 'var Ptr: ^T') and are omitted.  Each
+  TVarDecl is emitted flattened: one record per name. }
+function EncodeBlockVarDecls(AB: TBlock): string;
+var
+  I, J:  Integer;
+  VD:    TVarDecl;
+  Total: Integer;
+begin
+  Total := 0;
+  for I := 0 to AB.Decls.Count - 1 do
+    Total := Total + TVarDecl(AB.Decls.Items[I]).Names.Count;
+  Result := EncodeCount(Total);
+  for I := 0 to AB.Decls.Count - 1 do
+  begin
+    VD := TVarDecl(AB.Decls.Items[I]);
+    for J := 0 to VD.Names.Count - 1 do
+      Result := Result + EncodeLpstr(VD.Names.Strings[J]) +
+                         EncodeLpstr(VD.TypeName);
+  end;
+end;
+
 function EncodeBlock(AB: TBlock): string;
 begin
   if AB = nil then
   begin Result := EncodeLpstr('nil'); Exit; end;
-  Result := EncodeLpstr('block') + EncodeStmtList(AB.Stmts);
+  Result := EncodeLpstr('block') + EncodeStmtList(AB.Stmts) +
+            EncodeBlockVarDecls(AB);
 end;
 
 { Emit only generic free routines.  Generic class/interface
@@ -1450,6 +1508,7 @@ var
   TFSn: TTryFinallyStmt;
   TESn: TTryExceptStmt;
   RaSn: TRaiseStmt;
+  ESn:  TExitStmt;
   CSSn: TCaseStmt;
   FASn: TFieldAssignment;
   SSAn: TStaticSubscriptAssign;
@@ -1557,7 +1616,12 @@ begin
     RaSn.Expr := ReadExpr(AText, APos);
     Result := RaSn;
   end
-  else if Kind = 'exit' then Result := TExitStmt.Create()
+  else if Kind = 'exit' then
+  begin
+    ESn := TExitStmt.Create();
+    ESn.Value := ReadExpr(AText, APos);   { nil for bare 'Exit' }
+    Result := ESn;
+  end
   else if Kind = 'brk'  then Result := TBreakStmt.Create()
   else if Kind = 'cont' then Result := TContinueStmt.Create()
   else if Kind = 'case' then
@@ -1626,7 +1690,11 @@ end;
 
 function ReadBlock(const AText: string; var APos: Integer): TBlock;
 var
-  Kind: string;
+  Kind:    string;
+  C, I:    Integer;
+  VarName: string;
+  VarType: string;
+  VD:      TVarDecl;
 begin
   Kind := ReadLpstrAt(AText, APos);
   if Kind = 'nil' then begin Result := nil; Exit; end;
@@ -1634,6 +1702,17 @@ begin
     raise EIfaceFormatError.Create('ReadBlock: expected ''block'' got ''' + Kind + '''');
   Result := TBlock.Create();
   ReadStmtList(AText, APos, Result.Stmts);
+  { Local var declarations (v3+): one flattened record per name. }
+  C := DecodeCount(AText, APos);
+  for I := 1 to C do
+  begin
+    VarName := ReadLpstrAt(AText, APos);
+    VarType := ReadLpstrAt(AText, APos);
+    VD := TVarDecl.Create();
+    VD.Names.Add(VarName);
+    VD.TypeName := VarType;
+    Result.Decls.Add(VD);
+  end;
 end;
 
 function DecodeCount(const AText: string; var APos: Integer): Integer;
@@ -1710,6 +1789,7 @@ begin
     Param.TypeName  := ReadLpstrAt(AText, APos);
     FlagsStr := ReadLpstrAt(AText, APos);
     DecodeParamFlags(StrToInt(FlagsStr), Param);
+    Param.DefaultValue := ReadExpr(AText, APos);
     Result.Params.Add(Param);
   end;
 end;
@@ -1779,6 +1859,7 @@ begin
     Param.TypeName  := ReadLpstrAt(AText, APos);
     FlagsStr := ReadLpstrAt(AText, APos);
     DecodeParamFlags(StrToInt(FlagsStr), Param);
+    Param.DefaultValue := ReadExpr(AText, APos);
     Result.Params.Add(Param);
   end;
 end;
@@ -1876,6 +1957,10 @@ begin
   C := DecodeCount(AText, APos);
   for I := 1 to C do
     AIface.UsedUnits.Add(ReadLpstrAt(AText, APos));
+  C := DecodeCount(AText, APos);
+  for I := 1 to C do
+    AIface.ImplUsedUnits.Add(ReadLpstrAt(AText, APos));
+  AIface.HasInitialization := ReadLpstrAt(AText, APos) = '1';
   if ReadTag(AText, APos) <> 'END' then
     raise EIfaceFormatError.Create('META block: missing END marker');
 end;
@@ -1953,6 +2038,9 @@ begin
     MD.OwnBody := MD.Body <> nil;
     ClassDef.Methods.Add(MD);
   end;
+
+  { Property declarations (parallel to WriteGenericClassPayload). }
+  ReadPropertyList(AText, APos, ClassDef.Properties);
 
   AEntry.IsGeneric := True;
   AEntry.Def       := Def;
@@ -2085,6 +2173,7 @@ begin
   AParam.IsConstParam := (AFlags and 2) <> 0;
   AParam.IsOpenArray  := (AFlags and 4) <> 0;
   AParam.IsOutParam   := (AFlags and 8) <> 0;
+  AParam.HasDefault   := (AFlags and 16) <> 0;
 end;
 
 procedure ReadRoutines(const AText: string; var APos: Integer;
@@ -2119,9 +2208,11 @@ begin
       Param.TypeName  := ReadLpstrAt(AText, APos);
       FlagsStr := ReadLpstrAt(AText, APos);
       DecodeParamFlags(StrToInt(FlagsStr), Param);
+      Param.DefaultValue := ReadExpr(AText, APos);
       R.Params.Add(Param);
     end;
     R.CallingConv := ReadLpstrAt(AText, APos);
+    R.ResolvedQbeName := ReadLpstrAt(AText, APos);
     AIface.AddRoutine(R);
   end;
   if ReadTag(AText, APos) <> 'END' then

@@ -56,6 +56,16 @@ type
       runtime Makefile drives (every RTL unit is compiled `--source X.pas
       --output X.o`), so it broke `make` in runtime/. }
     procedure TestNativeIncremental_UnitUsesUnit_Compiles;
+    { Regression: a unit that USES another unit only in its IMPLEMENTATION
+      section.  On a clean build all units are parsed, so the impl-only
+      dependency's object is linked.  But on an incremental REBUILD, the
+      consuming unit is loaded from its cached .o/.bif — and the .bif only
+      recorded the INTERFACE uses, so the impl-only dependency was never
+      loaded and its .o was dropped from the link → undefined symbol at
+      run time.  This is exactly what broke a second `pasbuild test-compile`
+      (the compiler rebuilt itself incrementally into a populated cache and
+      lost ~880 KB of impl-only-dependency code). }
+    procedure TestIncrementalRebuild_ImplOnlyUses_LinksDependency;
   end;
 
 implementation
@@ -668,6 +678,93 @@ begin
   Rc := RunBinary(ProgBin, Captured);
   AssertEquals('use_derived exit code', 0, Rc);
   AssertEquals('use_derived stdout', '42' + #10, Captured)
+end;
+
+procedure TSepCompileTests.TestIncrementalRebuild_ImplOnlyUses_LinksDependency;
+const
+  HelperSrc =
+    '''
+    unit HelperU;
+    interface
+    function HelperVal: Integer;
+    implementation
+    function HelperVal: Integer;
+    begin Result := 42 end;
+    end.
+    ''';
+  { MidU uses HelperU only in its IMPLEMENTATION section — HelperU does not
+    appear in MidU's interface, so MidU's .bif must still record it as an
+    implementation-section dependency. }
+  MidSrc =
+    '''
+    unit MidU;
+    interface
+    function MidVal: Integer;
+    implementation
+    uses HelperU;
+    function MidVal: Integer;
+    begin Result := HelperVal() + 1 end;
+    end.
+    ''';
+  ProgSrc =
+    '''
+    program UseMid;
+    uses MidU;
+    begin
+      WriteLn(MidVal())
+    end.
+    ''';
+var
+  HelperPas, MidPas, ProgPas, ProgBin, CacheDir: string;
+  Captured: string;
+  Rc: Integer;
+begin
+  if not ToolchainAvailable() then
+  begin
+    Fail('toolchain missing — qbe or RTL not found');
+    Exit
+  end;
+  if not FileExists(BlaisePath()) then
+  begin
+    Fail('blaise binary missing at ' + BlaisePath());
+    Exit
+  end;
+
+  HelperPas := FScratch + '/HelperU.pas';
+  MidPas    := FScratch + '/MidU.pas';
+  ProgPas   := FScratch + '/use_mid.pas';
+  ProgBin   := FScratch + '/use_mid';
+  CacheDir  := FScratch + '/units-impl';
+
+  WriteFile(HelperPas, HelperSrc);
+  WriteFile(MidPas, MidSrc);
+  WriteFile(ProgPas, ProgSrc);
+  ForceDirectories(CacheDir);
+
+  { Build 1 (clean cache): every unit is parsed from source, so HelperU's
+    object is linked.  This populates the cache with .o/.bif for MidU and
+    HelperU. }
+  Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
+                   '--unit-cache', CacheDir,
+                   '--unit-path', FScratch], Captured);
+  AssertEquals('build1 exit code (out: ' + Captured + ')', 0, Rc);
+  Rc := RunBinary(ProgBin, Captured);
+  AssertEquals('build1 run exit code', 0, Rc);
+  AssertEquals('build1 stdout', '43' + #10, Captured);
+
+  { Build 2 (populated cache): MidU is now loaded from its cached iface.
+    The loader must still pull in HelperU (MidU's impl-only dependency) and
+    link helperu.o — otherwise the link drops it and the program aborts at
+    run time with an undefined symbol. }
+  Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
+                   '--unit-cache', CacheDir,
+                   '--unit-path', FScratch], Captured);
+  AssertEquals('build2 exit code (out: ' + Captured + ')', 0, Rc);
+  AssertTrue('use_mid exists after rebuild', FileExists(ProgBin));
+
+  Rc := RunBinary(ProgBin, Captured);
+  AssertEquals('build2 run exit code (impl-only dep must be linked)', 0, Rc);
+  AssertEquals('build2 stdout', '43' + #10, Captured)
 end;
 
 initialization

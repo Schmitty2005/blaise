@@ -49,6 +49,16 @@ type
       AddGroupEntry is also added here, which retains it for the analyser's
       lifetime; the destructor frees this list, releasing the groups. }
     FGroupKeepAlive:       TObjectList;
+    { Generic instances created while no program/unit is being analysed —
+      i.e. when ImportUnitInterface triggers FindTypeOrInstantiate to resolve
+      a cached iface's generic-instance field type (e.g. 'TList<TFoo>') before
+      Analyse/AnalyseUnit has set FProg/FCurrentUnit.  Holding them here (non-
+      owning) avoids a nil-deref on FProg.GenericInstances.Add; FlushPending
+      GenericInstances moves them into the real owner once analysis begins so
+      codegen still emits the instance's methods. }
+    FPendingGenericInstances:       TObjectList; { TGenericInstance — not owned }
+    FPendingGenericRecordInstances: TObjectList; { TGenericRecordInstance — not owned }
+    FPendingGenericIntfInstances:   TObjectList; { TGenericInterfaceInstance — not owned }
     FGenericFuncTemplates: TStringList;  { base name → TMethodDecl template (not owned) }
     FGenericMethodTemplates: TStringList; { 'OwnerType.Method' → TMethodDecl template (not owned) — generic methods with method-level <T> }
     FLoopDepth:            Integer;      { depth of enclosing while/for — Break only legal if > 0 }
@@ -186,6 +196,10 @@ type
     procedure LinkClassMethodImpls(ABlock: TBlock);
     procedure LinkGenericClassMethodImpls(ABlock: TBlock);
     procedure RepairEarlyGenericInstances;
+    { Move any generic instances parked at import time (FProg/FCurrentUnit
+      both nil) into the now-current program or unit, so codegen emits their
+      method bodies.  Called at the start of Analyse / AnalyseUnit. }
+    procedure FlushPendingGenericInstances;
     procedure AnalyseMethodBodies(ABlock: TBlock);
     procedure AnalyseMethodDecl(AMethod: TMethodDecl; AClassType: TRecordTypeDesc);
     procedure AnalyseStandaloneDecls(ABlock: TBlock);
@@ -375,6 +389,15 @@ type
     procedure RegisterImportedMethod(const ATypeName: string;
                                      ADecl: TMethodDecl);
 
+    { Public entry to the on-demand type resolver used by the source
+      compile path.  uSemanticImport calls this to resolve a cached
+      iface's type-name string (e.g. a field type 'TList<TFoo>' or an
+      'array of TFoo') that is not a plain registered symbol — the
+      import path otherwise has no way to instantiate generics, so a
+      generic-instance field type from a .bif fails to resolve.  Mirrors
+      what AnalyseUnitForExport does for the same field in source form. }
+    function  ResolveImportedTypeName(const AName: string): TTypeDesc;
+
     { Register a TUnitInterface in FUnitIfaces, keyed by AIface.Name.
       AIface is NOT owned — caller (Blaise.pas) retains lifetime.
       Subsequent registrations of the same name replace the entry
@@ -524,11 +547,17 @@ begin
   FUnitSymbols.CaseSensitive := False;
   FActiveTypeParams     := TStringList.Create();
   FActiveTypeParams.CaseSensitive := False;
+  FPendingGenericInstances       := TObjectList.Create(False);
+  FPendingGenericRecordInstances := TObjectList.Create(False);
+  FPendingGenericIntfInstances   := TObjectList.Create(False);
   FLoopDepth            := 0;
 end;
 
 destructor TSemanticAnalyser.Destroy;
 begin
+  FPendingGenericIntfInstances.Free();
+  FPendingGenericRecordInstances.Free();
+  FPendingGenericInstances.Free();
   FActiveTypeParams.Free();
   FUnitSymbols.Free();
   FUnitIfaces.Free();
@@ -1039,6 +1068,7 @@ var
   I: Integer;
 begin
   FProg := AProg;
+  FlushPendingGenericInstances;
   FCurrentUnitName := AProg.Name;
   BuildUsesChain(AProg.UsedUnits);
   FTable.UsesChainProvider := Self;
@@ -1072,6 +1102,7 @@ var
 begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
+  FlushPendingGenericInstances;
   FTable.PushScope();
   try
     { The unit's own name and the names of directly used units are
@@ -1396,6 +1427,7 @@ var
 begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
+  FlushPendingGenericInstances;
   BuildUsesChain(AUnit.UsedUnits);
   FTable.UsesChainProvider := Self;
   { Auto-tag every global Define within this unit's analysis with the
@@ -1704,6 +1736,11 @@ begin
   AddGroupEntry(FMethodGroups, ATypeName + '.' + ADecl.Name, ADecl);
 end;
 
+function TSemanticAnalyser.ResolveImportedTypeName(const AName: string): TTypeDesc;
+begin
+  Result := Self.FindTypeOrInstantiate(AName);
+end;
+
 procedure TSemanticAnalyser.RegisterUnitIface(AIface: TUnitInterface);
 var
   Idx, I:  Integer;
@@ -2003,6 +2040,39 @@ begin
     MDecl.Body := Decl.Body;
     Decl.Body  := nil;
   end;
+end;
+
+procedure TSemanticAnalyser.FlushPendingGenericInstances;
+var
+  I: Integer;
+begin
+  if FCurrentUnit <> nil then
+  begin
+    for I := 0 to FPendingGenericInstances.Count - 1 do
+      FCurrentUnit.GenericInstances.Add(FPendingGenericInstances.Items[I]);
+    for I := 0 to FPendingGenericRecordInstances.Count - 1 do
+      FCurrentUnit.GenericRecordInstances.Add(
+        FPendingGenericRecordInstances.Items[I]);
+    for I := 0 to FPendingGenericIntfInstances.Count - 1 do
+      FCurrentUnit.GenericIntfInstances.Add(
+        FPendingGenericIntfInstances.Items[I]);
+  end
+  else if FProg <> nil then
+  begin
+    for I := 0 to FPendingGenericInstances.Count - 1 do
+      FProg.GenericInstances.Add(FPendingGenericInstances.Items[I]);
+    for I := 0 to FPendingGenericRecordInstances.Count - 1 do
+      FProg.GenericRecordInstances.Add(
+        FPendingGenericRecordInstances.Items[I]);
+    for I := 0 to FPendingGenericIntfInstances.Count - 1 do
+      FProg.GenericIntfInstances.Add(
+        FPendingGenericIntfInstances.Items[I]);
+  end
+  else
+    Exit;
+  FPendingGenericInstances.Clear();
+  FPendingGenericRecordInstances.Clear();
+  FPendingGenericIntfInstances.Clear();
 end;
 
 procedure TSemanticAnalyser.RepairEarlyGenericInstances;
@@ -2685,8 +2755,16 @@ var
   ParentSym: TSymbol;
   ParentRT:  TRecordTypeDesc;
   FldInfo:   TFieldInfo;
+  DeferBodies: Boolean;
 begin
   Result := nil;
+  { No program/unit context yet (ImportUnitInterface resolving a cached
+    iface's generic-instance field type).  Build the type descriptor +
+    fields now, but leave method bodies nil and park the instance — once
+    Analyse/AnalyseUnit sets a context, RepairEarlyGenericInstances clones
+    and analyses the bodies.  Analysing them here would deref nil FProg/
+    FCurrentUnit deep in the body walk. }
+  DeferBodies := (FProg = nil) and (FCurrentUnit = nil);
 
   { Parse 'BaseName<Arg1,Arg2>' }
   BracPos := StrPos('<', ATypeName);
@@ -2777,13 +2855,16 @@ begin
       NewMDecl.OwnerTypeName := ATypeName;
       NewMDecl.IsVirtual     := MDecl.IsVirtual;
       NewMDecl.IsOverride    := MDecl.IsOverride;
-      if MDecl.Body <> nil then
+      if (MDecl.Body <> nil) and (not DeferBodies) then
       begin
         NewMDecl.Body    := CloneBlock(MDecl.Body);
         NewMDecl.OwnBody := True;
       end
       else
       begin
+        { Body left nil — either the template is signature-only, or we are
+          deferring body analysis to RepairEarlyGenericInstances (which only
+          repairs methods whose Body is still nil). }
         NewMDecl.Body    := nil;
         NewMDecl.OwnBody := False;
       end;
@@ -3028,8 +3109,13 @@ begin
     GI.DefUnitName := Templ.DefUnitName;
     if FCurrentUnit <> nil then
       FCurrentUnit.GenericInstances.Add(GI)
+    else if FProg <> nil then
+      FProg.GenericInstances.Add(GI)
     else
-      FProg.GenericInstances.Add(GI);
+      { Instantiated during ImportUnitInterface, before Analyse/AnalyseUnit
+        has set a program/unit owner.  Park it; FlushPendingGenericInstances
+        hands it to the real owner once analysis starts. }
+      FPendingGenericInstances.Add(GI);
 
     Result := RT;
   finally
@@ -3060,8 +3146,13 @@ var
   RT:       TRecordTypeDesc;
   GRI:      TGenericRecordInstance;
   ConcrType: TTypeDesc;
+  DeferBodies: Boolean;
 begin
   Result := nil;
+  { See InstantiateGeneric — defer body clone+analysis when there is no
+    program/unit context (import-time resolution of a cached field type).
+    RepairEarlyGenericInstances re-clones and analyses the bodies later. }
+  DeferBodies := (FProg = nil) and (FCurrentUnit = nil);
 
   BracPos := StrPos('<', ATypeName);
   if BracPos < 0 then Exit;
@@ -3120,13 +3211,15 @@ begin
       NewMDecl.Name          := MDecl.Name;
       NewMDecl.OwnerTypeName := ATypeName;
       NewMDecl.IsRecordMethod := True;
-      if MDecl.Body <> nil then
+      if (MDecl.Body <> nil) and (not DeferBodies) then
       begin
         NewMDecl.Body    := CloneBlock(MDecl.Body);
         NewMDecl.OwnBody := True;
       end
       else
       begin
+        { Body left nil — signature-only template, or deferred to
+          RepairEarlyGenericInstances (import-time, no program context). }
         NewMDecl.Body    := nil;
         NewMDecl.OwnBody := False;
       end;
@@ -3228,8 +3321,10 @@ begin
     GRI.TypeDesc  := RT;
     if FCurrentUnit <> nil then
       FCurrentUnit.GenericRecordInstances.Add(GRI)
+    else if FProg <> nil then
+      FProg.GenericRecordInstances.Add(GRI)
     else
-      FProg.GenericRecordInstances.Add(GRI);
+      FPendingGenericRecordInstances.Add(GRI);
 
     Result := RT;
   finally
@@ -3329,8 +3424,10 @@ begin
     GII.TypeDesc := Result;
     if FCurrentUnit <> nil then
       FCurrentUnit.GenericIntfInstances.Add(GII)
+    else if FProg <> nil then
+      FProg.GenericIntfInstances.Add(GII)
     else
-      FProg.GenericIntfInstances.Add(GII);
+      FPendingGenericIntfInstances.Add(GII);
   finally
     Args.Free();
   end;
@@ -7935,7 +8032,8 @@ var
   I: Integer;
 begin
   for I := 0 to ADecl.Params.Count - 1 do
-    if TMethodParam(ADecl.Params.Items[I]).DefaultValue <> nil then
+    if (TMethodParam(ADecl.Params.Items[I]).DefaultValue <> nil) or
+       (TMethodParam(ADecl.Params.Items[I]).HasDefault) then
     begin
       Exit(I);
     end;
@@ -7955,10 +8053,13 @@ begin
     PSrc := TMethodParam(AFrom.Params.Items[I]);
     PDst := TMethodParam(AInto.Params.Items[I]);
     if (PSrc.DefaultValue <> nil) and (PDst.DefaultValue = nil) then
-    begin
-      PDst.DefaultValue := PSrc.DefaultValue;
-      PSrc.DefaultValue := nil;  { ownership transferred }
-    end;
+      { Clone rather than move: the source is the interface forward decl,
+        which uSemanticExport later serialises into the unit's .bif.  Moving
+        (nil-ing PSrc) stripped the default from the exported signature, so a
+        caller in a SEPARATE compilation that loaded the unit from its cached
+        .bif could not omit the defaulted trailing arguments.  Both decls now
+        keep their own copy. }
+      PDst.DefaultValue := CloneExpr(PSrc.DefaultValue);
   end;
 end;
 

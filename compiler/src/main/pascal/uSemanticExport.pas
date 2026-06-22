@@ -465,9 +465,14 @@ procedure CopyUsedUnits(AUnit: TUnit; AIface: TUnitInterface);
 var
   I: Integer;
 begin
-  if AUnit.UsedUnits = nil then Exit;
-  for I := 0 to AUnit.UsedUnits.Count - 1 do
-    AIface.UsedUnits.Add(AUnit.UsedUnits.Strings[I]);
+  if AUnit.UsedUnits <> nil then
+    for I := 0 to AUnit.UsedUnits.Count - 1 do
+      AIface.UsedUnits.Add(AUnit.UsedUnits.Strings[I]);
+  if AUnit.ImplUsedUnits <> nil then
+    for I := 0 to AUnit.ImplUsedUnits.Count - 1 do
+      AIface.ImplUsedUnits.Add(AUnit.ImplUsedUnits.Strings[I]);
+  AIface.HasInitialization :=
+    (AUnit.InitStmts <> nil) and (AUnit.InitStmts.Count > 0);
 end;
 
 { ----- Top-level ------------------------------------------------- }

@@ -53,6 +53,10 @@ type
       ifaces.  Caller links against these alongside the main
       program's object. }
     property PrebuiltObjectPaths: TStringList read FPrebuiltObjectPaths;
+    { Object paths for impl-only dependencies that must be linked but were
+      not semantically imported (and thus are absent from PrebuiltObjectPaths
+      and the source-compiled unit set).  Caller links these too. }
+    property LinkOnlyObjects:     TStringList read FLinkOnlyObjects;
   private
     FSearchPaths:          TStringList;  { not owned }
     FDefines:              TStringList;  { not owned — conditional symbols for each unit's lexer }
@@ -61,6 +65,11 @@ type
     FResult:               TObjectList;  { the in-progress output list (not owned here) }
     FPrebuiltIfaces:       TObjectList;  { owned TUnitInterface }
     FPrebuiltObjectPaths:  TStringList;
+    FLinkOnlyObjects:      TStringList;  { .o paths for impl-only deps that
+                                           must be linked but NOT semantically
+                                           imported (see CollectLinkOnlyObject) }
+    FLinkOnlySeen:         TStringList;  { unit names already visited by the
+                                           link-only collector — cycle guard }
     function IsBuiltin(const AName: string): Boolean;
     function Locate(const AName: string): string;
     { Look for '<AName>.o' on the search paths (lowercase or as-cased).
@@ -71,6 +80,11 @@ type
     function LoadIfaceFromObject(const APath: string): TUnitInterface;
     function LoadOne(const APath: string): TUnit;
     procedure LoadTransitive(const AName: string);
+    { Collect the .o for an impl-only dependency (and its transitive
+      dependencies) for linking, without parsing source or importing its
+      iface.  Units already loaded normally are skipped — they are linked
+      via FPrebuiltObjectPaths / the source-compiled worker objects. }
+    procedure CollectLinkOnlyObject(const AName: string);
     { Decide whether to trust a freshly-loaded .bif.  Hash-compares
       against the source .pas if present on the search path; falls
       back to a CompilerId match when source is unavailable. }
@@ -243,6 +257,37 @@ begin
   end;
 end;
 
+procedure TUnitLoader.CollectLinkOnlyObject(const AName: string);
+var
+  ObjPath: string;
+  Iface:   TUnitInterface;
+  I:       Integer;
+begin
+  if IsBuiltin(AName) then Exit;
+  { Already loaded the normal way → its object is already linked. }
+  if FLoadedNames.IndexOf(AName) >= 0 then Exit;
+  if FLinkOnlySeen.IndexOf(AName) >= 0 then Exit;
+  FLinkOnlySeen.Add(AName);
+
+  ObjPath := LocateObject(AName);
+  if ObjPath = '' then Exit;  { no cached object — nothing to link }
+  Iface := LoadIfaceFromObject(ObjPath);
+  if Iface = nil then Exit;   { unreadable iface — the source-load path
+                                elsewhere will have handled this unit }
+  try
+    if not ValidateIface(Iface, AName) then Exit;
+    if FLinkOnlyObjects.IndexOf(ObjPath) < 0 then
+      FLinkOnlyObjects.Add(ObjPath);
+    { Recurse so this dep's own dependencies are linked too. }
+    for I := 0 to Iface.UsedUnits.Count - 1 do
+      CollectLinkOnlyObject(Iface.UsedUnits.Strings[I]);
+    for I := 0 to Iface.ImplUsedUnits.Count - 1 do
+      CollectLinkOnlyObject(Iface.ImplUsedUnits.Strings[I]);
+  finally
+    Iface.Free();
+  end;
+end;
+
 procedure TUnitLoader.LoadTransitive(const AName: string);
 var
   Path:    string;
@@ -290,6 +335,17 @@ begin
         FPrebuiltIfaces.Add(Iface);
         FPrebuiltObjectPaths.Add(ObjPath);
         FLoadedNames.Add(AName);
+        { Impl-only dependencies are not reachable via the interface uses,
+          but their objects must still be linked or the program loses their
+          code (an incremental rebuild that loads this unit from its cached
+          .bif would otherwise drop them).  They are collected for LINK ONLY
+          — not semantically imported — because the consuming unit never
+          references their symbols, and importing their ifaces early would
+          break the dependency-ordered import (impl/interface-use cycles, e.g.
+          a backend unit whose interface a peer impl-uses, cannot be resolved
+          by the leaf-first iface import). }
+        for I := 0 to Iface.ImplUsedUnits.Count - 1 do
+          CollectLinkOnlyObject(Iface.ImplUsedUnits.Strings[I]);
       finally
         FLoading.Delete(FLoading.IndexOf(AName));
       end;
@@ -337,10 +393,16 @@ begin
   FPrebuiltIfaces      := TObjectList.Create(True);
   FPrebuiltObjectPaths := TStringList.Create();
   FPrebuiltObjectPaths.CaseSensitive := False;
+  FLinkOnlyObjects     := TStringList.Create();
+  FLinkOnlyObjects.CaseSensitive := False;
+  FLinkOnlySeen        := TStringList.Create();
+  FLinkOnlySeen.CaseSensitive := False;
 end;
 
 destructor TUnitLoader.Destroy;
 begin
+  FLinkOnlySeen.Free();
+  FLinkOnlyObjects.Free();
   FPrebuiltObjectPaths.Free();
   FPrebuiltIfaces.Free();
   FLoadedNames.Free();
