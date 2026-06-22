@@ -32,6 +32,13 @@ implementation
 uses
   StrUtils;   { TStringBuilder }
 
+{ ponytail: PORTING BOUNDARY — getrandom(2) is LINUX-specific (3.17+, glibc
+  2.25+).  FreeBSD has a compatible getrandom; macOS does NOT (use getentropy(3)
+  or SecRandomCopyBytes); Windows uses BCryptGenRandom.  When a second target
+  lands, dispatch c_getrandom per platform behind NewGuidRaw — the public API
+  (NewGuid/NewGuidRaw) stays put.  (/dev/urandom would cover all the Unixes but
+  not Windows, hence the syscall.) }
+
 { getrandom(buf, buflen, flags): fill buf with buflen random bytes from the
   kernel CSPRNG.  flags=0 reads from the same pool as /dev/urandom. }
 function c_getrandom(ABuf: Pointer; ALen: Int64; AFlags: Integer): Int64;

@@ -27,6 +27,18 @@ unit Net.Sockets;
 
 interface
 
+{ ponytail: PORTING BOUNDARY — the constants and the sockaddr_in layout below
+  are LINUX x86_64 values.  Other targets differ and need a per-platform layer:
+    * macOS/BSD: SO_REUSEADDR=4, O_NONBLOCK=4 (impl section), and TSockAddrIn
+      starts with a sin_len:Byte before sin_family; MSG_NOSIGNAL does not exist
+      (use the SO_NOSIGPIPE socket option, or keep IgnoreSigPipe).
+    * Windows: a separate Winsock backend (ws2_32, WSAStartup, closesocket,
+      SOCKET handles, WSAGetLastError).
+  The helper API (TcpListen*/TcpConnect*/AcceptConn/RecvString/SendAll/Close/
+  MakeNonBlocking/IgnoreSigPipe) is the stable surface — callers never touch
+  these constants — so a future port changes only the implementation, not
+  consumers.  Add the platform split when a second target lands. }
+
 const
   { address families / socket types }
   AF_INET     = 2;
