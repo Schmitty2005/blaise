@@ -25,7 +25,8 @@ uses
   Base64.Tests,
   Crypto.Tests,
   Sockets.Tests,
-  WebSockets.Tests;
+  WebSockets.Tests,
+  HttpServer.Tests;
 
 implementation
 
