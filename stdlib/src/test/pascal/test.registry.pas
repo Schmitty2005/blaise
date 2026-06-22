@@ -23,7 +23,8 @@ interface
 uses
   Json.Tests,
   Base64.Tests,
-  Crypto.Tests;
+  Crypto.Tests,
+  Sockets.Tests;
 
 implementation
 
