@@ -54,6 +54,15 @@ type
     procedure TestRun_Supports_TwoArg_BooleanResult;
     procedure TestRun_Supports_ThreeArg_AssignsAndCalls;
     procedure TestRun_ConstructorOverload_PicksCorrectArity;
+    { Regression: native backend passed float args to methods/constructors via
+      integer registers instead of the SysV xmm registers — a literal crashed
+      codegen, a variable silently used the wrong register. }
+    procedure TestRun_MethodFloatArg_Literal_PassedInXmm;
+    procedure TestRun_MethodFloatArg_Variable_PassedInXmm;
+    procedure TestRun_ConstructorFloatArg_Literal_StoredCorrectly;
+    procedure TestRun_ConstructorFloatArg_Variable_StoredCorrectly;
+    procedure TestRun_MethodMixedIntFloatString_RegistersInterleave;
+    procedure TestRun_MethodMultipleFloats_UseXmm0AndXmm1;
     procedure TestRun_MethodReadsProgramGlobal;
     procedure TestRun_VarParam_ClassFields_WritebackVisible;
     { Name-resolution priority for unqualified calls inside a class
@@ -1244,6 +1253,90 @@ begin
   AssertTrue('compile+run', CompileAndRun(SrcCtorOverloadArity, Output, RCode));
   AssertEquals('exit code 0', 0, RCode);
   AssertEquals('1-arg constructor body ran', '42' + LE, Output);
+end;
+
+procedure TE2EClasses2Tests.TestRun_MethodFloatArg_Literal_PassedInXmm;
+begin
+  AssertRunsOnAll(
+    '''
+    program c;
+    type TX = class procedure Take(d: Double); end;
+    procedure TX.Take(d: Double); begin WriteLn(d); end;
+    var x: TX;
+    begin x := TX.Create(); x.Take(1.5); end.
+    ''',
+    '1.5' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_MethodFloatArg_Variable_PassedInXmm;
+begin
+  AssertRunsOnAll(
+    '''
+    program f;
+    type TX = class procedure Take(d: Double); end;
+    procedure TX.Take(d: Double); begin WriteLn(d); end;
+    var x: TX; y: Double;
+    begin x := TX.Create(); y := 1.5; x.Take(y); end.
+    ''',
+    '1.5' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ConstructorFloatArg_Literal_StoredCorrectly;
+begin
+  AssertRunsOnAll(
+    '''
+    program ctl;
+    type TN = class V: Double; constructor CreateFloat(d: Double); end;
+    constructor TN.CreateFloat(d: Double); begin V := d; end;
+    var n: TN;
+    begin n := TN.CreateFloat(2.5); WriteLn(n.V); end.
+    ''',
+    '2.5' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ConstructorFloatArg_Variable_StoredCorrectly;
+begin
+  AssertRunsOnAll(
+    '''
+    program ct;
+    type TN = class V: Double; constructor CreateFloat(d: Double); end;
+    constructor TN.CreateFloat(d: Double); begin V := d; end;
+    var n: TN; y: Double;
+    begin y := 2.5; n := TN.CreateFloat(y); WriteLn(n.V); end.
+    ''',
+    '2.5' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_MethodMixedIntFloatString_RegistersInterleave;
+begin
+  { Exercises int + float + string interleaving: the string and Int64 take
+    integer arg registers, the Double takes an xmm register, independently. }
+  AssertRunsOnAll(
+    '''
+    program mix;
+    type TX = class procedure M(const s: string; i: Int64; d: Double); end;
+    procedure TX.M(const s: string; i: Int64; d: Double);
+    begin WriteLn('s=', s, ' i=', i, ' d=', d); end;
+    var x: TX;
+    begin x := TX.Create(); x.M('hi', 7, 3.5); end.
+    ''',
+    's=hi i=7 d=3.5' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_MethodMultipleFloats_UseXmm0AndXmm1;
+begin
+  { Two Double/Single args must land in distinct xmm registers (xmm0, xmm1),
+    interleaved with an integer arg that consumes an integer register. }
+  AssertRunsOnAll(
+    '''
+    program mf;
+    type TX = class procedure M(a: Double; i: Int64; b: Double; c: Single); end;
+    procedure TX.M(a: Double; i: Int64; b: Double; c: Single);
+    begin WriteLn('a=', a, ' i=', i, ' b=', b, ' c=', c); end;
+    var x: TX;
+    begin x := TX.Create(); x.M(1.5, 9, 2.5, 3.5); end.
+    ''',
+    'a=1.5 i=9 b=2.5 c=3.5' + LE, 0);
 end;
 
 procedure TE2EClasses2Tests.TestRun_MethodReadsProgramGlobal;

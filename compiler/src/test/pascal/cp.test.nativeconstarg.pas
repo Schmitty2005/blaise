@@ -61,6 +61,10 @@ type
     { Self is typed as the owning class; value record params present the
       '_data' shadow slot (the inline copy) so field drilldown works. }
     procedure TestOpdf_Facts_SelfAndRecordParamTyping;
+    { Regression: a float argument to an instance method must be marshalled
+      into an SSE (xmm) argument register per the System V ABI, not an integer
+      register.  Asserts the call site emits movsd into %xmm0. }
+    procedure TestMethodFloatArg_LoadedIntoXmm;
   end;
 
 implementation
@@ -624,6 +628,29 @@ begin
   AssertTrue('inline copy below the raw pointer slot', V.RbpOffset < -16);
   Prog.Free();
   CG.Free();
+end;
+
+procedure TNativeConstArgTests.TestMethodFloatArg_LoadedIntoXmm;
+const
+  Src = '''
+      program P;
+      type TX = class procedure Take(d: Double); end;
+      procedure TX.Take(d: Double); begin end;
+      var x: TX;
+      begin
+        x := TX.Create();
+        x.Take(1.5)
+      end.
+      ''';
+var
+  Asm: string;
+begin
+  Asm := GenAsm(Src);
+  { The Double argument must reach the SSE arg register, not an integer one. }
+  AssertTrue('float method arg loaded into %xmm0',
+    Pos('movsd', Asm) >= 0);
+  AssertTrue('float method arg targets the SSE arg register',
+    Pos('%xmm0', Asm) >= 0);
 end;
 
 initialization
