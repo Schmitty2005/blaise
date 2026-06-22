@@ -56,6 +56,13 @@ type
       runtime Makefile drives (every RTL unit is compiled `--source X.pas
       --output X.o`), so it broke `make` in runtime/. }
     procedure TestNativeIncremental_UnitUsesUnit_Compiles;
+    { Regression: a Double field read via implicit Self (Result := FFloat
+      inside a method) compiled in unit-mode (.o) emitted `movsd FFloat(%rip)`
+      — a load from a global symbol named after the field instead of from
+      Self+offset — producing an undefined `FFloat` symbol.  The store path was
+      already correct; only the read was broken, and only in per-unit codegen
+      (whole-program builds resolved it as a field offset). }
+    procedure TestNativeIncremental_FloatFieldRead_InUnit;
     { Regression: a unit that USES another unit only in its IMPLEMENTATION
       section.  On a clean build all units are parsed, so the impl-only
       dependency's object is linked.  But on an incremental REBUILD, the
@@ -678,6 +685,71 @@ begin
   Rc := RunBinary(ProgBin, Captured);
   AssertEquals('use_derived exit code', 0, Rc);
   AssertEquals('use_derived stdout', '42' + #10, Captured)
+end;
+
+procedure TSepCompileTests.TestNativeIncremental_FloatFieldRead_InUnit;
+const
+  UnitSrc =
+    '''
+    unit NumU;
+    interface
+    type
+      TNum = class
+        FFloat: Double;
+        procedure SetF(v: Double);
+        function GetF: Double;
+      end;
+    implementation
+    procedure TNum.SetF(v: Double); begin FFloat := v; end;
+    function TNum.GetF: Double; begin Result := FFloat; end;
+    end.
+    ''';
+  ProgSrc =
+    '''
+    program UseNum;
+    uses NumU;
+    var N: TNum;
+    begin
+      N := TNum.Create();
+      N.SetF(3.5);
+      WriteLn(N.GetF());
+      N.Free()
+    end.
+    ''';
+var
+  UnitPas, ProgPas, ProgBin: string;
+  Captured: string;
+  Rc: Integer;
+begin
+  if not ToolchainAvailable() then
+  begin
+    Fail('toolchain missing — qbe or RTL not found');
+    Exit
+  end;
+  if not FileExists(BlaisePath()) then
+  begin
+    Fail('blaise binary missing at ' + BlaisePath());
+    Exit
+  end;
+
+  UnitPas := FScratch + '/NumU.pas';
+  ProgPas := FScratch + '/use_num.pas';
+  ProgBin := FScratch + '/use_num';
+
+  WriteFile(UnitPas, UnitSrc);
+  WriteFile(ProgPas, ProgSrc);
+
+  { Incremental (per-unit .o) is the default; NumU is compiled to numu.o, whose
+    GetF must read FFloat from Self+offset, not a global symbol. }
+  Rc := RunBlaise(['--source', ProgPas, '--output', ProgBin,
+                   '--backend', 'native',
+                   '--unit-path', FScratch], Captured);
+  AssertEquals('blaise(use_num) exit code (out: ' + Captured + ')', 0, Rc);
+  AssertTrue('use_num exists', FileExists(ProgBin));
+
+  Rc := RunBinary(ProgBin, Captured);
+  AssertEquals('use_num exit code', 0, Rc);
+  AssertEquals('use_num stdout', '3.5' + #10, Captured)
 end;
 
 procedure TSepCompileTests.TestIncrementalRebuild_ImplOnlyUses_LinksDependency;

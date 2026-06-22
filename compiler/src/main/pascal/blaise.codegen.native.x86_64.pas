@@ -4704,6 +4704,22 @@ begin
 
   if AExpr is TIdentExpr then
   begin
+    { Implicit-Self float field read (FFloat inside a method): load from the
+      Self instance at the field offset, NOT from a global symbol named after
+      the field.  Without this the field reference falls through to the plain
+      VarOperand path below and emits `movsd FFloat(%rip)` — an undefined
+      symbol in per-unit (.o) codegen.  (The store path already handles this;
+      only the read was missing it.) }
+    if TIdentExpr(AExpr).IsImplicitSelf and
+       (TIdentExpr(AExpr).ImplicitFieldInfo <> nil) then
+    begin
+      Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+      if TFieldInfo(TIdentExpr(AExpr).ImplicitFieldInfo).Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rcx',
+          [TFieldInfo(TIdentExpr(AExpr).ImplicitFieldInfo).Offset]));
+      Self.EmitLoadFloat('(%rcx)', AExpr.ResolvedType);
+      Exit;
+    end;
     { Float-typed named constant (const X = 6.28; ...): inline its literal
       value.  The const has no storage — its ConstString holds the source
       text — so loading from a symbol named after it (VarOperand) would
@@ -4912,6 +4928,15 @@ begin
     { User function call whose return type is float. }
     Self.EmitCall(FuncSymbolOf(FC), TMethodDecl(FC.ResolvedDecl), FC.Args);
     { Return value is in %xmm0 per SysV ABI. }
+    Exit;
+  end;
+
+  { Qualified method call returning a float, e.g. d := Obj.GetF().  The method
+    emitter performs vtable/static dispatch and the SysV ABI leaves the float
+    result in %xmm0, so no further work is needed here. }
+  if AExpr is TMethodCallExpr then
+  begin
+    Self.EmitMethodCallExpr(TMethodCallExpr(AExpr));
     Exit;
   end;
 

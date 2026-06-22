@@ -11958,14 +11958,19 @@ begin
         if QType = 'w' then
           EmitLine(Format('  %s =w %s %s', [T, LoadInstrFor(ImplFld.TypeDesc), PtrT]))
         else
-          EmitLine(Format('  %s =l loadl %s', [T, PtrT]));
+          { l / d / s — pick the load opcode by field type so a Double/Single
+            field reads with loadd/loads (not loadl, which would mis-type the
+            result for a later stored/ret). }
+          EmitLine(Format('  %s =%s %s %s',
+            [T, QType, LoadInstrFor(ImplFld.TypeDesc), PtrT]));
       end
       else
       begin
         if QType = 'w' then
           EmitLine(Format('  %s =w %s %s', [T, LoadInstrFor(ImplFld.TypeDesc), SelfT]))
         else
-          EmitLine(Format('  %s =l loadl %s', [T, SelfT]));
+          EmitLine(Format('  %s =%s %s %s',
+            [T, QType, LoadInstrFor(ImplFld.TypeDesc), SelfT]));
       end;
       Exit(T);
     end;
