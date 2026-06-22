@@ -4056,7 +4056,24 @@ begin
           EmitLine(Format('  call $_ClassAddRef(l %s)',  [ValTemp]));
         EmitLine(Format('  call $_ClassRelease(l %s)', [OldTemp]));
       end;
-      EmitLine(Format('  storel %s, %s', [ValTemp, ObjTemp]));
+      { Float-width coercion before the store: a real-typed RHS lands in the
+        SSA as 'd' even when the field is a 32-bit Single ('s'), and vice
+        versa.  Without this an implicit-Self 'V := d' float-field store
+        emitted 'storel' on a 'd' value — a QBE type error. }
+      if (QType = 's') and (QbeTypeOf(AAssign.Expr.ResolvedType) = 'd') then
+      begin
+        ExtTemp := AllocTemp();
+        EmitLine(Format('  %s =s truncd %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end
+      else if (QType = 'd') and (QbeTypeOf(AAssign.Expr.ResolvedType) = 's') then
+      begin
+        ExtTemp := AllocTemp();
+        EmitLine(Format('  %s =d exts %s', [ExtTemp, ValTemp]));
+        ValTemp := ExtTemp;
+      end;
+      EmitLine(Format('  %s %s, %s',
+        [StoreInstrFor(ISFld.TypeDesc), ValTemp, ObjTemp]));
     end;
     Exit;
   end;
