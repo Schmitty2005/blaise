@@ -2950,18 +2950,120 @@ begin
 
     if Check(tkLBracket) then
     begin
-      { Indexed property write: Ident '.' Ident '[' Index ']' ':=' Expr }
-      FldAssign := TFieldAssignment.Create();
-      FldAssign.Line := Line;
-      FldAssign.Col := Col;
-      FldAssign.RecordName := Name;
-      FldAssign.FieldName := SecondIdent;
+      { Ident '.' Ident '[' ... — either an indexed property write
+        (Ident.Field[Index] := Expr) or a subscripted chain with field
+        access (Self.FStack[I].Count := Expr). }
       Advance();  { consume '[' }
-      FldAssign.PropIndexExpr := ParseExpr();
+      PtrIdNode      := TIdentExpr.Create();
+      PtrIdNode.Line := Line;
+      PtrIdNode.Col  := Col;
+      PtrIdNode.Name := Name;
+      FldNode          := TFieldAccessExpr.Create();
+      FldNode.Line     := Line;
+      FldNode.Col      := Col;
+      FldNode.Base     := PtrIdNode;
+      FldNode.FieldName := SecondIdent;
+      SubNode            := TStringSubscriptExpr.Create();
+      SubNode.Line       := Line;
+      SubNode.Col        := Col;
+      SubNode.StrExpr    := FldNode;
+      SubNode.IndexExpr  := ParseExpr();
       Expect(tkRBracket);
-      Expect(tkAssign);
-      FldAssign.Expr := ParseExpr();
-      Result := FldAssign;
+      if Check(tkAssign) then
+      begin
+        { Indexed property / array-element write: Ident.Field[Index] := Expr.
+          Semantic sets IsElemWrite when the field is an array type. }
+        FldAssign := TFieldAssignment.Create();
+        FldAssign.Line := Line;
+        FldAssign.Col := Col;
+        FldAssign.RecordName := Name;
+        FldAssign.FieldName := SecondIdent;
+        FldAssign.PropIndexExpr := SubNode.IndexExpr;
+        SubNode.IndexExpr := nil;
+        SubNode.Free();
+        SubNode := nil;
+        FldNode.Base := nil;
+        PtrIdNode.Free();
+        PtrIdNode := nil;
+        FldNode.Free();
+        FldNode := nil;
+        Advance();  { consume ':=' }
+        FldAssign.Expr := ParseExpr();
+        Result := FldAssign;
+      end
+      else
+      begin
+        { Chain after subscript: Self.FStack[I].Count := ... or
+          Self.FStack[I].Method(args) }
+        ChainBase := SubNode;
+        SubNode := nil;
+        try
+          repeat
+            if Check(tkDot) then
+            begin
+              Advance();  { consume '.' }
+              if not Check(tkIdent) then
+                raise EParseError.Create(Format(
+                  'Expected field or method name at line %d col %d in %s',
+                  [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+              SecondIdent := FCurrent.Value;
+              Advance();
+              if Check(tkAssign) then
+              begin
+                Advance();  { consume ':=' }
+                FldAssign := TFieldAssignment.Create();
+                FldAssign.Line := Line;
+                FldAssign.Col := Col;
+                FldAssign.FieldName := SecondIdent;
+                FldAssign.ObjExpr := ChainBase;
+                ChainBase := nil;
+                FldAssign.Expr := ParseExpr();
+                Exit(FldAssign);
+              end;
+              if Check(tkLParen) then
+              begin
+                MCall := TMethodCallStmt.Create();
+                MCall.Line := Line;
+                MCall.Col := Col;
+                MCall.ObjectName := '';
+                MCall.Name := SecondIdent;
+                MCall.ObjExpr := ChainBase;
+                ChainBase := nil;
+                Advance();  { consume '(' }
+                if not Check(tkRParen) then
+                  ParseMethodCallArgList(MCall);
+                Expect(tkRParen);
+                Exit(MCall);
+              end;
+              InnerFld := TFieldAccessExpr.Create();
+              InnerFld.Line := FCurrent.Line;
+              InnerFld.Col := FCurrent.Col;
+              InnerFld.Base := ChainBase;
+              InnerFld.FieldName := SecondIdent;
+              ChainBase := InnerFld;
+            end
+            else if Check(tkLBracket) then
+            begin
+              Advance();  { consume '[' }
+              SubNode := TStringSubscriptExpr.Create();
+              SubNode.Line := FCurrent.Line;
+              SubNode.Col := FCurrent.Col;
+              SubNode.StrExpr := ChainBase;
+              ChainBase := SubNode;
+              SubNode.IndexExpr := ParseExpr();
+              Expect(tkRBracket);
+            end
+            else
+              Break;
+          until False;
+        except
+          ChainBase.Free();
+          raise;
+        end;
+        raise EParseError.Create(Format(
+          'Expected '':='' or ''('' after chain at line %d col %d in %s',
+          [FCurrent.Line, FCurrent.Col, FLexer.Filename]));
+      end;
     end
     else if Check(tkAssign) then
     begin

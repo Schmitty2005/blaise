@@ -134,6 +134,7 @@ type
     { ClassCreate builtin still works (backwards compat) and now dispatches
       the ctor body via vtable too. }
     procedure TestRun_ClassCreate_StillWorks;
+    procedure TestRun_SelfIndexedRecordFieldAssign;
   end;
 
 implementation
@@ -1938,6 +1939,55 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcClassCreateStillWorks,
     'bar' + LE + 'foo' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_SelfIndexedRecordFieldAssign;
+const
+  Src =
+    'program test_self_idx_rec;' + LE +
+    'type' + LE +
+    '  TFrame = record' + LE +
+    '    Count: Integer;' + LE +
+    '  end;' + LE +
+    '  TThing = class' + LE +
+    '    FStack: array of TFrame;' + LE +
+    '    procedure Go;' + LE +
+    '  end;' + LE +
+    'procedure TThing.Go;' + LE +
+    'begin' + LE +
+    '  SetLength(Self.FStack, 1);' + LE +
+    '  Self.FStack[0].Count := Self.FStack[0].Count + 1;' + LE +
+    '  WriteLn(Self.FStack[0].Count)' + LE +
+    'end;' + LE +
+    'var t: TThing;' + LE +
+    'begin' + LE +
+    '  t := TThing.Create();' + LE +
+    '  t.Go()' + LE +
+    'end.';
+  SrcDirect =
+    'program test_self_idx_direct;' + LE +
+    'type' + LE +
+    '  TThing = class' + LE +
+    '    FItems: array of Integer;' + LE +
+    '    procedure Go;' + LE +
+    '  end;' + LE +
+    'procedure TThing.Go;' + LE +
+    'begin' + LE +
+    '  SetLength(Self.FItems, 2);' + LE +
+    '  Self.FItems[0] := 42;' + LE +
+    '  Self.FItems[1] := 99;' + LE +
+    '  WriteLn(Self.FItems[0]);' + LE +
+    '  WriteLn(Self.FItems[1])' + LE +
+    'end;' + LE +
+    'var t: TThing;' + LE +
+    'begin' + LE +
+    '  t := TThing.Create();' + LE +
+    '  t.Go()' + LE +
+    'end.';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDirect, '42' + LE + '99' + LE, 0);
+  AssertRunsOnAll(Src, '1' + LE, 0);
 end;
 
 initialization

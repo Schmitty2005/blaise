@@ -4642,8 +4642,9 @@ begin
   if AExpr is TFieldAccessExpr then
   begin
     Fld := TFieldAccessExpr(AExpr);
-    { Property-backed access: the result is already a pointer — delegate to EmitExpr }
-    if Fld.PropRead <> nil then
+    { Property-backed or array-subscripted access: the result is already a
+      pointer — delegate to EmitExpr which handles the full dereference. }
+    if (Fld.PropRead <> nil) or Fld.IsArrayAccess then
     begin
       Exit(EmitExpr(Fld));
     end;
