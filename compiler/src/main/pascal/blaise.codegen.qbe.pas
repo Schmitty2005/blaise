@@ -8517,6 +8517,8 @@ var
   SetLoad:   string;
   SetStore:  string;
   PMark:     Integer;
+  SelfTemp:  string;
+  CallTgt:   string;
 begin
   PMark := PendingReleaseMark();
   { Indirect call through a procedural-typed variable: load the function
@@ -8569,9 +8571,13 @@ begin
     if ACall.IsImplicitSelfMethod then
     begin
       { Implicit Self.Method — load Self pointer and pass as first arg }
-      ArgTemp := AllocTemp();
-      EmitLine(Format('  %s =l loadl %%_var_Self', [ArgTemp]));
-      ArgLine := Format('l %s', [ArgTemp]);
+      SelfTemp := AllocTemp();
+      EmitLine(Format('  %s =l loadl %%_var_Self', [SelfTemp]));
+      ArgLine := Format('l %s', [SelfTemp]);
+      { Resolve the call target BEFORE the arg loop reuses temps: a virtual
+        method dispatches through the vtable (override / abstract-base safe),
+        otherwise a static $symbol.  Mirrors Self.Method() dispatch. }
+      CallTgt := Self.SretMethodCallTarget(MDecl, SelfTemp, ACall.Name);
       ArgTemps := TStringList.Create();
       try
         for I := 0 to ACall.Args.Count - 1 do
@@ -8624,8 +8630,7 @@ begin
               [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
           end;
         end;
-        EmitLine(Format('  call $%s(%s)',
-          [MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
+        EmitLine(Format('  call %s(%s)', [CallTgt, ArgLine]));
         FlushPendingReleases(PMark);
         ReleaseConstStringArgs(ACall.Args, ArgTemps, MDecl.Params);
         Exit;
@@ -10508,7 +10513,12 @@ begin
         ArgTemp := AllocTemp();
         EmitLine(Format('  %s =l loadl %%_var_Self', [ArgTemp]));
         ArgLine  := Format('l %s', [ArgTemp]);
-        FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, FC.Name);
+        { Virtual implicit-Self call must dispatch through the vtable so an
+          override (or abstract method with no base body) is reached; a static
+          call would bind the declaring class.  SretMethodCallTarget returns a
+          loaded function-pointer temp for a virtual method (which `call`
+          accepts in place of a $symbol) or the static $symbol otherwise. }
+        FuncName := Self.SretMethodCallTarget(MDecl, ArgTemp, FC.Name);
         ArgTemps := TStringList.Create();
         try
           for I := 0 to FC.Args.Count - 1 do

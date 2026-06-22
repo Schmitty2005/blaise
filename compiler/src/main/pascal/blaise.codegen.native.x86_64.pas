@@ -437,6 +437,10 @@ type
     function  IsNativeRecordCall(AExpr: TASTExpr): Boolean;
     { Sret a record-returning call (function or method) into ADest. }
     procedure EmitRecordCallSretAt(AExpr: TASTExpr; const ADest: string);
+    { Sret call for a TFuncCallExpr: routes an implicit-Self method through the
+      vtable-aware method-sret emitter, a free function through EmitSretCall. }
+    procedure EmitFuncCallSret(AFC: TFuncCallExpr; const ADest: string;
+      AIndirect: Boolean);
     procedure EmitMethodSretCall(ACall: TMethodCallExpr; const ASretAddr: string;
                                  ASretIsIndirect: Boolean);
     { Free a record-call-receiver buffer materialised by EmitMethodSretCall. }
@@ -638,6 +642,16 @@ type
       its xmm register instead of being mis-passed in an integer register. }
     procedure EmitPopMethodArgsToRegs(AParams, AArgs: TObjectList;
       AIntBase: Integer);
+    { Emit the call for a method whose receiver (Self) is already in %rdi:
+      a vtable dispatch when AMD is virtual (VTableSlot >= 0) so the call
+      respects polymorphism, otherwise a static callq to AStaticSym.  Used by
+      the implicit-Self call paths, which must dispatch identically to an
+      explicit Self.Method() call. }
+    procedure EmitSelfDispatch(AMD: TMethodDecl; const AStaticSym: string);
+    { As EmitSelfDispatch but with Self in an explicit register (e.g. %rsi when
+      %rdi holds an sret buffer pointer). }
+    procedure EmitSelfDispatchVia(AMD: TMethodDecl;
+      const AStaticSym, ASelfReg: string);
     { Float-aware register load + overflow relocation for the >6-slot
       method-family layout.  The caller has stored every arg into a flat region
       whose slot I lives at offset (I+1)*8 (slot 0 is the receiver/Self) and has
@@ -4350,14 +4364,42 @@ begin
     Exit(True);
 end;
 
+{ Emit an sret (record/jumbo-set/static-array-returning) call for a
+  TFuncCallExpr.  An implicit-Self method is routed through EmitMethodSretCall
+  (which passes Self and vtable-dispatches a virtual method); a free function
+  goes through EmitSretCall.  Without this an implicit-Self virtual method
+  returning a record would be static-dispatched (wrong override, abstract-base
+  link error) and miss its Self receiver. }
+procedure TX86_64Backend.EmitFuncCallSret(AFC: TFuncCallExpr;
+  const ADest: string; AIndirect: Boolean);
+var
+  Synth: TMethodCallExpr;
+begin
+  if AFC.IsImplicitSelfMethod then
+  begin
+    Synth := TMethodCallExpr.Create();
+    try
+      Synth.Name           := AFC.Name;
+      Synth.Args           := AFC.Args;    { borrowed — detached before Free }
+      Synth.ResolvedMethod := AFC.ResolvedDecl;
+      Synth.ResolvedType   := AFC.ResolvedType;
+      Self.EmitMethodSretCall(Synth, ADest, AIndirect);
+    finally
+      Synth.Args := nil;   { do not free the borrowed arg list }
+      Synth.Free();
+    end;
+  end
+  else
+    Self.EmitSretCall(FuncSymbolOf(AFC), TMethodDecl(AFC.ResolvedDecl),
+      AFC.Args, ADest, AIndirect);
+end;
+
 procedure TX86_64Backend.EmitRecordCallSretAt(AExpr: TASTExpr; const ADest: string);
 begin
   if AExpr is TMethodCallExpr then
     Self.EmitMethodSretCall(TMethodCallExpr(AExpr), ADest, False)
   else
-    Self.EmitSretCall(FuncSymbolOf(TFuncCallExpr(AExpr)),
-      TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl),
-      TFuncCallExpr(AExpr).Args, ADest, False);
+    Self.EmitFuncCallSret(TFuncCallExpr(AExpr), ADest, False);
 end;
 
 procedure TX86_64Backend.EmitIncDec(ACall: TProcCall);
@@ -6253,11 +6295,12 @@ begin
           Self.PushCallArg(TMethodParam(MD.Params.Items[I]),
             TASTExpr(FC.Args.Items[I]), I);
         Self.Emit(Format(#9'movq %s, %%r11', [Self.VarOperand('Self')]));
-        for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
-          Self.Emit(#9'popq ' + SysVArg64(I + 2));
+        Self.EmitPopMethodArgsToRegs(MD.Params, FC.Args, 2);
         Self.Emit(#9'movq %r11, %rsi');
         Self.Emit(#9'movq %r10, %rdi');
-        Self.Emit(#9'callq ' + FuncSymbolOf(FC));
+        { Virtual record-sret implicit-Self call dispatches via the vtable
+          (Self in %rsi, sret buffer in %rdi). }
+        Self.EmitSelfDispatchVia(MD, FuncSymbolOf(FC), '%rsi');
         Self.EndCallArgs();
       end
       else
@@ -6273,10 +6316,13 @@ begin
         Self.PushCallArg(TMethodParam(MD.Params.Items[I]),
           TASTExpr(FC.Args.Items[I]), I);
       Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
-      for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
-        Self.Emit(#9'popq ' + SysVArg64(I + 1));
+      Self.EmitPopMethodArgsToRegs(MD.Params, FC.Args, 1);
       Self.Emit(#9'movq %r10, %rdi');
-      Self.Emit(#9'callq ' + FuncSymbolOf(FC));
+      { Implicit-Self call to a virtual method must dispatch through the vtable
+        (Self may be a more-derived instance), exactly as Self.Method() does;
+        a static callq would bind to the declaring class and break
+        polymorphism (and link-fail for an abstract base). }
+      Self.EmitSelfDispatch(MD, FuncSymbolOf(FC));
       Self.EndCallArgs();
       if FC.ResolvedType <> nil then
         Self.EmitNarrowToType(FC.ResolvedType);
@@ -8517,6 +8563,25 @@ begin
   Result := OverflowSlots * 8;
 end;
 
+procedure TX86_64Backend.EmitSelfDispatch(AMD: TMethodDecl;
+  const AStaticSym: string);
+begin
+  Self.EmitSelfDispatchVia(AMD, AStaticSym, '%rdi');
+end;
+
+procedure TX86_64Backend.EmitSelfDispatchVia(AMD: TMethodDecl;
+  const AStaticSym, ASelfReg: string);
+begin
+  if (AMD <> nil) and (AMD.VTableSlot >= 0) then
+  begin
+    Self.Emit(Format(#9'movq (%s), %%rax', [ASelfReg]));
+    Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(AMD.VTableSlot + 1) * 8]));
+    Self.Emit(#9'callq *%rax');
+  end
+  else
+    Self.Emit(#9'callq ' + AStaticSym);
+end;
+
 procedure TX86_64Backend.EmitPopMethodArgsToRegs(AParams, AArgs: TObjectList;
   AIntBase: Integer);
 var
@@ -10472,11 +10537,7 @@ begin
         if ISFld.Offset > 0 then
           Self.Emit(Format(#9'addq $%d, %%rbx', [ISFld.Offset]));
         Self.EmitRecordFieldReleases(TRecordTypeDesc(Asgn.ResolvedLhsType), '%rbx');
-        Self.EmitSretCall(
-          FuncSymbolOf(TFuncCallExpr(Asgn.Expr)),
-          TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl),
-          TFuncCallExpr(Asgn.Expr).Args,
-          '(%rbx)', False);
+        Self.EmitFuncCallSret(TFuncCallExpr(Asgn.Expr), '(%rbx)', False);
         Self.Emit(#9'popq %rbx');
       end
       else if IsJumboSet(Asgn.ResolvedLhsType) then
@@ -10622,30 +10683,18 @@ begin
       { For a local jumbo set the dest is leaq'd; EmitSretCall's caller passes
         the operand and a 'by-ref' flag.  Mirror the record dispatch below. }
       if FSretFunc and SameText(Asgn.Name, 'Result') then
-        Self.EmitSretCall(
-          FuncSymbolOf(TFuncCallExpr(Asgn.Expr)),
-          TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl),
-          TFuncCallExpr(Asgn.Expr).Args,
+        Self.EmitFuncCallSret(TFuncCallExpr(Asgn.Expr),
           Self.VarOperand('Result'), True)
       else if Asgn.IsVarParam then
-        Self.EmitSretCall(
-          FuncSymbolOf(TFuncCallExpr(Asgn.Expr)),
-          TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl),
-          TFuncCallExpr(Asgn.Expr).Args,
+        Self.EmitFuncCallSret(TFuncCallExpr(Asgn.Expr),
           Self.VarOperand(Asgn.Name), True)
       else if Self.IsLocal(Asgn.Name) then
-        Self.EmitSretCall(
-          FuncSymbolOf(TFuncCallExpr(Asgn.Expr)),
-          TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl),
-          TFuncCallExpr(Asgn.Expr).Args,
+        Self.EmitFuncCallSret(TFuncCallExpr(Asgn.Expr),
           Self.VarOperand(Asgn.Name), False)
       else
       begin
         Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
-        Self.EmitSretCall(
-          FuncSymbolOf(TFuncCallExpr(Asgn.Expr)),
-          TMethodDecl(TFuncCallExpr(Asgn.Expr).ResolvedDecl),
-          TFuncCallExpr(Asgn.Expr).Args,
+        Self.EmitFuncCallSret(TFuncCallExpr(Asgn.Expr),
           Asgn.Name + '(%rip)', False);
       end;
       Exit;
@@ -11327,10 +11376,10 @@ begin
           Self.PushCallArg(TMethodParam(MD.Params.Items[I]),
             TASTExpr(PC.Args.Items[I]), I);
         Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
-        for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
-          Self.Emit(#9'popq ' + SysVArg64(I + 1));
+        Self.EmitPopMethodArgsToRegs(MD.Params, PC.Args, 1);
         Self.Emit(#9'movq %r10, %rdi');
-        Self.Emit(#9'callq ' + FuncSymbolFromDecl(MD));
+        { Virtual implicit-Self call dispatches through the vtable. }
+        Self.EmitSelfDispatch(MD, FuncSymbolFromDecl(MD));
         Self.EndCallArgs();
         Exit;
       end;
@@ -11340,34 +11389,43 @@ begin
       PCUserSlots := Self.CountArgSlots(MD.Params);
       PCTotalSlots := PCUserSlots + 1;
       PCOverflow := PCTotalSlots - 6;
-      PCCleanUp := ((PCOverflow * 8 + 15) and (-16));
-      PCAllocSz := 6 * 8 + PCCleanUp;
+      PCAllocSz := ((PCTotalSlots * 8 + 15) and (-16));
       PCHD := TList<Integer>.Create();
       PCHK := TList<Integer>.Create();
       PCHTotal := Self.EmitArgHoist(MD.Params, nil, True, '', PC.Args, PCHD, PCHK);
       Self.Emit(Format(#9'subq $%d, %%rsp', [PCAllocSz]));
       for I := 0 to PC.Args.Count - 1 do
       begin
-        if I + 1 < 6 then
-          PCDest := (I + 1) * 8
-        else
-          PCDest := 6 * 8 + (I + 1 - 6) * 8;
+        PCDest := (I + 1) * 8;
         if PCHK.Get(I) >= akRecCall then
+        begin
           Self.Emit(Format(#9'movq %d(%%rsp), %%rax',
-            [PCAllocSz + PCHTotal - PCHD.Get(I)]))
+            [PCAllocSz + PCHTotal - PCHD.Get(I)]));
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [PCDest]));
+        end
         else if TMethodParam(MD.Params.Items[I]).IsVarParam then
-          Self.EmitVarArgAddrToRax(TASTExpr(PC.Args.Items[I]))
+        begin
+          Self.EmitVarArgAddrToRax(TASTExpr(PC.Args.Items[I]));
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [PCDest]));
+        end
+        else if Self.OverflowArgIsFloat(MD.Params, I) then
+        begin
+          Self.EmitExprToXmm0(TASTExpr(PC.Args.Items[I]));
+          Self.EmitXmm0WidthAdjust(TASTExpr(PC.Args.Items[I]).ResolvedType,
+            TMethodParam(MD.Params.Items[I]).ResolvedType.Kind = tySingle);
+          Self.Emit(Format(#9'movsd %%xmm0, %d(%%rsp)', [PCDest]));
+        end
         else
+        begin
           Self.EmitExprToEax(TASTExpr(PC.Args.Items[I]));
-        Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [PCDest]));
+          Self.Emit(Format(#9'movq %%rax, %d(%%rsp)', [PCDest]));
+        end;
       end;
       { Self into slot 0 -> %rdi. }
       Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
       Self.Emit(#9'movq %rax, 0(%rsp)');
-      for I := 0 to 5 do
-        Self.Emit(Format(#9'movq %d(%%rsp), %s', [I * 8, SysVArg64(I)]));
-      Self.Emit(Format(#9'addq $%d, %%rsp', [6 * 8]));
-      Self.Emit(#9'callq ' + FuncSymbolFromDecl(MD));
+      PCCleanUp := Self.EmitMethodOverflowLoad(MD.Params, PC.Args, PCAllocSz);
+      Self.EmitSelfDispatch(MD, FuncSymbolFromDecl(MD));
       Self.EmitHoistEpilogue(PC.Args, PCHD, PCHK, PCHTotal, PCCleanUp, True);
       PCHD.Free();
       PCHK.Free();
@@ -11827,11 +11885,7 @@ begin
       if FA.FieldInfo.Offset > 0 then
         Self.Emit(Format(#9'addq $%d, %%rbx', [FA.FieldInfo.Offset]));
       Self.EmitRecordFieldReleases(TRecordTypeDesc(FA.FieldInfo.TypeDesc), '%rbx');
-      Self.EmitSretCall(
-        FuncSymbolOf(TFuncCallExpr(FA.Expr)),
-        TMethodDecl(TFuncCallExpr(FA.Expr).ResolvedDecl),
-        TFuncCallExpr(FA.Expr).Args,
-        '(%rbx)', False);
+      Self.EmitFuncCallSret(TFuncCallExpr(FA.Expr), '(%rbx)', False);
       Self.Emit(#9'popq %rbx');
       Exit;
     end;
@@ -14980,7 +15034,9 @@ begin
     Self.Emit(#9'movq %rsp, %rdi');
     if OverflowBytes > 0 then
       Self.Emit(Format(#9'addq $%d, %%rdi', [OverflowBytes]));
-    Self.Emit(#9'callq ' + FSym);
+    { Virtual implicit-Self interface-sret call dispatches through the vtable
+      (Self is in %rsi here; %rdi holds the sret buffer). }
+    Self.EmitSelfDispatchVia(MD, FSym, '%rsi');
   end
   else
   begin

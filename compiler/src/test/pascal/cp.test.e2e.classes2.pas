@@ -70,6 +70,15 @@ type
     procedure TestRun_MethodOverflowFloatArgs_Pass;
     procedure TestRun_ConstructorOverflowFloatArgs_Pass;
     procedure TestRun_InheritedOverflowFloatArgs_Pass;
+    { Regression: a virtual method called via implicit Self (unqualified
+      Foo(), no Self. prefix) must dispatch through the vtable, exactly as
+      Self.Foo() does — otherwise it binds the declaring class statically,
+      silently breaking polymorphism (and link-failing for an abstract base). }
+    procedure TestRun_ImplicitSelfVirtual_DispatchesOverride;
+    procedure TestRun_ImplicitSelfAbstractVirtual_LinksAndDispatches;
+    procedure TestRun_ImplicitSelfVirtual_NonVirtualStaysStatic;
+    procedure TestRun_ImplicitSelfVirtual_IntfReturn_Dispatches;
+    procedure TestRun_ImplicitSelfVirtual_RecordReturn_Dispatches;
     procedure TestRun_MethodReadsProgramGlobal;
     procedure TestRun_VarParam_ClassFields_WritebackVisible;
     { Name-resolution priority for unqualified calls inside a class
@@ -1403,6 +1412,134 @@ begin
     begin x := TDer.Create(); x.M(1,2,3,4,5, 6.5, 7.5, 9); end.
     ''',
     'base 1 6.5 7.5 9' + LE + 'der 6.5 7.5' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ImplicitSelfVirtual_DispatchesOverride;
+begin
+  { TBase.Run calls Emit() unqualified; Self is a TLeaf, so the override must
+    run.  A static bind would print BASE. }
+  AssertRunsOnAll(
+    '''
+    program a;
+    type
+      TBase = class
+        procedure Emit; virtual;
+        procedure Run;
+      end;
+      TLeaf = class(TBase)
+        procedure Emit; override;
+      end;
+    procedure TBase.Emit; begin WriteLn('BASE'); end;
+    procedure TBase.Run;  begin Emit(); end;
+    procedure TLeaf.Emit; begin WriteLn('LEAF'); end;
+    var b: TBase;
+    begin b := TLeaf.Create(); b.Run(); end.
+    ''',
+    'LEAF' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ImplicitSelfAbstractVirtual_LinksAndDispatches;
+begin
+  { Abstract base method has no body; an unqualified Emit(x) must vtable-
+    dispatch (else: undefined symbol TBase_Emit at link). }
+  AssertRunsOnAll(
+    '''
+    program a;
+    type
+      TArg  = class end;
+      TBase = class
+      protected
+        procedure Emit(A: TArg); virtual; abstract;
+      public
+        procedure Run;
+      end;
+      TLeaf = class(TBase)
+      protected
+        procedure Emit(A: TArg); override;
+      end;
+    procedure TBase.Run; var x: TArg; begin x := TArg.Create(); Emit(x); end;
+    procedure TLeaf.Emit(A: TArg); begin WriteLn('leaf'); end;
+    var b: TBase;
+    begin b := TLeaf.Create(); b.Run(); end.
+    ''',
+    'leaf' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ImplicitSelfVirtual_NonVirtualStaysStatic;
+begin
+  { An unqualified call to a NON-virtual method must still resolve (a static
+    direct call); this guards against over-eager vtable dispatch. }
+  AssertRunsOnAll(
+    '''
+    program a;
+    type TX = class
+      procedure Helper;
+      procedure Run;
+    end;
+    procedure TX.Helper; begin WriteLn('helper'); end;
+    procedure TX.Run; begin Helper(); end;
+    var x: TX;
+    begin x := TX.Create(); x.Run(); end.
+    ''',
+    'helper' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ImplicitSelfVirtual_IntfReturn_Dispatches;
+begin
+  { Implicit-Self virtual method returning an interface (sret) must dispatch
+    to the override. }
+  AssertRunsOnAll(
+    '''
+    program a;
+    type
+      IFoo = interface
+        function Name: String;
+      end;
+      TFoo = class(TObject, IFoo)
+        function Name: String;
+      end;
+      TBase = class
+        function MakeFoo: IFoo; virtual;
+        function Run: String;
+      end;
+      TLeaf = class(TBase)
+        function MakeFoo: IFoo; override;
+      end;
+    function TFoo.Name: String; begin Result := 'foo'; end;
+    function TBase.MakeFoo: IFoo; begin Result := nil; end;
+    function TBase.Run: String;
+    var f: IFoo;
+    begin f := MakeFoo(); if f = nil then Result := 'nil' else Result := f.Name(); end;
+    function TLeaf.MakeFoo: IFoo; begin Result := TFoo.Create(); end;
+    var b: TBase;
+    begin b := TLeaf.Create(); WriteLn(b.Run()); end.
+    ''',
+    'foo' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ImplicitSelfVirtual_RecordReturn_Dispatches;
+begin
+  { Implicit-Self virtual method returning a record (sret) must dispatch to
+    the override. }
+  AssertRunsOnAll(
+    '''
+    program a;
+    type
+      TPt = record X: Int64; end;
+      TBase = class
+        function Make: TPt; virtual;
+        function Run: Int64;
+      end;
+      TLeaf = class(TBase)
+        function Make: TPt; override;
+      end;
+    function TBase.Make: TPt; begin Result.X := 100; end;
+    function TBase.Run: Int64; var p: TPt; begin p := Make(); Result := p.X; end;
+    function TLeaf.Make: TPt; begin Result.X := 200; end;
+    var b: TBase;
+    begin b := TLeaf.Create(); WriteLn(b.Run()); end.
+    ''',
+    '200' + LE, 0);
 end;
 
 procedure TE2EClasses2Tests.TestRun_MethodReadsProgramGlobal;
