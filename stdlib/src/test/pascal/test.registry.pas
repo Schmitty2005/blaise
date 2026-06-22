@@ -21,7 +21,9 @@ unit Test.Registry;
 interface
 
 uses
-  Json.Tests;
+  Json.Tests,
+  Base64.Tests,
+  Crypto.Tests;
 
 implementation
 
