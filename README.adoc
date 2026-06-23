@@ -77,14 +77,18 @@ full source-level debugging of incrementally-compiled multi-unit programs.
 | In-Progress
 
 | 7
-| Native backend feature parity + Windows + macOS ARM64
-| In-Progress
+| Native backend feature parity (default backend, internal assembler + linker)
+| Complete ✅
 
 | 8
-| LSP + VS Code extension
+| Windows + macOS ARM64 targets
 | Planned
 
 | 9
+| LSP + VS Code extension
+| Planned
+
+| 10
 | Migration analyser for FPC/Delphi codebases
 | Planned
 |===
