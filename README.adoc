@@ -74,7 +74,7 @@ full source-level debugging of incrementally-compiled multi-unit programs.
 
 | 6
 | Language improvements + expand RTL & StdLib + bug fixing
-| In-Progress
+| Ongoing 🔄
 
 | 7
 | Native backend feature parity (default backend, internal assembler + linker)
