@@ -97,6 +97,14 @@ type
     procedure TestRun_ChainedRecvManyArgs;
     procedure TestRun_ChainedRecvDoubleChain;
     procedure TestRun_ChainedRecvManagedRecord_TDecimalLike;
+    { Regression: a record-returning method assigned back into the SAME variable
+      that is its receiver (M := M.Method(...)).  The sret destination buffer
+      would alias Self, so the callee wrote Result (== Self) while still reading
+      Self — clobbering it mid-flight.  Fix routes the call through a fresh temp
+      and moves the result into the destination only after the call returns.
+      Both backends; managed (string) and scalar fields both checked. }
+    procedure TestRun_SelfAssignRecordMethod_ManagedField;
+    procedure TestRun_SelfAssignRecordMethod_ScalarFields;
     { Regression: a record-returning method that takes an INTERFACE parameter.
       An interface is a fat pointer (obj + itab) occupying TWO integer-register
       slots, but the native sret/record call paths popped one register per
@@ -777,6 +785,60 @@ const
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src, '15' + LE + '25' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_SelfAssignRecordMethod_ManagedField;
+const
+  { Managed (string) field record method assigned back into its own receiver.
+    The non-aliasing case (C := A.Up(B)) and the receiver staying intact after
+    the self-assign are both checked as regression guards. }
+  Src = '''
+    program P;
+    type
+      TR = record
+        S: string;
+        function Up(const X: TR): TR;
+      end;
+    function TR.Up(const X: TR): TR;
+    begin Result.S := Self.S + X.S end;
+    var A, B, C: TR;
+    begin
+      A.S := 'a'; B.S := 'b';
+      A := A.Up(B);
+      WriteLn(A.S);
+      C := A.Up(B);
+      WriteLn(C.S);
+      WriteLn(A.S)
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'ab' + LE + 'abb' + LE + 'ab' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_SelfAssignRecordMethod_ScalarFields;
+const
+  { Two-integer record (register-return class) self-assigned through its own
+    receiver. }
+  Src = '''
+    program P;
+    type
+      TR = record
+        A, B: Integer;
+        function Add(const X: TR): TR;
+      end;
+    function TR.Add(const X: TR): TR;
+    begin Result.A := Self.A + X.A; Result.B := Self.B + X.B end;
+    var R, Q: TR;
+    begin
+      R.A := 1; R.B := 10; Q.A := 2; Q.B := 20;
+      R := R.Add(Q);
+      WriteLn(R.A, ' ', R.B)
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '3 30' + LE, 0);
 end;
 
 { ------------------------------------------------------------------ }

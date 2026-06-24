@@ -75,6 +75,11 @@ type
     procedure TestCodegen_IntegerPlusDouble_UsesIntSSE;
     procedure TestCodegen_DoublePlusInt64_UsesSSEInt;
     procedure TestCodegen_Int64PlusDouble_UsesIntSSE;
+    { Self-assigned record method (M := M.Method(...)): the sret destination must
+      NOT be the receiver variable — the call writes into a fresh temp buffer
+      that is then memcpy'd into the destination, so the callee sees an intact
+      Self while constructing Result. }
+    procedure TestCodegen_SelfAssignRecordMethod_RoutesThroughTemp;
   end;
 
 implementation
@@ -777,6 +782,33 @@ begin
         ''');
   AssertContains('function :_ffi_TM $MakeIt', IR);
   AssertContains('type :_ffi_TM = align 8 { l, d }', IR);
+end;
+
+procedure TRecordReturnTests.TestCodegen_SelfAssignRecordMethod_RoutesThroughTemp;
+var IR: string;
+begin
+  IR := GenIR(
+    '''
+        program P;
+        type
+          TR = record
+            S: string;
+            function Up(const X: TR): TR;
+          end;
+        function TR.Up(const X: TR): TR;
+        begin Result.S := Self.S + X.S end;
+        var A, B: TR;
+        begin
+          A.S := 'a'; B.S := 'b';
+          A := A.Up(B)
+        end.
+        ''');
+  { The sret call must target a fresh temp (%_t...), not the destination $A —
+    otherwise the sret buffer aliases Self. }
+  AssertFalse('sret call aliases receiver $A',
+    Pos('call $TR_Up(l $A,', IR) <> -1);
+  { The constructed result is then moved into the destination. }
+  AssertContains('call $memcpy(l $A,', IR);
 end;
 
 initialization

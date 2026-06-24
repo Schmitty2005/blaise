@@ -434,6 +434,13 @@ type
     { Returns True if AExpr is a function or method call that returns a record.
       Used in EmitAssignment to choose the sret path over a storel. }
     function  IsRecordCall(AExpr: TASTExpr): Boolean;
+    { Returns True if AExpr is a record-method call whose receiver is exactly
+      the variable AName/AIsGlobal.  Such a call assigned back into its own
+      receiver (M := M.Method(...)) would have the sret destination alias Self,
+      so the assignment must route the result through a fresh temporary. }
+    function  RecordCallReceiverIsVar(AExpr: TASTExpr;
+                                      const AName: string;
+                                      AIsGlobal: Boolean): Boolean;
     { Returns True if AExpr is a function or method call that returns an
       interface.  Used in EmitAssignment to choose the sret path. }
     function  IsInterfaceCall(AExpr: TASTExpr): Boolean;
@@ -4333,7 +4340,27 @@ begin
           (AAssign.ResolvedLhsType.Kind = tyRecord) then
   begin
     ClassRT := TRecordTypeDesc(AAssign.ResolvedLhsType);
-    if IsRecordCall(AAssign.Expr) then
+    if IsRecordCall(AAssign.Expr) and
+       RecordCallReceiverIsVar(AAssign.Expr, AAssign.Name, AAssign.IsGlobal) then
+    begin
+      { Self-assigned record method (M := M.Method(...)): the sret destination
+        would alias the receiver, so the callee would clobber Self while still
+        reading it.  Route the call through a fresh zeroed temporary, then move
+        the constructed result into the destination (release old fields, raw
+        memcpy — ownership of the constructed managed fields transfers). }
+      SretBuf := AllocTemp();
+      if ClassRT.MaxAlign() >= 8 then
+        EmitLine(Format('  %s =l alloc8 %d', [SretBuf, ClassRT.TotalSize()]))
+      else
+        EmitLine(Format('  %s =l alloc4 %d', [SretBuf, ClassRT.TotalSize()]));
+      EmitLine(Format('  call $memset(l %s, w 0, l %d)',
+        [SretBuf, ClassRT.TotalSize()]));
+      EmitRecordCallSret(AAssign.Expr, SretBuf);
+      EmitRecordReleaseFields(ClassRT, VarRef(AAssign.Name, AAssign.IsGlobal));
+      EmitLine(Format('  call $memcpy(l %s, l %s, l %d)',
+        [VarRef(AAssign.Name, AAssign.IsGlobal), SretBuf, ClassRT.TotalSize()]));
+    end
+    else if IsRecordCall(AAssign.Expr) then
     begin
       EmitRecordReleaseFields(ClassRT, VarRef(AAssign.Name, AAssign.IsGlobal));
       EmitLine(Format('  call $memset(l %s, w 0, l %d)',
@@ -4951,6 +4978,25 @@ begin
     Result := (MDecl.ResolvedReturnType <> nil) and
               (MDecl.ResolvedReturnType.Kind in [tyRecord, tyStaticArray]);
   end;
+end;
+
+function TCodeGenQBE.RecordCallReceiverIsVar(AExpr: TASTExpr;
+  const AName: string; AIsGlobal: Boolean): Boolean;
+var
+  MCall: TMethodCallExpr;
+  MDecl: TMethodDecl;
+begin
+  Result := False;
+  if not (AExpr is TMethodCallExpr) then Exit;
+  MCall := TMethodCallExpr(AExpr);
+  if MCall.ResolvedMethod = nil then Exit;
+  MDecl := TMethodDecl(MCall.ResolvedMethod);
+  if not MDecl.IsRecordMethod then Exit;
+  { Only a bare variable receiver (M.Method) can alias the destination var.
+    A receiver via ObjExpr (a more complex l-value) is handled conservatively
+    as non-aliasing here; the explicit-var case is the documented bug. }
+  if MCall.ObjExpr <> nil then Exit;
+  Result := (MCall.ObjectName = AName) and (MCall.IsGlobal = AIsGlobal);
 end;
 
 function TCodeGenQBE.IsInterfaceCall(AExpr: TASTExpr): Boolean;

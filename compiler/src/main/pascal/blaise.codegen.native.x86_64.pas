@@ -436,6 +436,13 @@ type
     function  SretUserSlots(ADecl: TMethodDecl; AArgs: TObjectList): Integer;
     { True when AExpr is a record-returning function or method call. }
     function  IsNativeRecordCall(AExpr: TASTExpr): Boolean;
+    { True when AExpr is a record-method call whose receiver is exactly the
+      variable AName/AIsGlobal — i.e. M := M.Method(...) would have the sret
+      destination alias Self.  Such an assignment must route the result through
+      a fresh temporary first. }
+    function  RecordCallReceiverIsVar(AExpr: TASTExpr;
+                                      const AName: string;
+                                      AIsGlobal: Boolean): Boolean;
     { Sret a record-returning call (function or method) into ADest. }
     procedure EmitRecordCallSretAt(AExpr: TASTExpr; const ADest: string);
     { Sret call for a TFuncCallExpr: routes an implicit-Self method through the
@@ -4411,6 +4418,23 @@ begin
      (TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl).ResolvedReturnType <> nil) and
      (TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl).ResolvedReturnType.Kind = tyRecord) then
     Exit(True);
+end;
+
+function TX86_64Backend.RecordCallReceiverIsVar(AExpr: TASTExpr;
+  const AName: string; AIsGlobal: Boolean): Boolean;
+var
+  MCall: TMethodCallExpr;
+  MDecl: TMethodDecl;
+begin
+  Result := False;
+  if not (AExpr is TMethodCallExpr) then Exit;
+  MCall := TMethodCallExpr(AExpr);
+  if MCall.ResolvedMethod = nil then Exit;
+  MDecl := TMethodDecl(MCall.ResolvedMethod);
+  if not MDecl.IsRecordMethod then Exit;
+  { Only a bare variable receiver (M.Method) can alias the destination var. }
+  if MCall.ObjExpr <> nil then Exit;
+  Result := (MCall.ObjectName = AName) and (MCall.IsGlobal = AIsGlobal);
 end;
 
 { Emit an sret (record/jumbo-set/static-array-returning) call for a
@@ -10533,6 +10557,7 @@ var
   PCUserSlots, PCTotalSlots, PCOverflow, PCCleanUp, PCAllocSz, PCDest: Integer;
   PCHD, PCHK: TList<Integer>;
   PCHTotal: Integer;
+  AliasBuf: Integer;
 begin
   Self.DbgStmtLabel(AStmt);
   if AStmt is TAssignment then
@@ -10803,6 +10828,46 @@ begin
           [tyRecord, tyStaticArray]) or
         IsJumboSet(TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType)) then
     begin
+      { Self-assigned record method (M := M.Method(...)): the sret destination
+        would alias the receiver, so the callee would clobber Self while still
+        reading it.  Route the call through a fresh zeroed stack buffer (address
+        held in callee-saved %r14), then move the result into the destination
+        (release old fields, raw memcpy — ownership of the constructed managed
+        fields transfers). }
+      if (Asgn.ResolvedLhsType.Kind = tyRecord) and
+         Self.RecordCallReceiverIsVar(Asgn.Expr, Asgn.Name, Asgn.IsGlobal) then
+      begin
+        AliasBuf := (TRecordTypeDesc(Asgn.ResolvedLhsType).TotalSize() + 15) and (-16);
+        Self.Emit(#9'pushq %r14');
+        Self.Emit(Format(#9'subq $%d, %%rsp', [AliasBuf]));
+        Self.Emit(#9'movq %rsp, %r14');
+        Self.Emit(#9'movq %r14, %rdi');
+        Self.Emit(#9'xorl %esi, %esi');
+        Self.Emit(Format(#9'movq $%d, %%rdx',
+          [TRecordTypeDesc(Asgn.ResolvedLhsType).TotalSize()]));
+        Self.Emit(#9'callq memset');
+        Self.EmitMethodSretCall(TMethodCallExpr(Asgn.Expr), '(%r14)', False);
+        { %r14 still holds the temp buffer address (callee-saved across the call).
+          Resolve the destination address into %rbx, release its old managed
+          fields, then memcpy the constructed result over it. }
+        Self.Emit(#9'pushq %rbx');
+        if Asgn.IsVarParam then
+          Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand(Asgn.Name)]))
+        else if Self.IsLocal(Asgn.Name) then
+          Self.Emit(Format(#9'leaq %s, %%rbx', [Self.VarOperand(Asgn.Name)]))
+        else
+          Self.EmitLeaqGlobal(Asgn.Name, '%rbx');
+        Self.EmitRecordFieldReleases(TRecordTypeDesc(Asgn.ResolvedLhsType), '%rbx');
+        Self.Emit(#9'movq %rbx, %rdi');
+        Self.Emit(#9'movq %r14, %rsi');
+        Self.Emit(Format(#9'movq $%d, %%rdx',
+          [TRecordTypeDesc(Asgn.ResolvedLhsType).TotalSize()]));
+        Self.Emit(#9'callq memcpy');
+        Self.Emit(#9'popq %rbx');
+        Self.Emit(Format(#9'addq $%d, %%rsp', [AliasBuf]));
+        Self.Emit(#9'popq %r14');
+        Exit;
+      end;
       if FSretFunc and SameText(Asgn.Name, 'Result') then
         Self.EmitMethodSretCall(TMethodCallExpr(Asgn.Expr),
           Self.VarOperand('Result'), True)
