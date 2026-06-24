@@ -188,13 +188,9 @@ var
   Lk: TLinker;
   Obj: TElfObjectFile;
   TC: TToolchain;
-  Crt1, Crti, Crtn, CrtBeginS, CrtEndS: string;
   I: Integer;
 begin
   Result := '';
-  if not FindCrtObjects(Crt1, Crti, Crtn, CrtBeginS, CrtEndS) then
-    Exit('internal linker: CRT startup objects not found');
-
   TC := ResolveToolchain(AOpts.Target);
 
   { Every Blaise program links blaise_rtl.a — the program entry emits
@@ -213,9 +209,6 @@ begin
   try
     try
       Lk.SetDynamic(True);
-      Lk.AddCrtObject(Crt1);
-      Lk.AddCrtObject(Crti);
-      Lk.AddCrtObject(CrtBeginS);
 
       Obj := ReadElfObjectFile(AObjFile);
       Lk.AddOwnedObject(Obj);
@@ -227,10 +220,11 @@ begin
           Lk.AddOwnedObject(Obj);
         end;
 
+      { _start now lives in blaise_rtl.a (blaise_start_x86_64.s) — no system
+        Scrt1.o / crtbegin / crtend / crti / crtn needed.  AddArchive adds all
+        members unconditionally, so the entry symbol is always present. }
       Lk.AddArchive(TC.RTLPath);
 
-      Lk.AddCrtObject(CrtEndS);
-      Lk.AddCrtObject(Crtn);
       Lk.Link('_start', AOutputFile);
     except
       on E: Exception do

@@ -81,6 +81,9 @@ type
     function RunProcNoArgs(const AExe: string; out AStdout: string): Integer;
     function CompileAndRun(const ASrc: string;
       out AStdout: string; out AExitCode: Integer): Boolean;
+    function CompileAndRunArgs(const ASrc: string;
+      const AArgs: array of string;
+      out AStdout: string; out AExitCode: Integer): Boolean;
   protected
     procedure SetUp; override;
   published
@@ -97,6 +100,12 @@ type
     procedure TestClassVirtualCall;
     procedure TestFloatArithmetic;
     procedure TestFormatFloatArg;
+    { Self-contained program entry (issue #142): the runtime supplies its own
+      _start (blaise_start_x86_64.s) so the internal linker needs no system
+      Scrt1.o / crtbegin / crtend.  These assert the two things _start owns —
+      argc/argv forwarding and exit-code propagation through __libc_start_main. }
+    procedure TestEntry_ExitCodePropagates;
+    procedure TestEntry_ArgsForwarded;
   end;
 
 implementation
@@ -675,6 +684,39 @@ begin
   Result := True;
 end;
 
+{ Like CompileAndRun but runs the produced binary WITH command-line arguments,
+  so argc/argv forwarding through the runtime's own _start is exercised. }
+function TInternalAsmE2ETests.CompileAndRunArgs(const ASrc: string;
+  const AArgs: array of string;
+  out AStdout: string; out AExitCode: Integer): Boolean;
+var
+  SrcFile, OutFile, CompOut: string;
+  Rc: Integer;
+begin
+  Result := False;
+  if not Self.CompilerAvailable() then Exit;
+
+  FCounter := FCounter + 1;
+  SrcFile := FScratch + 'test_asm_' + IntToStr(FCounter) + '.pas';
+  OutFile := FScratch + 'test_asm_' + IntToStr(FCounter);
+
+  WriteFile(SrcFile, ASrc);
+
+  Rc := Self.RunProc(FCompiler, [
+    '--source', SrcFile,
+    '--unit-path', FRTLPath,
+    '--unit-path', FStdlibPath,
+    '--output', OutFile,
+    '--backend', 'native',
+    '--assembler', 'internal'
+  ], CompOut);
+  if Rc <> 0 then
+    Fail('compile failed (rc=' + IntToStr(Rc) + '): ' + CompOut);
+
+  AExitCode := Self.RunProc(OutFile, AArgs, AStdout);
+  Result := True;
+end;
+
 { ---- Test methods ---- }
 
 procedure TInternalAsmE2ETests.TestSimpleAdd;
@@ -987,6 +1029,52 @@ begin
   end;
   AssertEquals(0, EC);
   AssertEquals('1.2500' + LineEnding, Out_);
+end;
+
+procedure TInternalAsmE2ETests.TestEntry_ExitCodePropagates;
+var
+  Out_: string;
+  EC: Integer;
+begin
+  { Halt(N): the runtime's own _start calls __libc_start_main(main, ...) and
+    glibc exits with main's return value.  A broken entry sequence would crash
+    at startup or return the wrong code.  No system Scrt1.o is involved. }
+  if not CompileAndRun(
+    'program test_exit;' + LineEnding +
+    'begin' + LineEnding +
+    '  WriteLn(''before'');' + LineEnding +
+    '  Halt(7)' + LineEnding +
+    'end.',
+    Out_, EC) then
+  begin
+    Ignore('<toolchain-missing>');
+    Exit;
+  end;
+  AssertEquals(7, EC);
+  AssertEquals('before' + LineEnding, Out_);
+end;
+
+procedure TInternalAsmE2ETests.TestEntry_ArgsForwarded;
+var
+  Out_: string;
+  EC: Integer;
+begin
+  { argc/argv reach the program through _start -> __libc_start_main -> main ->
+    _SetArgs.  ParamStr(0) is the program path; the passed args follow. }
+  if not CompileAndRunArgs(
+    'program test_args;' + LineEnding +
+    'begin' + LineEnding +
+    '  WriteLn(ParamCount());' + LineEnding +
+    '  WriteLn(ParamStr(1));' + LineEnding +
+    '  WriteLn(ParamStr(2))' + LineEnding +
+    'end.',
+    ['alpha', 'beta'], Out_, EC) then
+  begin
+    Ignore('<toolchain-missing>');
+    Exit;
+  end;
+  AssertEquals(0, EC);
+  AssertEquals('2' + LineEnding + 'alpha' + LineEnding + 'beta' + LineEnding, Out_);
 end;
 
 { ---- Registration ---- }

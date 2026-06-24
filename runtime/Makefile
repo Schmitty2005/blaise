@@ -36,7 +36,8 @@ BLAISE       = $(COMPILER_BIN)/blaise
 BLAISE_FLAGS = --no-incremental
 
 # Assembly sources — platform-specific, no C compiler needed.
-ASM_OBJS = $(OBJ_DIR)/blaise_setjmp_x86_64.o \
+ASM_OBJS = $(OBJ_DIR)/blaise_start_x86_64.o \
+           $(OBJ_DIR)/blaise_setjmp_x86_64.o \
            $(OBJ_DIR)/blaise_atomic_x86_64.o \
            $(OBJ_DIR)/blaise_utf8_x86_64.o
 

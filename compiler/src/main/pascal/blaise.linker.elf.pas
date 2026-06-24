@@ -37,13 +37,14 @@ unit blaise.linker.elf;
   with Phase B alone.
 
   Phase C — TLinker in dynamic mode (SetDynamic(True)) produces a
-  PIE (ET_DYN) executable linked against libc.  It reads CRT startup
-  objects, generates GOT/PLT for undefined (libc) symbols, emits
-  .dynamic/.dynsym/.dynstr/.hash sections, resolves R_X86_64_64 as
-  R_X86_64_RELATIVE in .rela.dyn, handles R_X86_64_TPOFF32 for TLS,
-  and merges .init_array/.fini_array from CRT objects.  The entry
-  point is _start (from Scrt1.o), which calls __libc_start_main with
-  main as the program's entry. }
+  PIE (ET_DYN) executable linked against libc.  It generates GOT/PLT
+  for undefined (libc) symbols, emits .dynamic/.dynsym/.dynstr/.hash
+  sections, resolves R_X86_64_64 as R_X86_64_RELATIVE in .rela.dyn,
+  handles R_X86_64_TPOFF32 for TLS, and merges any .init_array/
+  .fini_array a linked object contributes.  The entry point is _start,
+  which the runtime archive supplies (blaise_start_x86_64.s) and which
+  calls __libc_start_main with main as the program's entry — no system
+  Scrt1.o / crtbegin / crtend / crti / crtn is needed (issue #142). }
 
 interface
 
