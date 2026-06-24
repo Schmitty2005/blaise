@@ -897,6 +897,8 @@ type
     Methods:         TObjectList;  { owned TMethodDecl }
     Properties:      TObjectList;  { owned TPropertyDecl }
     Attributes:      TStringList;  { owned — class-level custom attribute names e.g. 'Threaded' }
+    IsForward:       Boolean;      { True for a forward decl 'TFoo = class;' (no ancestor,
+                                     no body) — completed by the full decl later in scope }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -957,6 +959,7 @@ type
     ParentName: string;
     Methods:    TObjectList;  { owned TMethodDecl — forward signatures only }
     Properties: TObjectList;  { owned TPropertyDecl — accessors are interface methods }
+    IsForward:  Boolean;      { True for a forward decl 'IFoo = interface;' — completed later in scope }
     constructor Create;
     destructor Destroy; override;
   end;
@@ -2471,6 +2474,7 @@ begin
   if ASrc = nil then begin Result := nil; Exit; end;
   Result := TClassTypeDef.Create();
   Result.ParentName := ASrc.ParentName;
+  Result.IsForward  := ASrc.IsForward;
   for I := 0 to ASrc.ImplementsNames.Count - 1 do
     Result.ImplementsNames.Add(ASrc.ImplementsNames.Strings[I]);
   for I := 0 to ASrc.ConstDecls.Count - 1 do
@@ -2511,6 +2515,7 @@ begin
   if ASrc = nil then begin Result := nil; Exit; end;
   Result := TInterfaceTypeDef.Create();
   Result.ParentName := ASrc.ParentName;
+  Result.IsForward  := ASrc.IsForward;
   for I := 0 to ASrc.Methods.Count - 1 do
     Result.Methods.Add(CloneMethodDecl(TMethodDecl(ASrc.Methods.Items[I])));
   for I := 0 to ASrc.Properties.Count - 1 do

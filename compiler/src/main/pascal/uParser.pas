@@ -1975,6 +1975,15 @@ begin
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Expect(tkClass);
+    { Forward class declaration: the keyword `class` immediately followed by
+      `;` (no ancestor clause, no body).  `class(TBase);` and `class end;` are
+      complete empty classes, not forwards.  The full declaration later in the
+      same type scope completes it (see uSemantic.AnalyseTypeDecls). }
+    if Check(tkSemicolon) then
+    begin
+      Result.IsForward := True;
+      Exit;
+    end;
     if Check(tkLParen) then
     begin
       Advance();
@@ -2047,6 +2056,13 @@ begin
     Result.Line := FCurrent.Line;
     Result.Col  := FCurrent.Col;
     Expect(tkIntf);
+    { Forward interface declaration `IFoo = interface;` — no parent, no body,
+      completed later in the same type scope. }
+    if Check(tkSemicolon) then
+    begin
+      Result.IsForward := True;
+      Exit;
+    end;
     if Check(tkLParen) then
     begin
       Advance();

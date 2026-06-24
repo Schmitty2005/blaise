@@ -4843,7 +4843,16 @@ var
   IdxTD:      TTypeDesc;
   ArrTD:      TStaticArrayTypeDesc;
   Expected:   Integer;
+  ForwardDecls: TStringList;  { names of bare forward class/interface decls still
+                               awaiting their completing full declaration }
+  FwdIdx:     Integer;
 begin
+  { Forward declarations (`TFoo = class;` / `IFoo = interface;`) register a
+    placeholder type in pass 1 and are completed by a later full declaration of
+    the same name in this scope.  Track the pending ones so a never-completed
+    forward is reported as an error. }
+  ForwardDecls := TStringList.Create();
+  ForwardDecls.CaseSensitive := False;
   { Pass 1 — register all type symbols with empty descriptors.
     This allows self-referential field types to resolve in pass 2. }
   for I := 0 to ABlock.TypeDecls.Count - 1 do
@@ -4855,7 +4864,37 @@ begin
       RT.IsPacked := TRecordTypeDef(TD.Def).IsPacked;
     end
     else if TD.Def is TClassTypeDef then
-      RT := FTable.NewClassType(TD.Name)
+    begin
+      if TClassTypeDef(TD.Def).IsForward then
+      begin
+        { Forward class: register a placeholder class type so intervening
+          declarations can name it.  A name already in the table — including a
+          prior forward — is a redeclaration. }
+        if FTable.Lookup(TD.Name) <> nil then
+        begin
+          if ForwardDecls.IndexOf(TD.Name) >= 0 then
+            SemanticError(Format('Duplicate forward type declaration ''%s''',
+              [TD.Name]), TD.Line, TD.Col)
+          else
+            SemanticError(Format('Duplicate type name ''%s''', [TD.Name]),
+              TD.Line, TD.Col);
+        end;
+        Sym := TSymbol.Create(TD.Name, skType, FTable.NewClassType(TD.Name));
+        FTable.Define(Sym);
+        ForwardDecls.AddObject(TD.Name, TD);
+        Continue;
+      end;
+      { Full class declaration completing a pending forward: reuse the
+        placeholder descriptor (pass 2 re-derives it by name) — skip the
+        re-registration below. }
+      FwdIdx := ForwardDecls.IndexOf(TD.Name);
+      if FwdIdx >= 0 then
+      begin
+        ForwardDecls.Delete(FwdIdx);
+        Continue;
+      end;
+      RT := FTable.NewClassType(TD.Name);
+    end
     else if TD.Def is TGenericTypeDef then
     begin
       { Register as template — no concrete type symbol; instantiated on demand.
@@ -4878,6 +4917,30 @@ begin
     end
     else if TD.Def is TInterfaceTypeDef then
     begin
+      if TInterfaceTypeDef(TD.Def).IsForward then
+      begin
+        { Forward interface: placeholder, completed later in scope. }
+        if FTable.Lookup(TD.Name) <> nil then
+        begin
+          if ForwardDecls.IndexOf(TD.Name) >= 0 then
+            SemanticError(Format('Duplicate forward type declaration ''%s''',
+              [TD.Name]), TD.Line, TD.Col)
+          else
+            SemanticError(Format('Duplicate type name ''%s''', [TD.Name]),
+              TD.Line, TD.Col);
+        end;
+        Sym := TSymbol.Create(TD.Name, skType, FTable.NewInterfaceType(TD.Name));
+        FTable.Define(Sym);
+        ForwardDecls.AddObject(TD.Name, TD);
+        Continue;
+      end;
+      { Full interface completing a pending forward: reuse the placeholder. }
+      FwdIdx := ForwardDecls.IndexOf(TD.Name);
+      if FwdIdx >= 0 then
+      begin
+        ForwardDecls.Delete(FwdIdx);
+        Continue;
+      end;
       IntfDesc := FTable.NewInterfaceType(TD.Name);
       Sym      := TSymbol.Create(TD.Name, skType, IntfDesc);
       if not FTable.Define(Sym) then
@@ -5063,6 +5126,11 @@ begin
     if TD.Def is TEnumTypeDef then Continue;
     if TD.Def is TSetTypeDef then Continue;
     if TD.Def is TTypeAliasDef then Continue;
+
+    { Forward stub: the completing full declaration (same name, later) carries
+      the body and does all pass-2 work. }
+    if (TD.Def is TClassTypeDef) and TClassTypeDef(TD.Def).IsForward then Continue;
+    if (TD.Def is TInterfaceTypeDef) and TInterfaceTypeDef(TD.Def).IsForward then Continue;
 
     { Procedural types: resolve param + return types now that all
       type names are registered. }
@@ -5657,6 +5725,26 @@ begin
     if (Sym <> nil) and (Sym.Kind = skType) then
       TPointerTypeDesc(BaseSym.TypeDesc).BaseType := Sym.TypeDesc;
   end;
+
+  { A forward declaration never completed in this scope is an error. }
+  if ForwardDecls.Count > 0 then
+  begin
+    TD := TTypeDecl(ForwardDecls.Objects[0]);
+    SemanticError(Format('Forward type not resolved ''%s''',
+      [ForwardDecls.Strings[0]]), TD.Line, TD.Col);
+  end;
+
+  { Drop the now-redundant forward stubs from the AST so later phases (codegen
+    iterates ABlock.TypeDecls) never see two declarations of the same type. }
+  for I := ABlock.TypeDecls.Count - 1 downto 0 do
+  begin
+    TD := TTypeDecl(ABlock.TypeDecls.Items[I]);
+    if ((TD.Def is TClassTypeDef) and TClassTypeDef(TD.Def).IsForward) or
+       ((TD.Def is TInterfaceTypeDef) and TInterfaceTypeDef(TD.Def).IsForward) then
+      ABlock.TypeDecls.Delete(I);
+  end;
+
+  ForwardDecls.Free();
 end;
 
 procedure TSemanticAnalyser.AnalyseMethodBodies(ABlock: TBlock);

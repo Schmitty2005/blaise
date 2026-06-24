@@ -159,6 +159,10 @@ type
     { ClassCreate builtin still works (backwards compat) and now dispatches
       the ctor body via vtable too. }
     procedure TestRun_ClassCreate_StillWorks;
+    { Forward class declaration with a managed (string) field: the forward
+      stub must complete into the same type so the full class — including its
+      ARC field — compiles and runs correctly. }
+    procedure TestRun_ForwardClass_MutualRefRuns;
     procedure TestRun_SelfIndexedRecordFieldAssign;
   end;
 
@@ -198,6 +202,35 @@ const
           C.Inc(); C.Inc(); C.Inc();
           N := D.Double(C.Value);
           WriteLn(N)
+        end.
+        ''';
+
+  { Forward-declared TNode referenced by TEdge before its full definition,
+    then completed with a managed (string) field and a back-reference. }
+  SrcForwardClass =
+    '''
+        program Prg;
+        type
+          TNode = class;
+          TEdge = class
+            Target: TNode;
+          end;
+          TNode = class
+            Name: string;
+            Link: TEdge;
+          end;
+        var
+          N: TNode;
+          E: TEdge;
+        begin
+          N := TNode.Create();
+          N.Name := 'hello';
+          E := TEdge.Create();
+          E.Target := N;
+          N.Link := E;
+          WriteLn(E.Target.Name);
+          N.Free();
+          E.Free()
         end.
         ''';
 
@@ -2284,6 +2317,14 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcDirect, '42' + LE + '99' + LE, 0);
   AssertRunsOnAll(Src, '1' + LE, 0);
+end;
+
+procedure TE2EClasses2Tests.TestRun_ForwardClass_MutualRefRuns;
+var Output: string; RCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertTrue('compile+run', CompileAndRun(SrcForwardClass, Output, RCode));
+  AssertEquals('forward-declared TNode field read back', 'hello', Trim(Output));
 end;
 
 initialization
