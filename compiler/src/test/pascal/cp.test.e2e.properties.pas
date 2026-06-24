@@ -39,6 +39,10 @@ type
       Obj.Prop[I] where Prop returns a class carrying a default property. }
     procedure TestRun_DefaultProperty_ViaFieldBackedProperty;
     procedure TestRun_DefaultProperty_ViaMethodBackedProperty;
+    { Write through a default array property on a member result:
+      Obj.Field[I] := V and Obj.Prop[I] := V. }
+    procedure TestRun_DefaultProperty_WriteThroughField;
+    procedure TestRun_DefaultProperty_WriteThroughProperty;
     { Static-array field accessed from inside a method (implicit Self). }
     procedure TestRun_StaticArrayField_ReadInMethod;
     procedure TestRun_StaticArrayField_WriteInMethod;
@@ -369,6 +373,70 @@ procedure TE2EPropertyTests.TestRun_DefaultProperty_ViaMethodBackedProperty;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcDefaultViaMethodProp, '9' + LE, 0);
+end;
+
+const
+  { Write through a class field's default property: Obj.Field[I] := V. }
+  SrcDefaultWriteField = '''
+    program P;
+    type
+      TVec = class
+        FData: array[0..4] of Integer;
+        function Get(i: Integer): Integer; begin Result := FData[i] end;
+        procedure Put(i: Integer; v: Integer); begin FData[i] := v end;
+        property Items[i: Integer]: Integer read Get write Put; default;
+      end;
+      TOwner = class
+        FVec: TVec;
+        constructor Create;
+        property Vec: TVec read FVec;
+      end;
+    constructor TOwner.Create; begin inherited Create; FVec := TVec.Create end;
+    var o: TOwner;
+    begin
+      o := TOwner.Create;
+      o.FVec[0] := 3; o.FVec[1] := 4;
+      WriteLn(o.Vec[0] + o.Vec[1]);
+      o := nil
+    end.
+    ''';
+
+  { Write through a read-only property's result default property:
+    Obj.Prop[I] := V. }
+  SrcDefaultWriteProp = '''
+    program P;
+    type
+      TVec = class
+        FData: array[0..4] of Integer;
+        function Get(i: Integer): Integer; begin Result := FData[i] end;
+        procedure Put(i: Integer; v: Integer); begin FData[i] := v end;
+        property Items[i: Integer]: Integer read Get write Put; default;
+      end;
+      TOwner = class
+        FVec: TVec;
+        constructor Create;
+        property Vec: TVec read FVec;
+      end;
+    constructor TOwner.Create; begin inherited Create; FVec := TVec.Create end;
+    var o: TOwner;
+    begin
+      o := TOwner.Create;
+      o.Vec[0] := 5; o.Vec[1] := 4;
+      WriteLn(o.Vec[0] + o.Vec[1]);
+      o := nil
+    end.
+    ''';
+
+procedure TE2EPropertyTests.TestRun_DefaultProperty_WriteThroughField;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDefaultWriteField, '7' + LE, 0);
+end;
+
+procedure TE2EPropertyTests.TestRun_DefaultProperty_WriteThroughProperty;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDefaultWriteProp, '9' + LE, 0);
 end;
 
 initialization

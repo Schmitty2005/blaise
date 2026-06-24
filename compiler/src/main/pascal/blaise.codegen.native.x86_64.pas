@@ -11886,7 +11886,14 @@ begin
     begin
       Self.EmitExprToEax(FA.Expr);
       Self.Emit(#9'pushq %rax');
-      if FA.IsImplicitSelf then
+      if FA.ObjExpr <> nil then
+      begin
+        { Receiver is an arbitrary expression (default-property write through a
+          property/field result): its value is the object pointer. }
+        Self.EmitExprToEax(FA.ObjExpr);
+        Self.Emit(#9'movq %rax, %rdi');
+      end
+      else if FA.IsImplicitSelf then
       begin
         Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand('Self')]));
         if (FA.ImplicitBaseInfo <> nil) and (FA.ImplicitBaseInfo.Offset > 0) then

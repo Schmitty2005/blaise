@@ -6093,7 +6093,11 @@ begin
   if AAssign.PropWriteInfo <> nil then
   begin
     ValTemp := EmitExpr(AAssign.Expr);
-    if AAssign.IsImplicitSelf then
+    if AAssign.ObjExpr <> nil then
+      { Receiver is an arbitrary expression (e.g. a default-property write
+        through a property/field result) — its value is the object pointer. }
+      SelfPtr := EmitExpr(AAssign.ObjExpr)
+    else if AAssign.IsImplicitSelf then
     begin
       SelfPtr := AllocTemp();
       EmitLine(Format('  %s =l loadl %%_var_Self', [SelfPtr]));

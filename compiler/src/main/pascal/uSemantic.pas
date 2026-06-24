@@ -262,6 +262,8 @@ type
     procedure AnalyseFieldAssignment(AAssign: TFieldAssignment);
     function  TryAnalyseFieldElemWrite(AAssign: TFieldAssignment;
       AFldInfo: TFieldInfo): Boolean;
+    function  TryLowerDefaultPropertyWrite(AAssign: TFieldAssignment;
+      AMemberType: TTypeDesc): Boolean;
     function  FloatBuiltinArgType(const AName: string; AArgType: TTypeDesc;
       ALine, ACol: Integer): TTypeDesc;
     procedure AnalyseProcCall(ACall: TProcCall);
@@ -7899,6 +7901,14 @@ begin
     ElemT := TStaticArrayTypeDesc(AFldInfo.TypeDesc).ElementType
   else
   begin
+    { A class field carrying a default array property: the subscript is a write
+      through that default property, Recv.Field[I] := V → (Recv.Field).Default[I]
+      := V.  Otherwise the subscript is meaningless on this field. }
+    if TryLowerDefaultPropertyWrite(AAssign, AFldInfo.TypeDesc) then
+    begin
+      Result := True;
+      Exit;
+    end;
     SemanticError(
       Format('Field ''%s'' is not an array — cannot assign to a subscript',
         [AAssign.FieldName]),
@@ -7912,6 +7922,60 @@ begin
   CheckTypesMatch(ElemT, ExprType,
     Format('''%s'' element', [AAssign.FieldName]), AAssign.Line, AAssign.Col);
   AAssign.IsElemWrite := True;
+  Result := True;
+end;
+
+{ Write through a default array property on a member result:
+  Recv.Member[idx] := V where Member (a field or property) yields a class that
+  carries a writable `default` indexed property — lower to
+  (Recv.Member).Default[idx] := V.  Reads the member into an inner object
+  expression (the new ObjExpr receiver) and re-targets the assignment at the
+  default property's setter.  Class members only (a record getter result is a
+  by-value temp, so a write through it would be discarded).  Returns False when
+  no lowering applies (no trailing index, not a class, or no writable default
+  property), leaving the caller to handle the member as before. }
+function TSemanticAnalyser.TryLowerDefaultPropertyWrite(
+  AAssign: TFieldAssignment; AMemberType: TTypeDesc): Boolean;
+var
+  DefProp: TPropertyInfo;
+  DefRT:   TRecordTypeDesc;
+  Inner:   TFieldAccessExpr;
+  IdxType: TTypeDesc;
+  ValType: TTypeDesc;
+begin
+  Result := False;
+  if AAssign.PropIndexExpr = nil then
+    Exit;
+  if (AMemberType = nil) or (AMemberType.Kind <> tyClass) then
+    Exit;
+  DefRT   := TRecordTypeDesc(AMemberType);
+  DefProp := DefRT.FindDefaultProperty();
+  if (DefProp = nil) or (DefProp.WriteMethod = '') then
+    Exit;
+  { Inner = the member read (the getter / field access), the receiver of the
+    setter call.  Carries the original receiver (RecordName form, or the ObjExpr
+    receiver if one was already present). }
+  Inner := TFieldAccessExpr.Create();
+  Inner.Line       := AAssign.Line;
+  Inner.Col        := AAssign.Col;
+  Inner.Base       := AAssign.ObjExpr;     { transfer (nil for the RecordName form) }
+  Inner.RecordName := AAssign.RecordName;
+  Inner.FieldName  := AAssign.FieldName;
+  AnalyseExpr(Inner);
+  { Re-target the assignment at the default property setter on that result. }
+  AAssign.ObjExpr           := Inner;
+  AAssign.RecordName        := '';
+  AAssign.FieldName         := DefProp.Name;
+  AAssign.PropWriteInfo     := DefProp;
+  AAssign.PropOwnerType     := PropAccessorOwner(DefRT.Name, DefProp.WriteMethod);
+  AAssign.PropAccessorVSlot := PropAccessorVSlot(DefRT.Name, DefProp.WriteMethod);
+  IdxType := AnalyseExpr(AAssign.PropIndexExpr);
+  if DefProp.IndexTypeDesc <> nil then
+    CheckTypesMatch(DefProp.IndexTypeDesc, IdxType, 'default property index',
+      AAssign.Line, AAssign.Col);
+  ValType := AnalyseExpr(AAssign.Expr);
+  CheckTypesMatch(DefProp.TypeDesc, ValType, 'default property assignment',
+    AAssign.Line, AAssign.Col);
   Result := True;
 end;
 
@@ -8113,6 +8177,8 @@ begin
           AAssign.Line, AAssign.Col);
         Exit;
       end
+      else if TryLowerDefaultPropertyWrite(AAssign, PropInfo.TypeDesc) then
+        Exit
       else
         SemanticError(
           Format('Property ''%s'' is read-only', [AAssign.FieldName]),
