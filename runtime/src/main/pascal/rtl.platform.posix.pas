@@ -28,7 +28,12 @@ unit rtl.platform.posix;
 interface
 
 uses
-  rtl.platform;
+  rtl.platform,
+  { The concrete TPlatformLayout for this archive's target.  This is the ONE
+    per-target wire in the otherwise OS-agnostic POSIX unit: the Linux RTL
+    archive composes the Linux layout, the FreeBSD archive its own.  Its
+    initialization assigns GPlatformLayout. }
+  rtl.platform.layout.linux;
 
 type
   TRtlPlatformPosix = class(TRtlPlatform)
@@ -109,26 +114,12 @@ type
 { ------------------------------------------------------------------ }
 
 type
-  TStatBuf = record
-    Dev:     Int64;
-    Ino:     Int64;
-    Nlink:   Int64;
-    Mode:    Integer;
-    Uid:     Integer;
-    Gid:     Integer;
-    Pad0:    Integer;
-    Rdev:    Int64;
-    Size:    Int64;
-    Blksize: Int64;
-    Blocks:  Int64;
-    Atime:   Int64;
-    AtimeNs: Int64;
-    Mtime:   Int64;
-    MtimeNs: Int64;
-    Ctime:   Int64;
-    CtimeNs: Int64;
-    Unused:  array[0..2] of Int64;
-  end;
+  { Opaque struct stat buffer.  The kernel fills it; the field offsets and the
+    true size are target-specific (Linux 144 bytes, FreeBSD larger), so the RTL
+    never names the fields directly — it sizes the buffer generously and reads
+    Size/Mtime/Mode through GPlatformLayout.StatSize/StatMtime/StatMode at the
+    target's offsets.  256 bytes covers every supported target's struct stat. }
+  TStatBuf = array[0..255] of Byte;
   PStatBuf = ^TStatBuf;
 
   TTimeSpec = record
@@ -173,8 +164,8 @@ function  libc_read(Fd: Integer; Buf: Pointer; Count: Int64): Int64;        exte
 function  libc_write(Fd: Integer; Buf: Pointer; Count: Int64): Int64;       external name 'write';
 function  libc_lseek(Fd: Integer; Offset: Int64; Whence: Integer): Int64;   external name 'lseek';
 function  libc_close(Fd: Integer): Integer;                                  external name 'close';
-function  libc_fstat(Fd: Integer; Buf: PStatBuf): Integer;                  external name 'fstat';
-function  libc_stat(Path: PChar; Buf: PStatBuf): Integer;                   external name 'stat';
+function  libc_fstat(Fd: Integer; Buf: Pointer): Integer;                   external name 'fstat';
+function  libc_stat(Path: PChar; Buf: Pointer): Integer;                    external name 'stat';
 function  libc_mkdir(Path: PChar; Mode: Integer): Integer;                   external name 'mkdir';
 function  libc_rmdir(Path: PChar): Integer;                                  external name 'rmdir';
 function  libc_unlink(Path: PChar): Integer;                                 external name 'unlink';
@@ -288,24 +279,11 @@ implementation
 const
   BLAISE_STR_HDR = 12;
 
-  O_RDONLY = 0;
-  O_WRONLY = 1;
-  O_RDWR   = 2;
-  O_CREAT  = $40;
-  O_TRUNC  = $200;
-  O_APPEND = $400;
+  NS_PER_SEC = 1000000000;
 
-  S_IFMT  = $F000;
-  S_IFDIR = $4000;
-
-  SEEK_SET = 0;
-  SEEK_CUR = 1;
-  SEEK_END = 2;
-
-  NS_PER_SEC     = 1000000000;
-  CLOCK_REALTIME = 0;
-
-  WNOHANG = 1;
+  { O_* / S_* / SEEK_* / CLOCK_REALTIME / WNOHANG and the struct stat layout
+    live in GPlatformLayout (rtl.platform.layout.<os>) — their values/offsets
+    differ across POSIX targets.  See docs/native-target-architecture.adoc. }
 
 { ------------------------------------------------------------------ }
 { Shared string helpers                                                }
@@ -435,7 +413,7 @@ function TRtlPlatformPosix.FileExists(const APath: string): Boolean;
 var
   Fd: Integer;
 begin
-  Fd := libc_open2(StrData(Pointer(APath)), O_RDONLY);
+  Fd := libc_open2(StrData(Pointer(APath)), GPlatformLayout.O_RDONLY());
   if Fd < 0 then begin Result := False; Exit end;
   libc_close(Fd);
   Result := True;
@@ -460,10 +438,10 @@ var
   Got:  Int64;
   LPtr: ^Integer;
 begin
-  Fd := libc_open2(StrData(Pointer(APath)), O_RDONLY);
+  Fd := libc_open2(StrData(Pointer(APath)), GPlatformLayout.O_RDONLY());
   if Fd < 0 then begin Result := string(PChar(StrAlloc(0))); Exit end;
   if libc_fstat(Fd, @St) < 0 then begin libc_close(Fd); Result := string(PChar(StrAlloc(0))); Exit end;
-  Sz := St.Size;
+  Sz := GPlatformLayout.StatSize(@St);
   if Sz < 0 then begin libc_close(Fd); Result := string(PChar(StrAlloc(0))); Exit end;
   R := StrAlloc(Integer(Sz));
   if R = nil then begin libc_close(Fd); Result := ''; Exit end;
@@ -480,7 +458,7 @@ var
   Fd:  Integer;
   Len: Integer;
 begin
-  Fd := libc_open(StrData(Pointer(APath)), O_WRONLY or O_CREAT or O_TRUNC, 420);
+  Fd := libc_open(StrData(Pointer(APath)), GPlatformLayout.O_WRONLY() or GPlatformLayout.O_CREAT() or GPlatformLayout.O_TRUNC(), 420);
   if Fd < 0 then Exit;
   Len := StrLen(Pointer(AContent));
   if Len > 0 then
@@ -493,7 +471,7 @@ var
   Fd:  Integer;
   Len: Integer;
 begin
-  Fd := libc_open(StrData(Pointer(APath)), O_WRONLY or O_CREAT or O_APPEND, 420);
+  Fd := libc_open(StrData(Pointer(APath)), GPlatformLayout.O_WRONLY() or GPlatformLayout.O_CREAT() or GPlatformLayout.O_APPEND(), 420);
   if Fd < 0 then Exit;
   Len := StrLen(Pointer(AContent));
   if Len > 0 then
@@ -506,7 +484,7 @@ var
   St: TStatBuf;
 begin
   if libc_stat(StrData(Pointer(APath)), @St) <> 0 then begin Result := -1; Exit end;
-  Result := St.Mtime;
+  Result := GPlatformLayout.StatMtime(@St);
 end;
 
 { ================================================================== }
@@ -518,7 +496,7 @@ var
   St: TStatBuf;
 begin
   if libc_stat(StrData(Pointer(APath)), @St) <> 0 then begin Result := False; Exit end;
-  Result := (St.Mode and S_IFMT) = S_IFDIR;
+  Result := (GPlatformLayout.StatMode(@St) and GPlatformLayout.S_IFMT()) = GPlatformLayout.S_IFDIR();
 end;
 
 function TRtlPlatformPosix.ForceDirectories(const APath: string): Boolean;
@@ -550,7 +528,7 @@ begin
         begin
           Result := False; Exit;
         end;
-      end else if (St.Mode and S_IFMT) <> S_IFDIR then
+      end else if (GPlatformLayout.StatMode(@St) and GPlatformLayout.S_IFMT()) <> GPlatformLayout.S_IFDIR() then
       begin
         Result := False; Exit;
       end;
@@ -836,17 +814,17 @@ end;
 
 function TRtlPlatformPosix.FdOpenRead(Path: Pointer): Integer;
 begin
-  Result := libc_open2(StrData(Path), O_RDONLY);
+  Result := libc_open2(StrData(Path), GPlatformLayout.O_RDONLY());
 end;
 
 function TRtlPlatformPosix.FdOpenWrite(Path: Pointer): Integer;
 begin
-  Result := libc_open(StrData(Path), O_WRONLY or O_CREAT or O_TRUNC, 420);
+  Result := libc_open(StrData(Path), GPlatformLayout.O_WRONLY() or GPlatformLayout.O_CREAT() or GPlatformLayout.O_TRUNC(), 420);
 end;
 
 function TRtlPlatformPosix.FdOpenAppend(Path: Pointer): Integer;
 begin
-  Result := libc_open(StrData(Path), O_WRONLY or O_CREAT or O_APPEND, 420);
+  Result := libc_open(StrData(Path), GPlatformLayout.O_WRONLY() or GPlatformLayout.O_CREAT() or GPlatformLayout.O_APPEND(), 420);
 end;
 
 function TRtlPlatformPosix.FdRead(Fd: Integer; Buf: Pointer; Count: Integer): Integer;
@@ -866,10 +844,10 @@ var
   Whence: Integer;
 begin
   case Origin of
-    1: Whence := SEEK_CUR;
-    2: Whence := SEEK_END;
+    1: Whence := GPlatformLayout.SEEK_CUR();
+    2: Whence := GPlatformLayout.SEEK_END();
   else
-    Whence := SEEK_SET;
+    Whence := GPlatformLayout.SEEK_SET();
   end;
   Result := libc_lseek(Fd, Offset, Whence);
 end;
@@ -879,7 +857,7 @@ var
   St: TStatBuf;
 begin
   if libc_fstat(Fd, @St) <> 0 then begin Result := -1; Exit end;
-  Result := St.Size;
+  Result := GPlatformLayout.StatSize(@St);
 end;
 
 procedure TRtlPlatformPosix.FdClose(Fd: Integer);
@@ -895,7 +873,7 @@ function TRtlPlatformPosix.TimeNow: Int64;
 var
   Ts: TTimeSpec;
 begin
-  libc_clock_gettime(CLOCK_REALTIME, @Ts);
+  libc_clock_gettime(GPlatformLayout.CLOCK_REALTIME(), @Ts);
   Result := Ts.Sec * NS_PER_SEC + Ts.NSec;
 end;
 
@@ -1082,7 +1060,7 @@ begin
   P := Proc;
   if (P^.Waited <> 0) or (P^.Pid = 0) then begin Result := 0; Exit end;
   Status := 0;
-  R := libc_waitpid(P^.Pid, @Status, WNOHANG);
+  R := libc_waitpid(P^.Pid, @Status, GPlatformLayout.WNOHANG());
   if R = P^.Pid then
   begin
     if (Status and $7F) = 0 then
@@ -1171,6 +1149,8 @@ procedure _SetArgs(Argc: Integer; Argv: Pointer);
 begin
   GArgC := Argc;
   GArgV := TPCharArray(Argv);
+  if GPlatformLayout = nil then
+    GPlatformLayout := TPlatformLayoutLinuxX86_64.Create();
   if GRtlPlatform = nil then
     GRtlPlatform := TRtlPlatformPosix.Create();
 end;

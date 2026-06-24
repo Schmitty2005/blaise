@@ -55,6 +55,7 @@ PAS_OBJS = $(OBJ_DIR)/blaise_mem.o \
            $(OBJ_DIR)/blaise_float.o \
            $(OBJ_DIR)/blaise_thread.o \
            $(OBJ_DIR)/blaise_exc.o \
+           $(OBJ_DIR)/rtl_platform_layout_linux.o \
            $(OBJ_DIR)/rtl_platform_posix.o
 
 OBJS = $(ASM_OBJS) $(PAS_OBJS)
@@ -104,7 +105,13 @@ $(OBJ_DIR)/blaise_exc.o: $(PAS_SRC_DIR)/blaise_exc.pas
 	@mkdir -p $(OBJ_DIR)
 	$(BLAISE) $(BLAISE_FLAGS) --source $< --unit-path $(PAS_SRC_DIR) --output $@
 
+$(OBJ_DIR)/rtl_platform_layout_linux.o: $(PAS_SRC_DIR)/rtl.platform.layout.linux.pas \
+                                 $(PAS_SRC_DIR)/rtl.platform.pas
+	@mkdir -p $(OBJ_DIR)
+	$(BLAISE) $(BLAISE_FLAGS) --source $< --unit-path $(PAS_SRC_DIR) --output $@
+
 $(OBJ_DIR)/rtl_platform_posix.o: $(PAS_SRC_DIR)/rtl.platform.posix.pas \
+                                 $(PAS_SRC_DIR)/rtl.platform.layout.linux.pas \
                                  $(PAS_SRC_DIR)/rtl.platform.pas
 	@mkdir -p $(OBJ_DIR)
 	$(BLAISE) $(BLAISE_FLAGS) --source $< --unit-path $(PAS_SRC_DIR) --output $@
