@@ -47,6 +47,9 @@ type
     procedure TestRun_ProcFieldCall_Statement;
     procedure TestRun_ProcFieldCall_OutParam;
     procedure TestRun_ProcFieldCall_MultiArg;
+    { Method-pointer (of object) field: assign @Obj.Method into a field, then
+      dispatch through it — exercises the 16-byte (Code, Data) field store. }
+    procedure TestRun_MethodPtrField_AssignAndCall;
 
     { Default parameters }
     procedure TestRun_DefaultParam_OmitLast;
@@ -426,6 +429,35 @@ const
     end.
     ''';
 
+  { Method-pointer (of object) class field: capture @Obj.Method into a field
+    and call through it.  The capture stores a 16-byte (Code, Data) pair. }
+  SrcMethodPtrField = '''
+    program Prg;
+    type
+      TEvt = procedure(const S: string) of object;
+      TSrc = class
+        Tag: string;
+        procedure Handle(const S: string);
+      end;
+      TBox = class
+        FEvt: TEvt;
+        procedure Fire(const S: string);
+      end;
+    procedure TSrc.Handle(const S: string);
+    begin WriteLn(Self.Tag, ':', S) end;
+    procedure TBox.Fire(const S: string);
+    begin Self.FEvt(S) end;
+    var B: TBox; S: TSrc;
+    begin
+      S := TSrc.Create(); S.Tag := 'T';
+      B := TBox.Create();
+      B.FEvt := @S.Handle;
+      B.Fire('hello');
+      B.Free();
+      S.Free()
+    end.
+    ''';
+
   SrcDefaultParam = '''
     program Prg;
     function Add(A: Integer; B: Integer = 10): Integer;
@@ -765,6 +797,12 @@ procedure TE2EMiscTests.TestRun_ProcFieldCall_MultiArg;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcProcFieldMultiArg, '33' + LE, 0);
+end;
+
+procedure TE2EMiscTests.TestRun_MethodPtrField_AssignAndCall;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcMethodPtrField, 'T:hello' + LE, 0);
 end;
 
 procedure TE2EMiscTests.TestRun_DefaultParam_OmitLast;

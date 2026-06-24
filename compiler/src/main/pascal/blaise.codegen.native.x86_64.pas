@@ -11987,6 +11987,82 @@ begin
         FA.FieldInfo.TypeDesc);
       Exit;
     end;
+    { Method-pointer (of object) field assignment from @Obj.Method: store the
+      [CodePtr, ObjPtr] pair into the field's 16-byte slot.  Mirrors the
+      simple-variable case in EmitAssignment; the only difference is that the
+      destination is a field, so its containing-object base is computed per
+      receiver shape (exactly as the interface-field store above does). }
+    if (FA.FieldInfo.TypeDesc.Kind = tyProcedural) and
+       TProceduralTypeDesc(FA.FieldInfo.TypeDesc).IsMethodPtr and
+       (FA.Expr is TAddrOfExpr) and
+       (TAddrOfExpr(FA.Expr).Expr is TFieldAccessExpr) and
+       (TFieldAccessExpr(TAddrOfExpr(FA.Expr).Expr).ResolvedType <> nil) and
+       (TFieldAccessExpr(TAddrOfExpr(FA.Expr).Expr).ResolvedType.Kind = tyProcedural) and
+       TProceduralTypeDesc(TFieldAccessExpr(TAddrOfExpr(FA.Expr).Expr).ResolvedType).IsMethodPtr then
+    begin
+      FAE := TFieldAccessExpr(TAddrOfExpr(FA.Expr).Expr);
+      MD  := TMethodDecl(FAE.ResolvedMethod);
+      { Destination field's containing-object base → %rcx, per receiver shape. }
+      if FA.ObjExpr <> nil then
+      begin
+        Self.EmitExprToEax(FA.ObjExpr);
+        Self.Emit(#9'movq %rax, %rcx');
+      end
+      else if FSretFunc and (FA.RecordName = 'Result') then
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Result')]))
+      else if FA.IsImplicitSelf then
+      begin
+        Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand('Self')]));
+        if (FA.ImplicitBaseInfo <> nil) and (FA.ImplicitBaseInfo.Offset > 0) then
+          Self.Emit(Format(#9'addq $%d, %%rcx', [FA.ImplicitBaseInfo.Offset]));
+        if FA.IsClassAccess then
+          Self.Emit(#9'movq (%rcx), %rcx');
+      end
+      else if FA.IsClassAccess then
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FA.RecordName]));
+        if FA.IsVarParam then
+          { var-param class: slot -> caller var -> instance }
+          Self.Emit(#9'movq (%rcx), %rcx');
+      end
+      else if FA.IsVarParam then
+      begin
+        if Self.IsLocal(FA.RecordName) then
+          Self.Emit(Format(#9'movq %s, %%rcx', [Self.VarOperand(FA.RecordName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rcx', [FA.RecordName]));
+      end
+      else if Self.IsLocal(FA.RecordName) then
+        Self.EmitLocalRecordBase(FA.RecordName, '%rcx')
+      else
+        Self.Emit(Format(#9'leaq %s(%%rip), %%rcx', [FA.RecordName]));
+      if FA.FieldInfo.Offset > 0 then
+        Self.Emit(Format(#9'addq $%d, %%rcx', [FA.FieldInfo.Offset]));
+      { Store the code pointer at offset 0. }
+      Self.Emit(Format(#9'leaq %s(%%rip), %%rax',
+        [MethodEmitNameNative(MD, MD.OwnerTypeName, FAE.FieldName)]));
+      Self.Emit(#9'movq %rax, (%rcx)');
+      { Store the captured object pointer at offset 8. }
+      if FAE.Base <> nil then
+      begin
+        Self.Emit(#9'pushq %rcx');
+        Self.EmitExprToEax(FAE.Base);
+        Self.Emit(#9'popq %rcx');
+        Self.Emit(#9'movq %rax, 8(%rcx)');
+      end
+      else
+      begin
+        if Self.IsLocal(FAE.RecordName) then
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(FAE.RecordName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rax', [FAE.RecordName]));
+        Self.Emit(#9'movq %rax, 8(%rcx)');
+      end;
+      Exit;
+    end;
     { Field := MethodCall() where the method returns a record via sret.
       Compute the field address into %rbx (callee-saved), release managed
       fields of the old record, then call with %rbx as the sret destination. }
