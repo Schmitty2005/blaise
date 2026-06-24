@@ -84,6 +84,10 @@ type
   { Linux x86-64 ELF, non-PIE ET_EXEC.  Caller frees. }
 function LinuxX86_64Target: TLinkTarget;
 
+  { FreeBSD x86-64 ELF.  Same System V AMD64 machine/arch as Linux; differs
+    only in EI_OSABI (9 = FreeBSD).  Caller frees. }
+function FreeBSDX86_64Target: TLinkTarget;
+
 type
   { One output section accumulating contributions from input objects. }
   TMergedSection = class
@@ -609,6 +613,13 @@ function LinuxX86_64Target: TLinkTarget;
 begin
   Result := TLinkTarget.Create();
   { defaults already describe Linux x86-64 }
+end;
+
+function FreeBSDX86_64Target: TLinkTarget;
+begin
+  Result := TLinkTarget.Create();
+  { Identical to Linux x86-64 except the OS/ABI byte in the ELF header. }
+  Result.OSABI := ELFOSABI_FREEBSD;
 end;
 
 { ---- TLinker ----------------------------------------------------------- }

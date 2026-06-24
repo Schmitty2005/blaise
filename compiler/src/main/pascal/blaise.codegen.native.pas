@@ -76,19 +76,24 @@ function CreateNativeBackend(const ATarget: TTargetDesc): TNativeBackend;
 implementation
 
 uses
-  blaise.codegen.native.x86_64;
+  blaise.codegen.toolkit;
 
 { ------------------------------------------------------------------ }
 { Backend factory                                                     }
 { ------------------------------------------------------------------ }
 
 function CreateNativeBackend(const ATarget: TTargetDesc): TNativeBackend;
+var
+  Toolkit: TTargetToolkit;
 begin
-  if (ATarget.OS = osLinux) and (ATarget.CPU = cpuX86_64) then
-    Result := TX86_64Backend.Create(ATarget)
-  else
+  { Resolve the per-target adapter family from the registry (Abstract
+    Factory).  Adding a target is a new toolkit + one registration — this
+    dispatch never changes.  See docs/native-target-architecture.adoc. }
+  Toolkit := ResolveToolkit(ATarget);
+  if Toolkit = nil then
     raise ENativeCodeGenError.Create(
       'native backend not yet implemented for target ' + TargetName(ATarget));
+  Result := Toolkit.MakeBackend();
 end;
 
 { ------------------------------------------------------------------ }
