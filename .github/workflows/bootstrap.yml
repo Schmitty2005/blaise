@@ -70,6 +70,17 @@ jobs:
           sudo apt-get install -y build-essential unzip
 
       # --------------------------------------------------------------------
+      # 3b. Build vendored QBE. The bootstrap chain is native-default and does
+      #     NOT need QBE, but the E2E test suite still shells out to it (the
+      #     QBE backend arm of AssertRunsOnAll, plus the toolchain-gated
+      #     round-trip tests). Without it ~218 tests fail with
+      #     "<toolchain-missing>" / "[qbe] compile+run". It is vendored, so a
+      #     plain `make` builds the binary the tests' BLAISE_QBE fallback finds.
+      # --------------------------------------------------------------------
+      - name: Build vendored QBE
+        run: make -C vendor/qbe
+
+      # --------------------------------------------------------------------
       # 4. Restore the carry-forward cache: the previous successful master run
       #    stashes its -pre binary + a marker file recording the commit SHA it
       #    was built at. We restore them into releases/<sha>/ so the script can
@@ -215,6 +226,9 @@ jobs:
           # bootstrapped -pre binary.  Without this they fall back to the
           # /tmp/fp_blaise* fixpoint binaries (which only exist after a local
           # fixpoint.sh run) and silently Ignore ~24 tests in CI.
+          # BLAISE_QBE points the E2E suite at the vendored QBE built above
+          # (its fallback is vendor/qbe/qbe, but set it explicitly).
+          BLAISE_QBE="$PWD/vendor/qbe/qbe" \
           BLAISE_QBE_COMPILER="$BLAISE" compiler/target/TestRunner
 
       # --------------------------------------------------------------------
