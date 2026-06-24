@@ -14703,14 +14703,34 @@ begin
   if AStmt.PropWriteInfo <> nil then
   begin
     DefProp  := TPropertyInfo(AStmt.PropWriteInfo);
-    RecvTemp := AllocTemp();
-    EmitLine(Format('  %s =l loadl %s',
-      [RecvTemp, VarRef(AStmt.ArrayName, AStmt.IsGlobal)]));
-    if AStmt.IsVarParam then
+    if AStmt.IsImplicitSelf then
     begin
+      { Self.Field[I] := V — load Self, reach the field slot, deref to the
+        field's class object (the setter receiver). }
+      RecvTemp := AllocTemp();
+      EmitLine(Format('  %s =l loadl %%_var_Self', [RecvTemp]));
+      if AStmt.ImplicitFieldInfo.Offset > 0 then
+      begin
+        ElemPtr := AllocTemp();
+        EmitLine(Format('  %s =l add %s, %d',
+          [ElemPtr, RecvTemp, AStmt.ImplicitFieldInfo.Offset]));
+        RecvTemp := ElemPtr;
+      end;
       ElemPtr := AllocTemp();
       EmitLine(Format('  %s =l loadl %s', [ElemPtr, RecvTemp]));
       RecvTemp := ElemPtr;
+    end
+    else
+    begin
+      RecvTemp := AllocTemp();
+      EmitLine(Format('  %s =l loadl %s',
+        [RecvTemp, VarRef(AStmt.ArrayName, AStmt.IsGlobal)]));
+      if AStmt.IsVarParam then
+      begin
+        ElemPtr := AllocTemp();
+        EmitLine(Format('  %s =l loadl %s', [ElemPtr, RecvTemp]));
+        RecvTemp := ElemPtr;
+      end;
     end;
     IdxW     := EmitExpr(AStmt.IndexExpr);
     IdxQType := QbeTypeOf(DefProp.IndexTypeDesc);

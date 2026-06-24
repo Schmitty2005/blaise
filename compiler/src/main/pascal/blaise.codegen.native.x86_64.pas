@@ -12701,12 +12701,24 @@ begin
       Self.Emit(#9'pushq %rax');
       Self.EmitExprToEax(SSA.IndexExpr);       { index }
       Self.Emit(#9'pushq %rax');
-      if Self.IsLocal(SSA.ArrayName) then
-        Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(SSA.ArrayName)]))
+      if SSA.IsImplicitSelf then
+      begin
+        { Self.Field[I] := V — load Self, reach the field slot, deref to the
+          field's class object (the setter receiver). }
+        Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand('Self')]));
+        if SSA.ImplicitFieldInfo.Offset > 0 then
+          Self.Emit(Format(#9'addq $%d, %%rdi', [SSA.ImplicitFieldInfo.Offset]));
+        Self.Emit(#9'movq (%rdi), %rdi');
+      end
       else
-        Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [SSA.ArrayName]));
-      if SSA.IsVarParam then
-        Self.Emit(#9'movq (%rdi), %rdi');      { var-param: slot -> instance }
+      begin
+        if Self.IsLocal(SSA.ArrayName) then
+          Self.Emit(Format(#9'movq %s, %%rdi', [Self.VarOperand(SSA.ArrayName)]))
+        else
+          Self.Emit(Format(#9'movq %s(%%rip), %%rdi', [SSA.ArrayName]));
+        if SSA.IsVarParam then
+          Self.Emit(#9'movq (%rdi), %rdi');      { var-param: slot -> instance }
+      end;
       Self.Emit(#9'popq %rsi');                { index }
       Self.Emit(#9'popq %rdx');                { value }
       Self.EmitPropAccessorCallNative(SSA.PropOwnerType,

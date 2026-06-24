@@ -43,6 +43,9 @@ type
       Obj.Field[I] := V and Obj.Prop[I] := V. }
     procedure TestRun_DefaultProperty_WriteThroughField;
     procedure TestRun_DefaultProperty_WriteThroughProperty;
+    { Implicit-Self write/read: Field[I] := V / Field[I] inside a method, where
+      Field is a class with a default array property. }
+    procedure TestRun_DefaultProperty_WriteThroughImplicitSelf;
     { Static-array field accessed from inside a method (implicit Self). }
     procedure TestRun_StaticArrayField_ReadInMethod;
     procedure TestRun_StaticArrayField_WriteInMethod;
@@ -437,6 +440,41 @@ procedure TE2EPropertyTests.TestRun_DefaultProperty_WriteThroughProperty;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcDefaultWriteProp, '9' + LE, 0);
+end;
+
+const
+  { Implicit Self.Field[I] := V and Field[I] read, inside methods. }
+  SrcDefaultWriteImplicitSelf = '''
+    program P;
+    type
+      TVec = class
+        FData: array[0..4] of Integer;
+        function Get(i: Integer): Integer; begin Result := FData[i] end;
+        procedure Put(i: Integer; v: Integer); begin FData[i] := v end;
+        property Items[i: Integer]: Integer read Get write Put; default;
+      end;
+      TOwner = class
+        FVec: TVec;
+        constructor Create;
+        procedure Fill;
+        function Sum: Integer;
+      end;
+    constructor TOwner.Create; begin inherited Create; FVec := TVec.Create end;
+    procedure TOwner.Fill; begin FVec[0] := 3; FVec[1] := 4; end;
+    function TOwner.Sum: Integer; begin Result := FVec[0] + FVec[1]; end;
+    var o: TOwner;
+    begin
+      o := TOwner.Create;
+      o.Fill();
+      WriteLn(o.Sum());
+      o := nil
+    end.
+    ''';
+
+procedure TE2EPropertyTests.TestRun_DefaultProperty_WriteThroughImplicitSelf;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDefaultWriteImplicitSelf, '7' + LE, 0);
 end;
 
 initialization

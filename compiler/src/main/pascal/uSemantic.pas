@@ -12115,6 +12115,31 @@ begin
           Format('''%s'' element', [AStmt.ArrayName]), AStmt.Line, AStmt.Col);
         Exit;
       end;
+      { Implicit Self.Field[I] := V where Field is a class with a writable
+        default array property — lower to its setter on the field's object. }
+      if (BaseInfo <> nil) and (BaseInfo.TypeDesc <> nil) and
+         (BaseInfo.TypeDesc.Kind = tyClass) then
+      begin
+        DefProp := TRecordTypeDesc(BaseInfo.TypeDesc).FindDefaultProperty();
+        if (DefProp <> nil) and (DefProp.WriteMethod <> '') then
+        begin
+          AStmt.IsImplicitSelf    := True;
+          AStmt.ImplicitFieldInfo := BaseInfo;
+          AStmt.PropWriteInfo     := DefProp;
+          AStmt.PropOwnerType     := PropAccessorOwner(
+            TRecordTypeDesc(BaseInfo.TypeDesc).Name, DefProp.WriteMethod);
+          AStmt.PropAccessorVSlot := PropAccessorVSlot(
+            TRecordTypeDesc(BaseInfo.TypeDesc).Name, DefProp.WriteMethod);
+          IdxType := AnalyseExpr(AStmt.IndexExpr);
+          if DefProp.IndexTypeDesc <> nil then
+            CheckTypesMatch(DefProp.IndexTypeDesc, IdxType, 'default property index',
+              AStmt.Line, AStmt.Col);
+          ValType := AnalyseExpr(AStmt.ValueExpr);
+          CheckTypesMatch(DefProp.TypeDesc, ValType, 'default property assignment',
+            AStmt.Line, AStmt.Col);
+          Exit;
+        end;
+      end;
     end;
     SemanticError(
       Format('Undeclared variable ''%s''', [AStmt.ArrayName]),
