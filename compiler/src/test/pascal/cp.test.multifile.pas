@@ -37,6 +37,7 @@ type
     procedure TestUnitLoader_LocatesUnitInSearchPath;
     procedure TestUnitLoader_RaisesOnMissingUnit;
     procedure TestUnitLoader_DetectsCycle;
+    procedure TestUnitLoader_ImplSectionBackEdge_Tolerated;
     procedure TestUnitLoader_DependencyOrder;
     { ------------------------------------------------------------------ }
     { AnalyseUnitForExport                                                 }
@@ -233,6 +234,57 @@ begin
       Fail('Expected ECircularDependency');
     except
       on E: ECircularDependency do ;  { expected }
+    end;
+  finally
+    Names.Free();
+    Loader.Free();
+    Paths.Free();
+  end;
+end;
+
+procedure TMultifileTests.TestUnitLoader_ImplSectionBackEdge_Tolerated;
+const
+  { BackA's INTERFACE uses BackB; BackB's IMPLEMENTATION uses BackA.  This is a
+    legal Object Pascal arrangement — interfaces are compiled before bodies, so
+    BackB's body may name BackA even though BackA's interface (transitively)
+    needs BackB.  It must load without an ECircularDependency, unlike the
+    interface↔interface cycle above. }
+  SrcA =
+    '''
+        unit BackA;
+        interface
+        uses BackB;
+        implementation
+        end.
+        ''';
+  SrcB =
+    '''
+        unit BackB;
+        interface
+        implementation
+        uses BackA;
+        end.
+        ''';
+var
+  Paths:  TStringList;
+  Loader: TUnitLoader;
+  Names:  TStringList;
+  Units:  TObjectList;
+begin
+  WriteUnit('BackA', SrcA);
+  WriteUnit('BackB', SrcB);
+
+  Paths  := MakeSearchPaths();
+  Loader := TUnitLoader.Create(Paths);
+  Names  := TStringList.Create();
+  try
+    Names.Add('BackA');
+    { Must NOT raise — the back-edge is through an implementation-section use. }
+    Units := Loader.LoadAll(Names);
+    try
+      AssertEquals('both units loaded', 2, Units.Count);
+    finally
+      Units.Free();
     end;
   finally
     Names.Free();

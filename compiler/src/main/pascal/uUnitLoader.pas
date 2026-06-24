@@ -60,7 +60,8 @@ type
   private
     FSearchPaths:          TStringList;  { not owned }
     FDefines:              TStringList;  { not owned — conditional symbols for each unit's lexer }
-    FLoading:              TStringList;  { units currently on the load stack — cycle detection }
+    FLoading:              TStringList;  { units currently on the load stack (any edge) — guards re-entry / infinite recursion }
+    FIfaceChain:           TStringList;  { units reached along an unbroken chain of interface-section uses — a back-edge into this set is a true circular dependency.  Implementation-section uses do NOT extend this chain (Pascal allows them to point back), so following one starts a fresh chain. }
     FLoadedNames:          TStringList;  { units already fully loaded }
     FSourceLoadedNames:    TStringList;  { units taken via the SOURCE-recompile
                                            path (stale cache or no cache).  A
@@ -309,18 +310,29 @@ end;
 
 procedure TUnitLoader.LoadTransitive(const AName: string);
 var
-  Path:    string;
-  ObjPath: string;
-  Iface:   TUnitInterface;
-  U:       TUnit;
-  I:       Integer;
+  Path:       string;
+  ObjPath:    string;
+  Iface:      TUnitInterface;
+  U:          TUnit;
+  I:          Integer;
+  SavedChain: TStringList;
 begin
   if IsBuiltin(AName) then Exit;
   if FLoadedNames.IndexOf(AName) >= 0 then Exit;  { already in result list }
 
   if FLoading.IndexOf(AName) >= 0 then
-    raise ECircularDependency.Create(Format(
-      'Circular unit dependency: ''%s''', [AName]));
+  begin
+    { Already on the load stack.  This is a true circular dependency only when
+      the back-edge closes a chain of interface-section uses (those cannot be
+      satisfied — each unit's interface needs the other's first).  A back-edge
+      reached through an implementation-section use is legal in Pascal, so it
+      is simply skipped: the unit is already being loaded higher up the stack
+      and its interface will be available by the time bodies are compiled. }
+    if FIfaceChain.IndexOf(AName) >= 0 then
+      raise ECircularDependency.Create(Format(
+        'Circular unit dependency: ''%s''', [AName]));
+    Exit;
+  end;
 
   { Auto-discovery: prefer a pre-built '<name>.o' on the search path
     when it carries an embedded iface section.  The .o + embedded
@@ -348,7 +360,10 @@ begin
     if Iface <> nil then
     begin
       FLoading.Add(AName);
+      FIfaceChain.Add(AName);
       try
+        { A prebuilt .bif carries only interface-section uses, so these all
+          extend the interface chain. }
         for I := 0 to Iface.UsedUnits.Count - 1 do
           LoadTransitive(Iface.UsedUnits.Strings[I]);
         { Staleness propagation: if any interface-use dependency was taken via
@@ -385,6 +400,7 @@ begin
         end;
       finally
         FLoading.Delete(FLoading.IndexOf(AName));
+        FIfaceChain.Delete(FIfaceChain.IndexOf(AName));
       end;
       if Iface <> nil then
         Exit;   { cached path taken — done.  Otherwise fall through to source. }
@@ -397,17 +413,33 @@ begin
       'Unit ''%s'' not found in search paths', [AName]));
 
   FLoading.Add(AName);
+  FIfaceChain.Add(AName);
   U := nil;
   try
     U := LoadOne(Path);
-    { Post-order DFS: process dependencies before this unit.
-      Both interface- and implementation-section uses are loaded —
-      they are stored on separate lists since the parser was
-      taught to split them, but the loader still needs both. }
+    { Post-order DFS: process dependencies before this unit.  Both interface-
+      and implementation-section uses are loaded — the parser splits them into
+      separate lists.
+
+      Interface-section uses extend the interface chain, so a loop among them
+      is reported as a circular dependency.  Implementation-section uses are
+      traversed with a FRESH interface chain: Pascal permits a unit's
+      implementation to use a unit whose interface (transitively) uses it
+      back, and that is not a real cycle (interfaces compile first, bodies
+      after).  A back-edge into a unit still on the load stack is then
+      tolerated by the guard at the top of this routine. }
     for I := 0 to U.UsedUnits.Count - 1 do
       LoadTransitive(U.UsedUnits.Strings[I]);
-    for I := 0 to U.ImplUsedUnits.Count - 1 do
-      LoadTransitive(U.ImplUsedUnits.Strings[I]);
+    SavedChain  := FIfaceChain;
+    FIfaceChain := TStringList.Create();
+    FIfaceChain.CaseSensitive := False;
+    try
+      for I := 0 to U.ImplUsedUnits.Count - 1 do
+        LoadTransitive(U.ImplUsedUnits.Strings[I]);
+    finally
+      FIfaceChain.Free();
+      FIfaceChain := SavedChain;
+    end;
     { Append this unit after all its dependencies }
     FResult.Add(U);
     FLoadedNames.Add(AName);
@@ -420,6 +452,7 @@ begin
   finally
     U.Free();  { no-op if U = nil (success path) or on error }
     FLoading.Delete(FLoading.IndexOf(AName));
+    FIfaceChain.Delete(FIfaceChain.IndexOf(AName));
   end;
 end;
 
@@ -431,6 +464,8 @@ begin
   FDefines     := ADefines;
   FLoading     := TStringList.Create();
   FLoading.CaseSensitive := False;
+  FIfaceChain  := TStringList.Create();
+  FIfaceChain.CaseSensitive := False;
   FLoadedNames := TStringList.Create();
   FLoadedNames.CaseSensitive := False;
   FSourceLoadedNames := TStringList.Create();
@@ -452,6 +487,7 @@ begin
   FPrebuiltIfaces.Free();
   FSourceLoadedNames.Free();
   FLoadedNames.Free();
+  FIfaceChain.Free();
   FLoading.Free();
   inherited Destroy();
 end;
