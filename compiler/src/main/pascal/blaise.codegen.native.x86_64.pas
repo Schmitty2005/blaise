@@ -354,7 +354,8 @@ type
     { Native label for a class's implementation of an interface method,
       resolved via the vtable (inherited + overridden both work). }
     function ItabMethodRefNative(AClassRT: TRecordTypeDesc;
-      ATD: TTypeDecl; const AMethName: string): string;
+      ATD: TTypeDecl; const AMethName: string;
+      ATypeDecls: TObjectList): string;
     { Load an integer-family value from AOperand into %rax, extended to 64
       bits per AType (sign/zero-extend by width and signedness). }
     procedure EmitLoadVar(const AOperand: string; AType: TTypeDesc);
@@ -2640,10 +2641,16 @@ end;
   the ImplName may carry a leading '$' (QBE convention) which is stripped, then
   NativeMangle is applied.  Falls back to the declaring-class method name. }
 function TX86_64Backend.ItabMethodRefNative(AClassRT: TRecordTypeDesc;
-  ATD: TTypeDecl; const AMethName: string): string;
+  ATD: TTypeDecl; const AMethName: string;
+  ATypeDecls: TObjectList): string;
 var
-  Slot: Integer;
-  E:    TVTableEntry;
+  Slot:    Integer;
+  E:       TVTableEntry;
+  CurTD:   TTypeDecl;
+  CD:      TClassTypeDef;
+  MD:      TMethodDecl;
+  I:       Integer;
+  CurName: string;
 begin
   if AClassRT <> nil then
   begin
@@ -2659,6 +2666,28 @@ begin
           Exit(NativeMangle(E.ImplName));
       end;
     end;
+  end;
+  { No vtable slot — a non-virtual interface method.  Walk the AST class chain
+    (self, then ParentName ancestors) to the nearest class that DECLARES the
+    method and name $<declaringclass>_<method>; naming $<thisclass>_<method> for
+    an inherited method links to a symbol that does not exist (issue #130 bug3). }
+  CurTD := ATD;
+  while CurTD <> nil do
+  begin
+    if not (CurTD.Def is TClassTypeDef) then break;
+    CD := TClassTypeDef(CurTD.Def);
+    MD := FindMethodInClassDef(CD, AMethName);
+    if MD <> nil then
+      Exit(MethodEmitNameNative(MD, CurTD.Name, AMethName));
+    CurName := CD.ParentName;
+    CurTD   := nil;
+    if (CurName <> '') and (ATypeDecls <> nil) then
+      for I := 0 to ATypeDecls.Count - 1 do
+        if SameText(TTypeDecl(ATypeDecls.Items[I]).Name, CurName) then
+        begin
+          CurTD := TTypeDecl(ATypeDecls.Items[I]);
+          break;
+        end;
   end;
   Result := MethodEmitNameNative(
               FindMethodInClassDef(TClassTypeDef(ATD.Def), AMethName),
@@ -2770,7 +2799,7 @@ begin
             { Resolve via the vtable so an inherited (non-overridden) method
               points at the ancestor's body and an override at the descendant's
               (issue #130 bug3). }
-            MethRef := Self.ItabMethodRefNative(ClassRT, TD, MethName);
+            MethRef := Self.ItabMethodRefNative(ClassRT, TD, MethName, ATypeDecls);
           Self.Emit(#9'.quad ' + MethRef);
         end;
       end;

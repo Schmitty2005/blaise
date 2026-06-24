@@ -190,6 +190,14 @@ type
       resolved via the vtable so inherited/overridden methods both work. }
     function  ItabMethodRef(AClassRT: TRecordTypeDesc;
       const AClassName, AMethName: string): string;
+    { Walk AClassName's AST class chain (self, then ParentName ancestors) and
+      return the name of the nearest class that DECLARES AMethName.  Used to
+      resolve the itab symbol for a non-virtual interface method inherited from
+      an ancestor: such a method has no vtable slot, so ItabMethodRef cannot
+      find it via the vtable and would otherwise name $<thisclass>_<method>,
+      which does not exist for an inherited method (issue #130 bug3). }
+    function  ItabImplClassName(AProg: TProgram;
+      const AClassName, AMethName: string): string;
     function  IsAbstractClassMethod(ARec: TRecordTypeDesc;
                                     const AMethName: string): Boolean;
     procedure EmitFieldCleanupDefs(AProg: TProgram);
@@ -7668,6 +7676,39 @@ begin
   Result := '$' + ClassSymName(AClassName) + '_' + AMethName;
 end;
 
+function TCodeGenQBE.ItabImplClassName(AProg: TProgram;
+  const AClassName, AMethName: string): string;
+var
+  CurName: string;
+  I:       Integer;
+  TD:      TTypeDecl;
+  CD:      TClassTypeDef;
+  Found:   Boolean;
+begin
+  { Walk the class chain by name.  Return the nearest class (self first) that
+    declares AMethName; fall back to AClassName if not found anywhere. }
+  Result  := AClassName;
+  CurName := AClassName;
+  while CurName <> '' do
+  begin
+    CD := nil;
+    for I := 0 to AProg.Block.TypeDecls.Count - 1 do
+    begin
+      TD := TTypeDecl(AProg.Block.TypeDecls.Items[I]);
+      if SameText(TD.Name, CurName) and (TD.Def is TClassTypeDef) then
+      begin
+        CD := TClassTypeDef(TD.Def);
+        break;
+      end;
+    end;
+    if CD = nil then Exit;   { ancestor not in this compilation unit's decls }
+    Found := Self.FindMethodInClassDef(CD, AMethName) <> nil;
+    if Found then
+      Exit(CurName);
+    CurName := CD.ParentName;
+  end;
+end;
+
 procedure TCodeGenQBE.EmitInterfaceDefs(AProg: TProgram);
 { Emit typeinfo blocks for interfaces and itab/impllist blocks for class-interface pairs.
   Interface typeinfo: data $typeinfo_IFoo = ( l 0 )  -- address IS the identity token
@@ -7772,8 +7813,11 @@ begin
               overrides ($TLoud_Greet for an override, $TPerson_Greet for a
               method inherited unchanged), so use it rather than blindly naming
               $<thisclass>_<method> which would not exist for inherited methods
-              (issue #130 bug3). }
-            MethRef := ItabMethodRef(ClassRT, TD.Name, MethName);
+              (issue #130 bug3).  A non-virtual interface method has no vtable
+              slot, so resolve its declaring class by name-walking the AST chain
+              and name $<declaringclass>_<method>. }
+            MethRef := ItabMethodRef(ClassRT,
+              ItabImplClassName(AProg, TD.Name, MethName), MethName);
           if K = 0 then
             ItabLine := ItabLine + ' l ' + MethRef
           else

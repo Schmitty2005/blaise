@@ -48,6 +48,7 @@ type
       (issue #130 bug3). }
     procedure TestRun_InheritedInterface_DescendantToVar;
     procedure TestRun_InheritedInterface_OverrideAndInheritedMethod;
+    procedure TestRun_InheritedInterface_NonVirtualMethod;
   end;
 
 implementation
@@ -372,6 +373,37 @@ begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src,
     'hi / person' + LE + 'HI / person' + LE + 'HI!!! / person' + LE, 0);
+end;
+
+procedure TE2EInterfaceTests.TestRun_InheritedInterface_NonVirtualMethod;
+const
+  { Regression (issue #130 bug3): a NON-virtual interface method inherited by a
+    descendant.  A non-virtual method gets no vtable slot, so the itab method ref
+    cannot be resolved via the vtable; the descendant's itab used to name
+    $TDerived_Hello (which does not exist) instead of the declaring ancestor's
+    $TBase_Hello, causing an "undefined symbol"/link error.  The earlier
+    inherited-interface tests only exercised VIRTUAL methods, which DO have
+    vtable slots, so this path went uncovered.  Both backends must now link+run. }
+  Src = '''
+    program P;
+    type
+      IBase = interface procedure Hello; end;
+      TBase = class(IBase) procedure Hello; end;
+      TDerived = class(TBase) end;
+    procedure TBase.Hello; begin WriteLn('hello') end;
+    procedure Use(g: IBase); begin g.Hello() end;
+    var d: TDerived; i: IBase;
+    begin
+      d := TDerived.Create;
+      i := d;        // assignment to interface
+      i.Hello();
+      Use(d);        // parameter passing
+      d.Free
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, 'hello' + LE + 'hello' + LE, 0);
 end;
 
 initialization
