@@ -124,6 +124,15 @@ type
       already fixed; this covers the free-function path.  Both backends. }
     procedure TestRun_InterfaceArg_FreeFunc_SretReturn;
     procedure TestRun_InterfaceArg_FreeFunc_IntThenInterface;
+    { Regression: an override that returns a record with a managed (string)
+      field by value, sourced from `inherited`.  The inherited call path
+      dropped the hidden sret pointer and passed Self into the sret slot, so
+      the base wrote its managed field over the Self object and _StringRelease
+      ran on garbage → heap corruption / segfault.  Both backends.  Covers the
+      assignment form (Result := inherited M()) and the implicit-Result
+      statement form (inherited M;). }
+    procedure TestRun_InheritedRecordReturn_ManagedField;
+    procedure TestRun_InheritedRecordReturn_StatementForm;
   end;
 
 implementation
@@ -981,6 +990,80 @@ const
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(Src, '12' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_InheritedRecordReturn_ManagedField;
+const
+  Src = '''
+    program P;
+    type
+      TTok = record Kind: Integer; Value: string; Line: Integer; end;
+      TBase = class
+        function Next(N: Integer): TTok; virtual;
+      end;
+      TDeriv = class(TBase)
+        function Next(N: Integer): TTok; override;
+      end;
+    function TBase.Next(N: Integer): TTok;
+    begin
+      Result.Kind := N;
+      Result.Value := 'hello-world';
+      Result.Line := 99
+    end;
+    function TDeriv.Next(N: Integer): TTok;
+    begin
+      Result := inherited Next(N)
+    end;
+    var D: TDeriv; T: TTok;
+    begin
+      D := TDeriv.Create();
+      T := D.Next(7);
+      WriteLn(T.Kind);
+      WriteLn(T.Value);
+      WriteLn(T.Line);
+      D.Free()
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(Src, '7' + LE + 'hello-world' + LE + '99' + LE, 0);
+end;
+
+procedure TE2ERecordReturnTests.TestRun_InheritedRecordReturn_StatementForm;
+const
+  Src = '''
+    program P;
+    type
+      TTok = record Kind: Integer; Value: string; end;
+      TBase = class
+        function Make(N: Integer): TTok; virtual;
+      end;
+      TDeriv = class(TBase)
+        function Make(N: Integer): TTok; override;
+      end;
+    function TBase.Make(N: Integer): TTok;
+    begin
+      Result.Kind := N + 100;
+      Result.Value := 'base'
+    end;
+    function TDeriv.Make(N: Integer): TTok;
+    begin
+      inherited Make(N)
+    end;
+    var D: TDeriv; T: TTok;
+    begin
+      D := TDeriv.Create();
+      T := D.Make(5);
+      WriteLn(T.Kind);
+      WriteLn(T.Value);
+      D.Free()
+    end.
+    ''';
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  { `inherited Make(N);` with no explicit assignment sets the override's
+    Result through the sret pointer. }
+  AssertRunsOnAll(Src, '105' + LE + 'base' + LE, 0);
 end;
 
 initialization

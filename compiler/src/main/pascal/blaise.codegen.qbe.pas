@@ -324,6 +324,12 @@ type
       AArgTemps: TStringList; AParams: TObjectList);
     procedure EmitInheritedCall(ACall: TInheritedCallStmt);
     function  EmitInheritedCallExpr(ACall: TInheritedCallExpr): string;
+    { Marshal an inherited call's visible arguments into a QBE arg list,
+      "l <Self>, <arg>, ...".  Emits the Self load and each argument
+      evaluation; shared by the statement, expression, and record-sret
+      inherited paths so the marshalling lives in one place. }
+    function  InheritedArgLine(AMDecl: TMethodDecl;
+                               AArgs: TObjectList): string;
     procedure EmitCaseStmt(AStmt: TCaseStmt);
     procedure EmitProcCall(ACall: TProcCall);
     { Dispatch a call through a procedural-typed field of the current class
@@ -3803,7 +3809,9 @@ begin
   if AExpr is TFuncCallExpr then
     Result := TFuncCallExpr(AExpr).ResolvedDecl <> nil
   else if AExpr is TMethodCallExpr then
-    Result := not TMethodCallExpr(AExpr).IsConstructorCall;
+    Result := not TMethodCallExpr(AExpr).IsConstructorCall
+  else if AExpr is TInheritedCallExpr then
+    Result := TInheritedCallExpr(AExpr).ResolvedMethod <> nil;
 end;
 
 procedure TCodeGenQBE.EmitOwnedArgReleases(AArgs: TObjectList;
@@ -4988,6 +4996,16 @@ begin
     MDecl := TMethodDecl(FldA.ResolvedMethod);
     Result := (MDecl.ResolvedReturnType <> nil) and
               (MDecl.ResolvedReturnType.Kind in [tyRecord, tyStaticArray]);
+  end
+  else if AExpr is TInheritedCallExpr then
+  begin
+    { `Result := inherited M()` where M returns a record: route through the
+      sret path so the callee writes straight into the destination slot
+      (no intermediate temp, no double AddRef). }
+    if TInheritedCallExpr(AExpr).ResolvedMethod = nil then Exit;
+    MDecl := TMethodDecl(TInheritedCallExpr(AExpr).ResolvedMethod);
+    Result := (MDecl.ResolvedReturnType <> nil) and
+              (MDecl.ResolvedReturnType.Kind in [tyRecord, tyStaticArray]);
   end;
 end;
 
@@ -5822,6 +5840,19 @@ begin
     end;
     FuncName := SretMethodCallTarget(MDecl, SelfTemp, FldAccess.FieldName);
     VisArgs  := Format('l %s', [SelfTemp]);
+    EmitRecordReturnCallSite(FuncName, VisArgs, RetType, ASretAddr);
+    FlushPendingReleases(PMark);
+  end
+  else if AExpr is TInheritedCallExpr then
+  begin
+    { `Result := inherited M()` returning a record: static dispatch to the
+      parent's symbol, marshal Self + args, and let the callee write straight
+      into ASretAddr (the assignment's destination slot — no temp, no copy). }
+    MDecl    := TMethodDecl(TInheritedCallExpr(AExpr).ResolvedMethod);
+    RetType  := TRecordTypeDesc(MDecl.ResolvedReturnType);
+    VisArgs  := InheritedArgLine(MDecl, TInheritedCallExpr(AExpr).Args);
+    FuncName := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName,
+                  TInheritedCallExpr(AExpr).Name);
     EmitRecordReturnCallSite(FuncName, VisArgs, RetType, ASretAddr);
     FlushPendingReleases(PMark);
   end;
@@ -7011,135 +7042,143 @@ begin
   end;
 end;
 
-procedure TCodeGenQBE.EmitInheritedCall(ACall: TInheritedCallStmt);
+function TCodeGenQBE.InheritedArgLine(AMDecl: TMethodDecl;
+  AArgs: TObjectList): string;
 var
-  MDecl:    TMethodDecl;
   SelfTemp: string;
-  ArgLine:  string;
   ArgTemp:  string;
   ArgTemp2: string;
   Par:      TMethodParam;
   QType:    string;
   I:        Integer;
-  PMark:    Integer;
 begin
-  { TObject inherited calls are no-ops — no method body exists }
-  if ACall.ResolvedMethod = nil then Exit;
-
-  PMark := PendingReleaseMark();
-  MDecl := TMethodDecl(ACall.ResolvedMethod);
-
-  { Load Self from the current method's local slot }
+  { Load Self from the current method's local slot, then marshal each explicit
+    argument exactly as a normal call does: var/out by address, an interface
+    param as a fat pointer (or class + itab), scalars coerced to the param
+    type.  Returns the QBE arg list "l <Self>, <arg>, ...". }
   SelfTemp := AllocTemp();
   EmitLine(Format('  %s =l loadl %%_var_Self', [SelfTemp]));
-
-  { Build arg string: l Self, then each explicit arg }
-  ArgLine := Format('l %s', [SelfTemp]);
-  for I := 0 to ACall.Args.Count - 1 do
+  Result := Format('l %s', [SelfTemp]);
+  for I := 0 to AArgs.Count - 1 do
   begin
-    Par     := TMethodParam(MDecl.Params.Items[I]);
+    Par := TMethodParam(AMDecl.Params.Items[I]);
     if Par.IsVarParam then
     begin
-      { var/out param: pass the argument's address, not its value. }
-      ArgLine := ArgLine + Format(', l %s',
-        [EmitLValueAddr(TASTExpr(ACall.Args.Items[I]))]);
+      Result := Result + Format(', l %s',
+        [EmitLValueAddr(TASTExpr(AArgs.Items[I]))]);
       Continue;
     end;
     if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface) then
     begin
-      if TASTExpr(ACall.Args.Items[I]).ResolvedType.Kind = tyClass then
+      if TASTExpr(AArgs.Items[I]).ResolvedType.Kind = tyClass then
       begin
-        ArgTemp  := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+        ArgTemp  := EmitExpr(TASTExpr(AArgs.Items[I]));
         ArgTemp2 := '$itab_' +
-          ClassSymName(QBEMangle(TASTExpr(ACall.Args.Items[I]).ResolvedType.Name))
+          ClassSymName(QBEMangle(TASTExpr(AArgs.Items[I]).ResolvedType.Name))
           + '_' + QBEMangle(Par.ResolvedType.Name);
-        ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
+        Result := Result + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
       end
       else
-        ArgLine := ArgLine + InterfaceArgFragment(TASTExpr(ACall.Args.Items[I]));
+        Result := Result + InterfaceArgFragment(TASTExpr(AArgs.Items[I]));
       Continue;
     end;
-    ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
+    ArgTemp := EmitExpr(TASTExpr(AArgs.Items[I]));
     QType   := QbeTypeOf(Par.ResolvedType);
-    ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
-    ArgLine := ArgLine + Format(', %s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
+    ArgTemp := CoerceArg(ArgTemp, TASTExpr(AArgs.Items[I]), QType);
+    Result  := Result + Format(', %s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
   end;
+end;
 
-  { Always a direct (static) call — inherited bypasses vtable dispatch.
-    If the parent method returns a value, store it into %_var_Result so that
-    "inherited F;" as a statement sets Result in the overriding function. }
-  if (MDecl.ResolvedReturnType <> nil) and
-     (MDecl.ResolvedReturnType.Kind <> tyVoid) then
+procedure TCodeGenQBE.EmitInheritedCall(ACall: TInheritedCallStmt);
+var
+  MDecl:   TMethodDecl;
+  ArgLine: string;
+  ArgTemp: string;
+  QType:   string;
+  PMark:   Integer;
+  RetType: TTypeDesc;
+  FuncSym: string;
+begin
+  { TObject inherited calls are no-ops — no method body exists }
+  if ACall.ResolvedMethod = nil then Exit;
+
+  PMark   := PendingReleaseMark();
+  MDecl   := TMethodDecl(ACall.ResolvedMethod);
+  ArgLine := InheritedArgLine(MDecl, ACall.Args);
+  RetType := MDecl.ResolvedReturnType;
+  FuncSym := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name);
+
+  { A record / static-array return uses the sret ABI: the callee writes the
+    result through a hidden first pointer argument.  The statement form sets
+    Result, so the destination is the function's own Result slot.  Without
+    this, the scalar path below would pass Self into the hidden sret slot and
+    corrupt the heap (the base would write its managed fields over Self). }
+  if (RetType <> nil) and (RetType.Kind = tyRecord) then
   begin
-    QType   := QbeTypeOf(MDecl.ResolvedReturnType);
+    EmitRecordReleaseFields(TRecordTypeDesc(RetType), '%_var_Result');
+    EmitLine(Format('  call $memset(l %%_var_Result, w 0, l %d)',
+      [RetType.ByteSize()]));
+    EmitRecordReturnCallSite(FuncSym, ArgLine,
+      TRecordTypeDesc(RetType), '%_var_Result');
+  end
+  else if (RetType <> nil) and (RetType.Kind = tyStaticArray) then
+    EmitRecordReturnCallSite(FuncSym, ArgLine,
+      TRecordTypeDesc(RetType), '%_var_Result')
+  { Always a direct (static) call — inherited bypasses vtable dispatch.
+    Store a scalar parent return into %_var_Result so "inherited F;" as a
+    statement sets Result in the overriding function. }
+  else if (RetType <> nil) and (RetType.Kind <> tyVoid) then
+  begin
+    QType   := QbeTypeOf(RetType);
     ArgTemp := AllocTemp();
-    EmitLine(Format('  %s =%s call $%s(%s)',
-      [ArgTemp, QType, MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
+    EmitLine(Format('  %s =%s call %s(%s)',
+      [ArgTemp, QType, FuncSym, ArgLine]));
     if QType = 'w' then
       EmitLine(Format('  storew %s, %%_var_Result', [ArgTemp]))
     else
       EmitLine(Format('  storel %s, %%_var_Result', [ArgTemp]));
   end
   else
-    EmitLine(Format('  call $%s(%s)',
-      [MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
+    EmitLine(Format('  call %s(%s)', [FuncSym, ArgLine]));
   FlushPendingReleases(PMark);
 end;
 
 function TCodeGenQBE.EmitInheritedCallExpr(ACall: TInheritedCallExpr): string;
 var
-  MDecl:    TMethodDecl;
-  SelfTemp: string;
-  ArgLine:  string;
-  ArgTemp:  string;
-  ArgTemp2: string;
-  Par:      TMethodParam;
-  QType:    string;
-  I:        Integer;
+  MDecl:   TMethodDecl;
+  ArgLine: string;
+  QType:   string;
+  RetType: TTypeDesc;
+  FuncSym: string;
 begin
   { Expression form of `inherited Method(args)` — semantic guarantees a
     non-void function.  Same static-dispatch arg marshalling as
     EmitInheritedCall, but the call result is RETURNED (not stored to
     %_var_Result). }
-  MDecl := TMethodDecl(ACall.ResolvedMethod);
+  MDecl   := TMethodDecl(ACall.ResolvedMethod);
+  ArgLine := InheritedArgLine(MDecl, ACall.Args);
+  RetType := MDecl.ResolvedReturnType;
+  FuncSym := '$' + MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name);
 
-  SelfTemp := AllocTemp();
-  EmitLine(Format('  %s =l loadl %%_var_Self', [SelfTemp]));
-
-  ArgLine := Format('l %s', [SelfTemp]);
-  for I := 0 to ACall.Args.Count - 1 do
+  { Record / static-array return: emit through the sret ABI into a fresh
+    zeroed stack temporary and return its address.  A record-typed assignment
+    RHS is intercepted earlier via IsRecordCall (direct sret into the
+    destination), so this path serves an inherited record return used directly
+    as a sub-expression; IsRecordSretTempExpr marks the temporary so the
+    consuming context releases its managed fields. }
+  if (RetType <> nil) and (RetType.Kind in [tyRecord, tyStaticArray]) then
   begin
-    Par := TMethodParam(MDecl.Params.Items[I]);
-    if Par.IsVarParam then
-    begin
-      ArgLine := ArgLine + Format(', l %s',
-        [EmitLValueAddr(TASTExpr(ACall.Args.Items[I]))]);
-      Continue;
-    end;
-    if (Par.ResolvedType <> nil) and (Par.ResolvedType.Kind = tyInterface) then
-    begin
-      if TASTExpr(ACall.Args.Items[I]).ResolvedType.Kind = tyClass then
-      begin
-        ArgTemp  := EmitExpr(TASTExpr(ACall.Args.Items[I]));
-        ArgTemp2 := '$itab_' +
-          ClassSymName(QBEMangle(TASTExpr(ACall.Args.Items[I]).ResolvedType.Name))
-          + '_' + QBEMangle(Par.ResolvedType.Name);
-        ArgLine := ArgLine + Format(', l %s, l %s', [ArgTemp, ArgTemp2]);
-      end
-      else
-        ArgLine := ArgLine + InterfaceArgFragment(TASTExpr(ACall.Args.Items[I]));
-      Continue;
-    end;
-    ArgTemp := EmitExpr(TASTExpr(ACall.Args.Items[I]));
-    QType   := QbeTypeOf(Par.ResolvedType);
-    ArgTemp := CoerceArg(ArgTemp, TASTExpr(ACall.Args.Items[I]), QType);
-    ArgLine := ArgLine + Format(', %s %s', [QbeParamTypeOf(Par.ResolvedType), ArgTemp]);
+    Result := AllocTemp();
+    EmitLine(Format('  %s =l alloc8 %d', [Result, RetType.ByteSize()]));
+    EmitLine(Format('  call $memset(l %s, w 0, l %d)',
+      [Result, RetType.ByteSize()]));
+    EmitRecordReturnCallSite(FuncSym, ArgLine, TRecordTypeDesc(RetType), Result);
+    Exit;
   end;
 
-  QType  := QbeTypeOf(MDecl.ResolvedReturnType);
+  QType  := QbeTypeOf(RetType);
   Result := AllocTemp();
-  EmitLine(Format('  %s =%s call $%s(%s)',
-    [Result, QType, MethodEmitName(MDecl, MDecl.OwnerTypeName, ACall.Name), ArgLine]));
+  EmitLine(Format('  %s =%s call %s(%s)', [Result, QType, FuncSym, ArgLine]));
 end;
 
 procedure TCodeGenQBE.EmitParamAllocs(AMethod: TMethodDecl;

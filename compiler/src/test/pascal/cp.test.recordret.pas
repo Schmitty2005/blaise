@@ -80,6 +80,9 @@ type
       that is then memcpy'd into the destination, so the callee sees an intact
       Self while constructing Result. }
     procedure TestCodegen_SelfAssignRecordMethod_RoutesThroughTemp;
+    { `Result := inherited M()` returning an sret record threads the sret
+      pointer (the Result slot) + Self and dispatches statically to the parent. }
+    procedure TestCodegen_InheritedRecordReturn_ThreadsSret;
   end;
 
 implementation
@@ -809,6 +812,32 @@ begin
     Pos('call $TR_Up(l $A,', IR) <> -1);
   { The constructed result is then moved into the destination. }
   AssertContains('call $memcpy(l $A,', IR);
+end;
+
+procedure TRecordReturnTests.TestCodegen_InheritedRecordReturn_ThreadsSret;
+var IR: string;
+begin
+  { `Result := inherited Next()` returning an sret record must thread the
+    hidden destination pointer (the override's own Result slot) as the FIRST
+    argument and Self as the second, dispatched STATICALLY to the parent's
+    symbol — never the scalar `=l call` shape that passes Self into the sret
+    slot. }
+  IR := GenIR(
+    '''
+        program P;
+        type
+          TTok = record Kind: Integer; Value: string; end;
+          TBase = class function Next: TTok; virtual; end;
+          TDeriv = class(TBase) function Next: TTok; override; end;
+        function TBase.Next: TTok;
+        begin Result.Kind := 7; Result.Value := 'x' end;
+        function TDeriv.Next: TTok;
+        begin Result := inherited Next() end;
+        begin
+        end.
+        ''');
+  { sret pointer (Result slot) first, Self second, static call to the parent. }
+  AssertContains('call $TBase_Next(l %_var_Result, l', IR);
 end;
 
 initialization

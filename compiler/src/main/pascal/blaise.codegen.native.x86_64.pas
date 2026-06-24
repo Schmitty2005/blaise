@@ -450,7 +450,15 @@ type
     procedure EmitFuncCallSret(AFC: TFuncCallExpr; const ADest: string;
       AIndirect: Boolean);
     procedure EmitMethodSretCall(ACall: TMethodCallExpr; const ASretAddr: string;
-                                 ASretIsIndirect: Boolean);
+                                 ASretIsIndirect: Boolean;
+                                 AForceStatic: Boolean = False);
+    { Sret an inherited record return into ADest: an implicit-Self call
+      dispatched statically to the parent's symbol.  Reuses EmitMethodSretCall
+      via a transient implicit-Self method node so the sret pointer is threaded
+      the same way as any other record-returning call. }
+    procedure EmitInheritedRecordSret(MD: TMethodDecl; AArgs: TObjectList;
+                                      const AName, ADest: string;
+                                      ADestIsIndirect: Boolean);
     { Free a record-call-receiver buffer materialised by EmitMethodSretCall. }
     procedure EmitMethodSretRecvCleanup(ABytes: Integer);
     { Emit the base ADDRESS of a NAMED LOCAL record into AReg (e.g.
@@ -4431,6 +4439,11 @@ begin
      (TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl).ResolvedReturnType <> nil) and
      (TMethodDecl(TFuncCallExpr(AExpr).ResolvedDecl).ResolvedReturnType.Kind = tyRecord) then
     Exit(True);
+  if (AExpr is TInheritedCallExpr) and
+     (TInheritedCallExpr(AExpr).ResolvedMethod <> nil) and
+     (TMethodDecl(TInheritedCallExpr(AExpr).ResolvedMethod).ResolvedReturnType <> nil) and
+     (TMethodDecl(TInheritedCallExpr(AExpr).ResolvedMethod).ResolvedReturnType.Kind = tyRecord) then
+    Exit(True);
 end;
 
 function TX86_64Backend.RecordCallReceiverIsVar(AExpr: TASTExpr;
@@ -4484,6 +4497,11 @@ procedure TX86_64Backend.EmitRecordCallSretAt(AExpr: TASTExpr; const ADest: stri
 begin
   if AExpr is TMethodCallExpr then
     Self.EmitMethodSretCall(TMethodCallExpr(AExpr), ADest, False)
+  else if AExpr is TInheritedCallExpr then
+    Self.EmitInheritedRecordSret(
+      TMethodDecl(TInheritedCallExpr(AExpr).ResolvedMethod),
+      TInheritedCallExpr(AExpr).Args,
+      TInheritedCallExpr(AExpr).Name, ADest, False)
   else
     Self.EmitFuncCallSret(TFuncCallExpr(AExpr), ADest, False);
 end;
@@ -9382,6 +9400,21 @@ begin
   { `inherited` on TObject (no parent body) is a no-op. }
   MD := TMethodDecl(ACall.ResolvedMethod);
   if MD = nil then Exit;
+
+  { A record-returning parent uses the sret ABI, not a %rax value: route it
+    through the sret path writing straight into the current Result slot (the
+    statement form sets Result).  For an sret function that slot holds the
+    buffer ADDRESS (indirect); for a register-returned record it is the buffer
+    itself.  Without this the scalar store below would treat %rax as the record
+    and corrupt the heap. }
+  if (MD.ResolvedReturnType <> nil) and
+     (MD.ResolvedReturnType.Kind = tyRecord) then
+  begin
+    Self.EmitInheritedRecordSret(MD, ACall.Args, ACall.Name,
+      Self.VarOperand('Result'), Self.FSretFunc);
+    Exit;
+  end;
+
   Self.EmitInheritedCallSeq(MD, ACall.Args, ACall.Name);
 
   { A value-returning parent stores its result into the current Result slot,
@@ -10933,6 +10966,41 @@ begin
       begin
         Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
         Self.EmitMethodSretCall(TMethodCallExpr(Asgn.Expr),
+          Asgn.Name + '(%rip)', False);
+      end;
+      Exit;
+    end;
+    { sret assignment: `<rec> := inherited M(...)` — static dispatch to the
+      parent, same destination selection as the method/func branches above. }
+    if (Asgn.ResolvedLhsType <> nil) and
+       (Asgn.ResolvedLhsType.Kind in [tyRecord, tyStaticArray]) and
+       (Asgn.Expr is TInheritedCallExpr) and
+       (TInheritedCallExpr(Asgn.Expr).ResolvedMethod <> nil) and
+       (TMethodDecl(TInheritedCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType <> nil) and
+       (TMethodDecl(TInheritedCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType.Kind in
+          [tyRecord, tyStaticArray]) then
+    begin
+      if FSretFunc and SameText(Asgn.Name, 'Result') then
+        Self.EmitInheritedRecordSret(
+          TMethodDecl(TInheritedCallExpr(Asgn.Expr).ResolvedMethod),
+          TInheritedCallExpr(Asgn.Expr).Args, TInheritedCallExpr(Asgn.Expr).Name,
+          Self.VarOperand('Result'), True)
+      else if Asgn.IsVarParam then
+        Self.EmitInheritedRecordSret(
+          TMethodDecl(TInheritedCallExpr(Asgn.Expr).ResolvedMethod),
+          TInheritedCallExpr(Asgn.Expr).Args, TInheritedCallExpr(Asgn.Expr).Name,
+          Self.VarOperand(Asgn.Name), True)
+      else if Self.IsLocal(Asgn.Name) then
+        Self.EmitInheritedRecordSret(
+          TMethodDecl(TInheritedCallExpr(Asgn.Expr).ResolvedMethod),
+          TInheritedCallExpr(Asgn.Expr).Args, TInheritedCallExpr(Asgn.Expr).Name,
+          Self.VarOperand(Asgn.Name), False)
+      else
+      begin
+        Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
+        Self.EmitInheritedRecordSret(
+          TMethodDecl(TInheritedCallExpr(Asgn.Expr).ResolvedMethod),
+          TInheritedCallExpr(Asgn.Expr).Args, TInheritedCallExpr(Asgn.Expr).Name,
           Asgn.Name + '(%rip)', False);
       end;
       Exit;
@@ -14959,7 +15027,8 @@ end;
   The destination buffer is at ASretAddr (AT&T operand, already allocated). }
 procedure TX86_64Backend.EmitMethodSretCall(ACall: TMethodCallExpr;
                                             const ASretAddr: string;
-                                            ASretIsIndirect: Boolean);
+                                            ASretIsIndirect: Boolean;
+                                            AForceStatic: Boolean);
 var
   I:        Integer;
   MD:       TMethodDecl;
@@ -15084,7 +15153,7 @@ begin
       Self occupies %rdi (slot index 0), so user slots start at index 1. }
     for I := Self.CountArgSlots(MD.Params) - 1 downto 0 do
       Self.Emit(#9'popq ' + SysVArg64(I + 1));
-    if MD.VTableSlot >= 0 then
+    if (MD.VTableSlot >= 0) and not AForceStatic then
     begin
       Self.Emit(#9'movq (%rdi), %rax');
       Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
@@ -15239,7 +15308,7 @@ begin
     end;
     Self.Emit(Format(#9'movb $%d, %%al', [XmmIdx]));
     Self.Emit(Format(#9'addq $%d, %%rsp', [(ACall.Args.Count + 2) * 8]));
-    if MD.VTableSlot >= 0 then
+    if (MD.VTableSlot >= 0) and not AForceStatic then
     begin
       Self.Emit(#9'movq (%rsi), %rax');
       Self.Emit(Format(#9'movq %d(%%rax), %%rax', [(MD.VTableSlot + 1) * 8]));
@@ -15311,7 +15380,7 @@ begin
     Self.EmitPopMethodArgsToRegs(MD.Params, ACall.Args, 2);
     { The saved dest sits just below the call frame's hoist region. }
     Self.Emit(Format(#9'movq %d(%%rsp), %%rdi', [Self.TopFrameTotal()]));
-    if MD.VTableSlot >= 0 then
+    if (MD.VTableSlot >= 0) and not AForceStatic then
     begin
       Self.Emit(#9'pushq %rdi');
       Self.Emit(#9'movq (%rsi), %rax');
@@ -15369,6 +15438,29 @@ begin
   { Reclaim the saved dest slot. }
   Self.Emit(#9'addq $8, %rsp');
   Self.EmitMethodSretRecvCleanup(RecvBufBytes);
+end;
+
+{ Sret an inherited record return: build a transient implicit-Self method node
+  carrying the parent method + the inherited call's args and emit it
+  force-static, so EmitMethodSretCall threads the sret pointer / register-return
+  capture the same way every other record-returning call does (instead of a
+  second copy of the sret sequence).  The Args list is borrowed and detached
+  before Free so the caller's node keeps ownership. }
+procedure TX86_64Backend.EmitInheritedRecordSret(MD: TMethodDecl;
+  AArgs: TObjectList; const AName, ADest: string; ADestIsIndirect: Boolean);
+var
+  Shim: TMethodCallExpr;
+begin
+  { An inherited call is an implicit-Self call (ObjectName = '' and ObjExpr =
+    nil, so EmitMethodSretCall loads the receiver from the current Self slot)
+    dispatched STATICALLY to the parent's method. }
+  Shim := TMethodCallExpr.Create();
+  Shim.ResolvedMethod := MD;
+  Shim.Name := AName;
+  Shim.Args := AArgs;
+  Self.EmitMethodSretCall(Shim, ADest, ADestIsIndirect, True);
+  Shim.Args := nil;
+  Shim.Free();
 end;
 
 { Emit a standalone function call that returns an interface via sret.
