@@ -315,6 +315,8 @@ type
     function  AnalyseExpr(AExpr: TASTExpr): TTypeDesc;
     function  AnalyseBinaryExpr(ABin: TBinaryExpr): TTypeDesc;
     function  AnalyseFieldAccess(AAccess: TFieldAccessExpr): TTypeDesc;
+    function  TryLowerDefaultPropertyIndex(AAccess: TFieldAccessExpr;
+      APropInfo: TPropertyInfo): TTypeDesc;
     function  AnalyseIsExpr(AExpr: TIsExpr): TTypeDesc;
     function  AnalyseAsExpr(AExpr: TAsExpr): TTypeDesc;
     function  AnalyseSupportsExpr(AExpr: TSupportsExpr): TTypeDesc;
@@ -10652,6 +10654,45 @@ begin
   AExpr.ResolvedType := Result;
 end;
 
+{ Default array property on a property-read result.  The parser folds the
+  trailing '[idx]' of 'Recv.Prop[idx]' into AAccess.PropIndexExpr, so when Prop
+  is a (non-indexed) property whose type has a `default` indexed property, the
+  read above would resolve Recv.Prop and drop the index.  Rewrite it as
+  '(Recv.Prop).Default[idx]': move the property read into a fresh inner
+  field-access (the getter, no index) and re-point AAccess at the default
+  property, then re-analyse — which lands on the chained indexed-property path.
+  Returns the resolved element type, or nil when no lowering applies (the
+  caller then handles Prop as before).  APropInfo is the already-resolved read
+  property. }
+function TSemanticAnalyser.TryLowerDefaultPropertyIndex(
+  AAccess: TFieldAccessExpr; APropInfo: TPropertyInfo): TTypeDesc;
+var
+  Inner:   TFieldAccessExpr;
+  DefProp: TPropertyInfo;
+begin
+  Result := nil;
+  if (APropInfo.IndexParamName <> '') or (AAccess.PropIndexExpr = nil) then
+    Exit;
+  if not (APropInfo.TypeDesc.Kind in [tyRecord, tyClass]) then
+    Exit;
+  DefProp := TRecordTypeDesc(APropInfo.TypeDesc).FindDefaultProperty();
+  if (DefProp = nil) or (DefProp.ReadMethod = '') then
+    Exit;
+  { Inner = the property getter without the index; carries the receiver. }
+  Inner := TFieldAccessExpr.Create();
+  Inner.Line       := AAccess.Line;
+  Inner.Col        := AAccess.Col;
+  Inner.Base       := AAccess.Base;        { transfer ownership (may be nil) }
+  Inner.RecordName := AAccess.RecordName;
+  Inner.FieldName  := AAccess.FieldName;
+  { Re-point AAccess at the default property on that getter result; the
+    PropIndexExpr ('[idx]') is left in place as its index. }
+  AAccess.Base       := Inner;
+  AAccess.RecordName := '';
+  AAccess.FieldName  := DefProp.Name;
+  Result := AnalyseFieldAccess(AAccess);
+end;
+
 function TSemanticAnalyser.AnalyseFieldAccess(AAccess: TFieldAccessExpr): TTypeDesc;
 var
   RecSym:   TSymbol;
@@ -10694,6 +10735,9 @@ begin
       PropInfo := RT.FindProperty(AAccess.FieldName);
       if (PropInfo <> nil) and (PropInfo.ReadField <> '') then
       begin
+        Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
+        if Result <> nil then
+          Exit;
         AAccess.FieldName := PropInfo.ReadField;
         AAccess.FieldInfo := RT.FindField(PropInfo.ReadField);
         Exit(PropInfo.TypeDesc);
@@ -10702,6 +10746,9 @@ begin
         '[idx]' to AAccess.PropIndexExpr when it parses 'Base.Prop[idx]'). }
       if (PropInfo <> nil) and (PropInfo.ReadMethod <> '') then
       begin
+        Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
+        if Result <> nil then
+          Exit;
         if PropInfo.IndexParamName <> '' then
         begin
           if AAccess.PropIndexExpr = nil then
@@ -10838,6 +10885,9 @@ begin
           begin
             if PropInfo.ReadField <> '' then
             begin
+              Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
+              if Result <> nil then
+                Exit;
               AAccess.FieldName := PropInfo.ReadField;
               AAccess.FieldInfo := RT.FindField(PropInfo.ReadField);
               Result := PropInfo.TypeDesc;
@@ -10847,6 +10897,9 @@ begin
             else if PropInfo.ReadMethod <> '' then
             begin
               { Method-backed read (includes indexed properties) }
+              Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
+              if Result <> nil then
+                Exit;
               if PropInfo.IndexParamName <> '' then
               begin
                 if AAccess.PropIndexExpr = nil then
@@ -11073,6 +11126,9 @@ begin
       if PropInfo.ReadField <> '' then
       begin
         { Field-backed read: redirect to the backing field }
+        Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
+        if Result <> nil then
+          Exit;
         AAccess.FieldName := PropInfo.ReadField;
         AAccess.FieldInfo := RT.FindField(PropInfo.ReadField);
         Result := PropInfo.TypeDesc;
@@ -11082,6 +11138,9 @@ begin
       else if PropInfo.ReadMethod <> '' then
       begin
         { Method-backed read (includes indexed properties) }
+        Result := TryLowerDefaultPropertyIndex(AAccess, PropInfo);
+        if Result <> nil then
+          Exit;
         if PropInfo.IndexParamName <> '' then
         begin
           if AAccess.PropIndexExpr = nil then

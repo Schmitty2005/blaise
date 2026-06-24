@@ -35,6 +35,10 @@ type
     procedure TestRun_DefaultProperty_ReadWrite;
     procedure TestRun_DefaultProperty_StringElement;
     procedure TestRun_DefaultProperty_Inherited;
+    { Default array property read through a property-read result:
+      Obj.Prop[I] where Prop returns a class carrying a default property. }
+    procedure TestRun_DefaultProperty_ViaFieldBackedProperty;
+    procedure TestRun_DefaultProperty_ViaMethodBackedProperty;
     { Static-array field accessed from inside a method (implicit Self). }
     procedure TestRun_StaticArrayField_ReadInMethod;
     procedure TestRun_StaticArrayField_WriteInMethod;
@@ -292,6 +296,79 @@ procedure TE2EPropertyTests.TestRun_DefaultProperty_Inherited;
 begin
   if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
   AssertRunsOnAll(SrcDefaultInherited, '12' + LE, 0);
+end;
+
+const
+  { Obj.Prop[I] where Prop is a field-backed property returning a class with a
+    default array property — reads through the property result. }
+  SrcDefaultViaFieldProp = '''
+    program P;
+    type
+      TVec = class
+        FData: array[0..4] of Integer;
+        function Get(i: Integer): Integer; begin Result := FData[i] end;
+        procedure Put(i: Integer; v: Integer); begin FData[i] := v end;
+        property Items[i: Integer]: Integer read Get write Put; default;
+      end;
+      TOwner = class
+        FVec: TVec;
+        constructor Create;
+        property Vec: TVec read FVec;
+      end;
+    constructor TOwner.Create;
+    begin
+      inherited Create;
+      FVec := TVec.Create;
+      FVec.Put(0, 3); FVec.Put(1, 4);
+    end;
+    var o: TOwner;
+    begin
+      o := TOwner.Create;
+      WriteLn(o.Vec[0] + o.Vec[1]);
+      o := nil
+    end.
+    ''';
+
+  { Same, but Prop is a method-backed (getter) property. }
+  SrcDefaultViaMethodProp = '''
+    program P;
+    type
+      TVec = class
+        FData: array[0..4] of Integer;
+        function Get(i: Integer): Integer; begin Result := FData[i] end;
+        procedure Put(i: Integer; v: Integer); begin FData[i] := v end;
+        property Items[i: Integer]: Integer read Get write Put; default;
+      end;
+      TOwner = class
+        FVec: TVec;
+        constructor Create;
+        function GetVec: TVec; begin Result := FVec end;
+        property Vec: TVec read GetVec;
+      end;
+    constructor TOwner.Create;
+    begin
+      inherited Create;
+      FVec := TVec.Create;
+      FVec.Put(0, 5); FVec.Put(1, 4);
+    end;
+    var o: TOwner;
+    begin
+      o := TOwner.Create;
+      WriteLn(o.Vec[0] + o.Vec[1]);
+      o := nil
+    end.
+    ''';
+
+procedure TE2EPropertyTests.TestRun_DefaultProperty_ViaFieldBackedProperty;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDefaultViaFieldProp, '7' + LE, 0);
+end;
+
+procedure TE2EPropertyTests.TestRun_DefaultProperty_ViaMethodBackedProperty;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit; end;
+  AssertRunsOnAll(SrcDefaultViaMethodProp, '9' + LE, 0);
 end;
 
 initialization
