@@ -91,18 +91,39 @@ fi
 SIZE1=$(stat -c %s "$STAGE2A")
 echo "      build1 ok — stage-2a size = $SIZE1 bytes"
 
-echo "[2/4] BUILD 2 — recompile into the SAME (now populated) unit-cache"
-# This is the path under test: dependency units load from cached .bif/.o and
-# the top program is recompiled against those cached interfaces.
+# EDIT a DEPENDENCY unit between the two builds.  This is what a real
+# incremental rebuild looks like (edit one unit, rebuild) and is the only thing
+# that exercises STALENESS PROPAGATION: a unit whose cache is now stale must be
+# recompiled from source, AND every cached unit that depends on it must also be
+# recompiled — otherwise the cached dependent's iface is imported before the
+# recompiled dependency's types exist, and resolution fails with EImportError.
+# blaise.codegen.driver is depended on by blaise.frontend.opts (TBackendKind),
+# so editing it triggers exactly that propagation.  A harmless trailing comment
+# changes the content hash without changing behaviour.  Restored on exit.
+EDIT_UNIT="compiler/src/main/pascal/blaise.codegen.driver.pas"
+cp "$EDIT_UNIT" "$WORK/edit_unit.bak"
+restore_edit() { cp "$WORK/edit_unit.bak" "$EDIT_UNIT" 2>/dev/null || true; rm -rf "$WORK"; }
+trap restore_edit EXIT
+printf '\n{ warmcache-fixpoint content-edit probe }\n' >> "$EDIT_UNIT"
+
+echo "[2/4] BUILD 2 — edit a dependency unit, then recompile into the SAME cache"
+# Path under test: the edited unit is stale (recompiled from source); its
+# cached dependents must propagate that and recompile too, and unedited
+# dependency units still load from cached .bif/.o.
 set +e
 "$STAGE1" --source compiler/src/main/pascal/Blaise.pas \
   --output "$STAGE2B" --unit-cache "$UC" $UNIT_PATHS \
   > "$WORK/build2.log" 2>&1
 B2_RC=$?
 set -e
+# Restore the edited unit immediately — its content is no longer needed.
+cp "$WORK/edit_unit.bak" "$EDIT_UNIT"
 if [ "$B2_RC" -ne 0 ]; then
-  echo "BUILD2_FAIL (warm-cache rebuild, exit=$B2_RC)"
-  echo "  (a unit loaded from the cache likely produced a broken round-trip)"
+  echo "BUILD2_FAIL (warm-cache rebuild after content edit, exit=$B2_RC)"
+  echo "  (likely a stale-cache propagation bug — a cached dependent of the"
+  echo "   edited unit was imported before the recompiled unit's types existed,"
+  echo "   raising EImportError; see grep 'recompiling from source' below)"
+  grep -iE "stale|EImportError|recompil" "$WORK/build2.log" | head
   tail -15 "$WORK/build2.log"
   exit 1
 fi

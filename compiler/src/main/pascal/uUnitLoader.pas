@@ -62,6 +62,11 @@ type
     FDefines:              TStringList;  { not owned — conditional symbols for each unit's lexer }
     FLoading:              TStringList;  { units currently on the load stack — cycle detection }
     FLoadedNames:          TStringList;  { units already fully loaded }
+    FSourceLoadedNames:    TStringList;  { units taken via the SOURCE-recompile
+                                           path (stale cache or no cache).  A
+                                           cached unit whose dependency is in
+                                           this set must itself be recompiled —
+                                           staleness propagates up the uses graph. }
     FResult:               TObjectList;  { the in-progress output list (not owned here) }
     FPrebuiltIfaces:       TObjectList;  { owned TUnitInterface }
     FPrebuiltObjectPaths:  TStringList;
@@ -79,6 +84,9 @@ type
       reconstitute a TUnitInterface.  Returns nil on failure. }
     function LoadIfaceFromObject(const APath: string): TUnitInterface;
     function LoadOne(const APath: string): TUnit;
+    { True if any interface-use dependency of AIface was taken via the
+      source-recompile path (is in FSourceLoadedNames). }
+    function DependsOnSourceLoaded(AIface: TUnitInterface): Boolean;
     procedure LoadTransitive(const AName: string);
     { Collect the .o for an impl-only dependency (and its transitive
       dependencies) for linking, without parsing source or importing its
@@ -288,6 +296,17 @@ begin
   end;
 end;
 
+function TUnitLoader.DependsOnSourceLoaded(AIface: TUnitInterface): Boolean;
+var
+  I: Integer;
+begin
+  Result := True;
+  for I := 0 to AIface.UsedUnits.Count - 1 do
+    if FSourceLoadedNames.IndexOf(AIface.UsedUnits.Strings[I]) >= 0 then
+      Exit;
+  Result := False;
+end;
+
 procedure TUnitLoader.LoadTransitive(const AName: string);
 var
   Path:    string;
@@ -332,24 +351,43 @@ begin
       try
         for I := 0 to Iface.UsedUnits.Count - 1 do
           LoadTransitive(Iface.UsedUnits.Strings[I]);
-        FPrebuiltIfaces.Add(Iface);
-        FPrebuiltObjectPaths.Add(ObjPath);
-        FLoadedNames.Add(AName);
-        { Impl-only dependencies are not reachable via the interface uses,
-          but their objects must still be linked or the program loses their
-          code (an incremental rebuild that loads this unit from its cached
-          .bif would otherwise drop them).  They are collected for LINK ONLY
-          — not semantically imported — because the consuming unit never
-          references their symbols, and importing their ifaces early would
-          break the dependency-ordered import (impl/interface-use cycles, e.g.
-          a backend unit whose interface a peer impl-uses, cannot be resolved
-          by the leaf-first iface import). }
-        for I := 0 to Iface.ImplUsedUnits.Count - 1 do
-          CollectLinkOnlyObject(Iface.ImplUsedUnits.Strings[I]);
+        { Staleness propagation: if any interface-use dependency was taken via
+          the SOURCE path (its cache was stale, or it has no cache), then THIS
+          unit's cached iface may reference types whose definitions are only
+          available from that recompiled dependency — and those are imported in
+          a later phase than cached ifaces, so resolution would fail with an
+          EImportError ("field type X unresolved").  Discard the cached iface
+          and recompile this unit from source too, so it lands in the
+          source-ordered analysis phase after its dependency.  (Without source
+          on the path we cannot recompile, so the cache is the only option —
+          keep it when source is not locatable.) }
+        if DependsOnSourceLoaded(Iface) and (Locate(AName) <> '') then
+        begin
+          Iface.Free();
+          Iface := nil;   { fall through to the source-compile path below }
+        end
+        else
+        begin
+          FPrebuiltIfaces.Add(Iface);
+          FPrebuiltObjectPaths.Add(ObjPath);
+          FLoadedNames.Add(AName);
+          { Impl-only dependencies are not reachable via the interface uses,
+            but their objects must still be linked or the program loses their
+            code (an incremental rebuild that loads this unit from its cached
+            .bif would otherwise drop them).  They are collected for LINK ONLY
+            — not semantically imported — because the consuming unit never
+            references their symbols, and importing their ifaces early would
+            break the dependency-ordered import (impl/interface-use cycles, e.g.
+            a backend unit whose interface a peer impl-uses, cannot be resolved
+            by the leaf-first iface import). }
+          for I := 0 to Iface.ImplUsedUnits.Count - 1 do
+            CollectLinkOnlyObject(Iface.ImplUsedUnits.Strings[I]);
+        end;
       finally
         FLoading.Delete(FLoading.IndexOf(AName));
       end;
-      Exit;
+      if Iface <> nil then
+        Exit;   { cached path taken — done.  Otherwise fall through to source. }
     end;
   end;
 
@@ -373,6 +411,11 @@ begin
     { Append this unit after all its dependencies }
     FResult.Add(U);
     FLoadedNames.Add(AName);
+    { Record that this unit was recompiled from source, so any cached unit
+      that depends on it (interface-use) propagates the staleness and also
+      recompiles — see the staleness-propagation guard in the cached path. }
+    if FSourceLoadedNames.IndexOf(AName) < 0 then
+      FSourceLoadedNames.Add(AName);
     U := nil;  { ownership transferred to FResult }
   finally
     U.Free();  { no-op if U = nil (success path) or on error }
@@ -390,6 +433,8 @@ begin
   FLoading.CaseSensitive := False;
   FLoadedNames := TStringList.Create();
   FLoadedNames.CaseSensitive := False;
+  FSourceLoadedNames := TStringList.Create();
+  FSourceLoadedNames.CaseSensitive := False;
   FPrebuiltIfaces      := TObjectList.Create(True);
   FPrebuiltObjectPaths := TStringList.Create();
   FPrebuiltObjectPaths.CaseSensitive := False;
@@ -405,6 +450,7 @@ begin
   FLinkOnlyObjects.Free();
   FPrebuiltObjectPaths.Free();
   FPrebuiltIfaces.Free();
+  FSourceLoadedNames.Free();
   FLoadedNames.Free();
   FLoading.Free();
   inherited Destroy();
