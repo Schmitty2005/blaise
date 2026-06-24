@@ -43,6 +43,13 @@ type
     { ------------------------------------------------------------------ }
     procedure TestSemanticAnalyser_ExportedTypeVisibleInProgram;
     procedure TestSemanticAnalyser_ExportedFuncVisibleInProgram;
+    { Flat-merge of units that each privately bind the same external C symbol,
+      or bind to a real RTL function — must not raise a false
+      "ambiguous overload" / "duplicate identifier" (bugs.txt: runtime module
+      library compile failed). }
+    procedure TestSemanticAnalyser_DuplicateExternalBindingTolerated;
+    procedure TestSemanticAnalyser_ExternalBindingToRealFuncTolerated;
+    procedure TestSemanticAnalyser_PrivateImplProcsPerUnitNotAmbiguous;
     { ------------------------------------------------------------------ }
     { Combined code generation                                             }
     { ------------------------------------------------------------------ }
@@ -376,6 +383,197 @@ begin
     SA.Free();
     Prog.Free();
     U.Free();
+  end;
+end;
+
+procedure TMultifileTests.TestSemanticAnalyser_DuplicateExternalBindingTolerated;
+const
+  { Two units each declare the SAME parameterless external C binding in their
+    implementation section and call it.  In the flat-merge both land in the
+    one global overload group; they denote ONE function and must collapse. }
+  UnitASrc =
+    '''
+        unit AltA;
+        interface
+        procedure DoA;
+        implementation
+        procedure ext_abort; external name 'abort';
+        procedure DoA;
+        begin
+          ext_abort
+        end;
+        end.
+        ''';
+  UnitBSrc =
+    '''
+        unit AltB;
+        interface
+        procedure DoB;
+        implementation
+        procedure ext_abort; external name 'abort';
+        procedure DoB;
+        begin
+          ext_abort
+        end;
+        end.
+        ''';
+  ProgSrc =
+    '''
+        program TestP;
+        uses AltA, AltB;
+        begin
+          DoA; DoB
+        end.
+        ''';
+var
+  UA, UB: TUnit;
+  Prog:   TProgram;
+  SA:     TSemanticAnalyser;
+begin
+  UA   := ParseUnitSrc(UnitASrc);
+  UB   := ParseUnitSrc(UnitBSrc);
+  Prog := ParseProg(ProgSrc);
+  SA   := TSemanticAnalyser.Create();
+  try
+    SA.AnalyseUnitForExport(UA);
+    SA.AnalyseUnitForExport(UB);
+    SA.Analyse(Prog);
+    AssertNotNull('prog analysed without ambiguity', Prog.SymbolTable);
+  finally
+    SA.Free();
+    Prog.Free();
+    UB.Free();
+    UA.Free();
+  end;
+end;
+
+procedure TMultifileTests.TestSemanticAnalyser_ExternalBindingToRealFuncTolerated;
+const
+  { An unmangled RTL-style unit (blaise_*) exports a real function whose link
+    symbol is its bare name; a second unit binds to it via `external name`.
+    The flat-merge sees one real def + one external binding for the same link
+    symbol — must not be a duplicate identifier nor an ambiguous overload. }
+  MemSrc =
+    '''
+        unit blaise_testmem;
+        interface
+        function _TestGetMem(Size: Integer): Pointer;
+        implementation
+        function _TestGetMem(Size: Integer): Pointer;
+        begin
+          Result := nil
+        end;
+        end.
+        ''';
+  UseSrc =
+    '''
+        unit UserU;
+        interface
+        function GrabMem: Pointer;
+        implementation
+        function _TestGetMem(Size: Integer): Pointer; external name '_TestGetMem';
+        function GrabMem: Pointer;
+        begin
+          Result := _TestGetMem(8)
+        end;
+        end.
+        ''';
+  ProgSrc =
+    '''
+        program TestP;
+        uses blaise_testmem, UserU;
+        var p: Pointer;
+        begin
+          p := GrabMem()
+        end.
+        ''';
+var
+  UM, UU: TUnit;
+  Prog:   TProgram;
+  SA:     TSemanticAnalyser;
+begin
+  UM   := ParseUnitSrc(MemSrc);
+  UU   := ParseUnitSrc(UseSrc);
+  Prog := ParseProg(ProgSrc);
+  SA   := TSemanticAnalyser.Create();
+  try
+    SA.AnalyseUnitForExport(UM);
+    SA.AnalyseUnitForExport(UU);
+    SA.Analyse(Prog);
+    AssertNotNull('prog analysed: external binding to real func', Prog.SymbolTable);
+  finally
+    SA.Free();
+    Prog.Free();
+    UU.Free();
+    UM.Free();
+  end;
+end;
+
+procedure TMultifileTests.TestSemanticAnalyser_PrivateImplProcsPerUnitNotAmbiguous;
+const
+  { Two units each declare a PRIVATE (implementation-only, non-external) helper
+    of the same name and call it.  Each unit's call must bind to its own copy;
+    the other unit's private helper is not a visible competing candidate. }
+  UnitASrc =
+    '''
+        unit PrivA;
+        interface
+        function GoA: Integer;
+        implementation
+        function Helper(X: Integer): Integer;
+        begin
+          Result := X + 1
+        end;
+        function GoA: Integer;
+        begin
+          Result := Helper(10)
+        end;
+        end.
+        ''';
+  UnitBSrc =
+    '''
+        unit PrivB;
+        interface
+        function GoB: Integer;
+        implementation
+        function Helper(X: Integer): Integer;
+        begin
+          Result := X + 2
+        end;
+        function GoB: Integer;
+        begin
+          Result := Helper(20)
+        end;
+        end.
+        ''';
+  ProgSrc =
+    '''
+        program TestP;
+        uses PrivA, PrivB;
+        var r: Integer;
+        begin
+          r := GoA() + GoB()
+        end.
+        ''';
+var
+  UA, UB: TUnit;
+  Prog:   TProgram;
+  SA:     TSemanticAnalyser;
+begin
+  UA   := ParseUnitSrc(UnitASrc);
+  UB   := ParseUnitSrc(UnitBSrc);
+  Prog := ParseProg(ProgSrc);
+  SA   := TSemanticAnalyser.Create();
+  try
+    SA.AnalyseUnitForExport(UA);
+    SA.AnalyseUnitForExport(UB);
+    SA.Analyse(Prog);
+    AssertNotNull('prog analysed: per-unit private helpers', Prog.SymbolTable);
+  finally
+    SA.Free();
+    Prog.Free();
+    UB.Free();
+    UA.Free();
   end;
 end;
 

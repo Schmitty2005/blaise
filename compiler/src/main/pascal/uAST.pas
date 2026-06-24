@@ -828,6 +828,10 @@ type
     CallingConv: string;  { set by uParser — 'cdecl'/'stdcall'/'register'/'pascal'/
                             'safecall' directive (lowercased); '' = default }
     OwningUnit: string;   { set by uSemantic / uSemanticImport — unit that declares this routine }
+    IsImplOnly: Boolean;  { set by uSemantic — standalone routine declared only in a unit's
+                            implementation section (no interface forward).  Such routines are
+                            PRIVATE to the unit; overload resolution must not treat another
+                            unit's same-named impl-only routine as a competing candidate. }
     constructor Create;
     destructor Destroy; override;
   end;

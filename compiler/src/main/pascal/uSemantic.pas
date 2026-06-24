@@ -112,11 +112,36 @@ type
       IndexOf can return a same-named decl from an imported unit. }
     function IndexOfProcInUnit(const AName, AUnitName: string): Integer;
 
+    { The emitted/imported link symbol for a standalone routine: the
+      `external name` for an external binding (defaulting to the Pascal name),
+      else ResolvedQbeName (bare name for unmangled RTL units) or the name. }
+    function EffectiveLinkName(A: TMethodDecl): string;
+
+    { True when A and B denote the SAME underlying link symbol with the same
+      arity, where AT LEAST one side is an external binding.  Covers two units
+      each declaring `external name 'strlen'` AND a binding (`external name
+      '_BlaiseGetMem'`) targeting a real function exported by an unmangled RTL
+      unit.  Used to collapse false "ambiguous overload" / "duplicate
+      identifier" errors in the multi-unit flat-merge. }
+    function SameLinkSymbol(A, B: TMethodDecl): Boolean;
+
     { True when A and B are two declarations of the SAME external C function —
       both external, same effective link name, same arity.  Used to collapse the
       false "ambiguous overload" that arises when two units each privately
       declare e.g. `external name 'strlen'`. }
     function SameExternalDecl(A, B: TMethodDecl): Boolean;
+
+    { True when every candidate in AList collapses to the same link symbol as
+      the first (per SameLinkSymbol).  Used when arg scoring is unavailable
+      (zero-arity early path). }
+    function AllSameExternalDecl(AList: TObjectList): Boolean;
+
+    { True when the global scope already holds a symbol that denotes the SAME
+      external C function as ANew — e.g. two units each declaring
+      `function _BlaiseGetMem(...): Pointer; external name '_BlaiseGetMem';`.
+      Such a re-declaration is benign (one underlying symbol), not a genuine
+      duplicate identifier.  Returns False for anything but matching externals. }
+    function BenignDuplicateExternal(ANew: TMethodDecl): Boolean;
 
     { Overload-group plumbing (see FProcGroups/FMethodGroups).  Every
       FProcIndex/FMethodIndex AddObject must go through the Add*GroupEntry
@@ -1024,23 +1049,80 @@ begin
   Result := -1;
 end;
 
+function TSemanticAnalyser.EffectiveLinkName(A: TMethodDecl): string;
+begin
+  if A = nil then
+  begin
+    Result := '';
+    Exit;
+  end;
+  if A.IsExternal then
+  begin
+    { External binding: link symbol is the `external name`, else Pascal name. }
+    if A.ExternalName <> '' then Result := A.ExternalName
+    else                         Result := A.Name;
+  end
+  else
+  begin
+    { Real routine: emitted symbol is ResolvedQbeName when set (bare name for
+      unmangled RTL units blaise_*/rtl.*), else the Pascal name. }
+    if A.ResolvedQbeName <> '' then Result := A.ResolvedQbeName
+    else                            Result := A.Name;
+  end;
+end;
+
+function TSemanticAnalyser.SameLinkSymbol(A, B: TMethodDecl): Boolean;
+begin
+  Result := False;
+  if (A = nil) or (B = nil) then Exit;
+  { At least one side must be an external binding — two distinct real routines
+    that merely share a name are a genuine clash, not the same symbol. }
+  if not (A.IsExternal or B.IsExternal) then Exit;
+  if A.Params.Count <> B.Params.Count then Exit;
+  Result := SameText(Self.EffectiveLinkName(A), Self.EffectiveLinkName(B));
+end;
+
 function TSemanticAnalyser.SameExternalDecl(A, B: TMethodDecl): Boolean;
-var
-  LinkA, LinkB: string;
 begin
   Result := False;
   if (A = nil) or (B = nil) then Exit;
   if not (A.IsExternal and B.IsExternal) then Exit;
-  if A.Params.Count <> B.Params.Count then Exit;
-  if A.ExternalName <> '' then
-    LinkA := A.ExternalName
-  else
-    LinkA := A.Name;
-  if B.ExternalName <> '' then
-    LinkB := B.ExternalName
-  else
-    LinkB := B.Name;
-  Result := SameText(LinkA, LinkB);
+  Result := Self.SameLinkSymbol(A, B);
+end;
+
+function TSemanticAnalyser.AllSameExternalDecl(AList: TObjectList): Boolean;
+var
+  I:     Integer;
+  First: TMethodDecl;
+begin
+  Result := False;
+  if (AList = nil) or (AList.Count < 2) then Exit;
+  First := TMethodDecl(AList.Items[0]);
+  for I := 1 to AList.Count - 1 do
+    if not Self.SameLinkSymbol(First, TMethodDecl(AList.Items[I])) then
+      Exit;
+  Result := True;
+end;
+
+function TSemanticAnalyser.BenignDuplicateExternal(ANew: TMethodDecl): Boolean;
+var
+  Existing:  TSymbol;
+begin
+  Result := False;
+  if ANew = nil then Exit;
+  { Only an external binding can benignly duplicate an existing symbol. }
+  if not ANew.IsExternal then Exit;
+  { The clash was detected in the global scope (interface symbols define at
+    scope depth 1), so resolve the colliding symbol there directly — the
+    uses-chain Lookup could otherwise return a shadowing symbol from a
+    different scope. }
+  Existing := FTable.GlobalScope().LookupLocal(ANew.Name);
+  if Existing = nil then Exit;
+  if not (Existing.Kind in [skProcedure, skFunction]) then Exit;
+  if Existing.Decl = nil then Exit;
+  { Same underlying link symbol — e.g. an `external name '_BlaiseGetMem'`
+    binding targeting the real _BlaiseGetMem exported by blaise_mem. }
+  Result := Self.SameLinkSymbol(TMethodDecl(Existing.Decl), ANew);
 end;
 
 procedure TSemanticAnalyser.BuildUsesChain(AUsedUnits: TStringList);
@@ -1212,8 +1294,14 @@ begin
       if not FTable.Define(Sym) then
       begin
         Sym.Free();
-        SemanticError(Format('Duplicate identifier ''%s''', [MDecl.Name]),
-          MDecl.Line, MDecl.Col);
+        { Two units may each export the same external C binding (e.g.
+          `external name '_BlaiseGetMem'`).  The flat-merge shares one
+          global scope, so the second Define collides — but it denotes ONE
+          underlying symbol, not a real duplicate.  Tolerate it; otherwise
+          report the genuine clash. }
+        if not BenignDuplicateExternal(MDecl) then
+          SemanticError(Format('Duplicate identifier ''%s''', [MDecl.Name]),
+            MDecl.Line, MDecl.Col);
       end;
     end;
 
@@ -1353,6 +1441,7 @@ begin
       else
       begin
         { Impl-only declaration — register symbol and index it }
+        ImplDecl.IsImplOnly := True;
         if ImplDecl.IsOverload then
           ImplDecl.ResolvedQbeName := CurrentUnitPrefix() + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
         else
@@ -1534,8 +1623,12 @@ begin
     if not FTable.Define(Sym) then
     begin
       Sym.Free();
-      SemanticError(Format('Duplicate identifier ''%s''', [MDecl.Name]),
-        MDecl.Line, MDecl.Col);
+      { Same-external collapse — see the note on the parallel AnalyseUnit
+        path: two units exporting the same `external name 'X'` binding share
+        one underlying symbol, so a Define collision there is benign. }
+      if not BenignDuplicateExternal(MDecl) then
+        SemanticError(Format('Duplicate identifier ''%s''', [MDecl.Name]),
+          MDecl.Line, MDecl.Col);
     end;
   end;
 
@@ -1662,6 +1755,7 @@ begin
       else
       begin
         { Impl-only declaration — register in impl scope (does not persist) }
+        ImplDecl.IsImplOnly := True;
         if ImplDecl.IsOverload then
           ImplDecl.ResolvedQbeName := CurrentUnitPrefix() + ImplDecl.Name + '$' + MangleParamSig(ImplDecl)
         else
@@ -8473,8 +8567,19 @@ begin
     if Grp <> nil then
       for I := 0 to Grp.Count - 1 do
       begin
-        Inc(TotalCnt);
         Cand := TMethodDecl(Grp.Items[I]);
+        { Impl-only (implementation-section) routines are PRIVATE to their
+          unit.  When several units each declare a same-named private helper
+          (e.g. DiagAbort in both blaise_arc and blaise_exc), only the one
+          owned by the unit currently being analysed is a valid candidate —
+          the others are not visible here and must not count toward
+          ambiguity.  Routines exported from an interface (IsImplOnly=False)
+          remain globally visible as before. }
+        if Cand.IsImplOnly and (Cand.OwningUnit <> '') and
+           (FCurrentUnitName <> '') and
+           not SameText(Cand.OwningUnit, FCurrentUnitName) then
+          Continue;
+        Inc(TotalCnt);
         if (AArity >= MinArity(Cand)) and (AArity <= Cand.Params.Count) then
           ArityMatch.Add(Cand);
       end;
@@ -8496,8 +8601,17 @@ begin
       begin
         Exit(TMethodDecl(ArityMatch.Items[0]));
       end;
-      { zero-arg ambiguity is impossible — same name + zero params would
-        have been rejected by the symbol-table chain, but be defensive. }
+      { Two units may each privately declare the SAME external C function
+        (e.g. a parameterless `external name 'abort'`).  Both land in the
+        global overload group with identical arity, but they denote ONE
+        function — not an ambiguous overload.  Collapse the duplicates: if
+        every arity match is the same external decl as the first, accept it
+        rather than erroring.  Mirrors the arg-scoring collapse below. }
+      if AllSameExternalDecl(ArityMatch) then
+        Exit(TMethodDecl(ArityMatch.Items[0]));
+      { zero-arg ambiguity is impossible for non-external decls — same name
+        + zero params would have been rejected by the symbol-table chain,
+        but be defensive. }
       if AArity = 0 then
         SemanticError(
           Format('Ambiguous overload of ''%s''', [AName]),
@@ -8561,11 +8675,13 @@ begin
         end
         else if ExactNew = ExactBest then
         begin
-          { Two units may each privately declare the SAME external C function
-            (e.g. `external name 'strlen'`).  Both land in the global overload
-            group and score identically, but they denote ONE function — not an
-            ambiguous overload.  Collapse the duplicate instead of erroring. }
-          if not SameExternalDecl(Cand, Best) then
+          { Two candidates may denote the SAME underlying link symbol: two
+            units each declaring `external name 'strlen'`, or an
+            `external name '_BlaiseGetMem'` binding alongside the real
+            _BlaiseGetMem exported by blaise_mem.  They score identically but
+            are ONE function — not an ambiguous overload.  Collapse instead of
+            erroring. }
+          if not SameLinkSymbol(Cand, Best) then
             Inc(BestCount);
         end;
       end;

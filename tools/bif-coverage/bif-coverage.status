@@ -250,7 +250,7 @@ TMethodCallStmt.IsProcFieldCall  safe
 TInheritedCallStmt.Name  serialise
 TInheritedCallStmt.Args  serialise
 
-# TMethodCallExpr (uAST.pas:835)
+# TMethodCallExpr (uAST.pas:839)
 TMethodCallExpr.ObjectName  serialise
 TMethodCallExpr.Name  serialise
 TMethodCallExpr.Args  serialise
