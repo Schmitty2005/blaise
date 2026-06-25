@@ -236,6 +236,8 @@ begin
       Inc(I);
       AOpts.RTLSrcDir := ParamStr(I);
     end
+    else if Arg = '--static' then
+      AOpts.Static := True
     else if Arg = '--emit-ir' then
       AFront.EmitIR := True
     else if Arg = '--emit-asm' then

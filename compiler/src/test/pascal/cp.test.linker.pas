@@ -58,7 +58,7 @@ type
     procedure TestSym_SynthesisedSymbolsDefined;
     { Static relocations }
     procedure TestReloc_PC32CrossObjectCall;
-    procedure TestReloc_Quad64_Raises;
+    procedure TestReloc_Quad64_ResolvesToAbsoluteAddr;
     { Executable structure }
     procedure TestExe_ElfHeaderIsExec;
     procedure TestExe_EntryPointMatchesSymbol;
@@ -786,29 +786,30 @@ begin
   end;
 end;
 
-procedure TLinkerTests.TestReloc_Quad64_Raises;
+procedure TLinkerTests.TestReloc_Quad64_ResolvesToAbsoluteAddr;
 var
   Lk: TLinker;
   Bytes: string;
-  Raised: Boolean;
 begin
-  { An absolute 64-bit pointer to a symbol needs dynamic linking under
-    a real PIE; Phase B rejects R_X86_64_64 explicitly. }
-  Raised := False;
-  Lk := nil;
+  { An absolute 64-bit pointer to a symbol (`.quad target`, R_X86_64_64) is
+    resolvable at link time in a non-PIE ET_EXEC: every symbol has a fixed load
+    address.  The static linker must patch the slot with target's absolute
+    address (no dynamic relocation) — this is what makes a freestanding static
+    --static link possible (docs/linux-syscall-migration.adoc). }
+  Lk := LinkObjs(
+    ['.data' + LineEnding + 'ptr:' + LineEnding + '.quad target' + LineEnding +
+     '.text' + LineEnding + '.globl target' + LineEnding + 'target:' +
+     LineEnding + 'ret' + LineEnding +
+     '.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
+    '_start', Bytes);
   try
-    Lk := LinkObjs(
-      ['.data' + LineEnding + 'ptr:' + LineEnding + '.quad target' + LineEnding +
-       '.text' + LineEnding + '.globl target' + LineEnding + 'target:' +
-       LineEnding + 'ret' + LineEnding +
-       '.globl _start' + LineEnding + '_start:' + LineEnding + 'ret' + LineEnding],
-      '_start', Bytes);
-  except
-    on E: ELinker do
-      Raised := True;
+    { The link must succeed and produce a valid ET_EXEC. }
+    AssertTrue('static R_X86_64_64 link produced no output', Length(Bytes) >= 64);
+    AssertEquals('e_type ET_EXEC', 2,
+      (Ord(Bytes[16]) and $FF) or ((Ord(Bytes[17]) and $FF) shl 8));
+  finally
+    Lk.Free();
   end;
-  Lk.Free();
-  AssertTrue('R_X86_64_64 must raise ELinker in Phase B', Raised);
 end;
 
 procedure TLinkerTests.TestExe_ElfHeaderIsExec;

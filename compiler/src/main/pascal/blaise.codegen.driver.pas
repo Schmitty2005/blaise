@@ -92,6 +92,12 @@ type
                                    Overrides the binary/CWD-relative lookup, for
                                    a relocated/release binary whose RTL source
                                    lives elsewhere (empty = use default lookup) }
+    Static: Boolean;             { --static: link a freestanding, libc-free ELF
+                                   (native internal linker only).  The kernel
+                                   leaf (runtime.syscall.<os> + runtime.cstub +
+                                   runtime.start.static.<os>) replaces libc; the
+                                   linker emits a non-PIE ET_EXEC with no
+                                   PT_INTERP.  docs/linux-syscall-migration.adoc }
   end;
 
   TBackendDriver = class
@@ -430,7 +436,7 @@ var
   I, J, ExitCode: Integer;
   Args: TStringList;
   Msg: string;
-  ProvidedSyms, MySyms: TStringList;
+  ProvidedSyms, MySyms, Units: TStringList;
   Redundant: Boolean;
 begin
   Result := '';
@@ -481,10 +487,27 @@ begin
   ForceDirectories(BuildDir);
   BlaiseBin := ParamStr(0);
 
+  { The unit list to build/link, in leaf-first order.  For a --static link the
+    kernel leaf replaces libc: drop runtime.start (libc/__libc_start_main entry)
+    in favour of the freestanding runtime.start.static.<os>, and add the raw
+    syscall stubs (runtime.syscall.<os>) + the freestanding C functions
+    (runtime.cstub).  A dynamic (libc) link uses the plain RTL_UNITS. }
+  Units := TStringList.Create();
   for I := 0 to High(RTL_UNITS) do
+    if AOpts.Static and SameText(RTL_UNITS[I], 'runtime.start') then
+      Units.Add('runtime.start.static.linux')
+    else
+      Units.Add(RTL_UNITS[I]);
+  if AOpts.Static then
   begin
-    SrcFile := IncludeTrailingPathDelimiter(SrcDir) + RTL_UNITS[I] + '.pas';
-    ObjFile := IncludeTrailingPathDelimiter(CacheDir) + RTL_UNITS[I] + '.o';
+    Units.Add('runtime.syscall.linux');
+    Units.Add('runtime.cstub');
+  end;
+
+  for I := 0 to Units.Count - 1 do
+  begin
+    SrcFile := IncludeTrailingPathDelimiter(SrcDir) + Units.Strings[I] + '.pas';
+    ObjFile := IncludeTrailingPathDelimiter(CacheDir) + Units.Strings[I] + '.o';
     if not FileExists(SrcFile) then
       Exit('RTL unit source missing: ' + SrcFile);
 
@@ -495,7 +518,7 @@ begin
       carry inline asm, so the native backend + internal assembler is mandatory. }
     if (not FileExists(ObjFile)) or (FileAge(ObjFile) < FileAge(SrcFile)) then
     begin
-      TmpObj := IncludeTrailingPathDelimiter(BuildDir) + RTL_UNITS[I] + '.o';
+      TmpObj := IncludeTrailingPathDelimiter(BuildDir) + Units.Strings[I] + '.o';
       Args := TStringList.Create();
       try
         Args.Add('--backend');     Args.Add('native');
@@ -509,7 +532,7 @@ begin
         Args.Free();
       end;
       if ExitCode <> 0 then
-        Exit('failed to build RTL unit ' + RTL_UNITS[I] +
+        Exit('failed to build RTL unit ' + Units.Strings[I] +
           ' (exit ' + IntToStr(ExitCode) + '): ' + Msg);
       { Publish atomically.  RenameFile within the same directory tree is an
         atomic rename(2); a concurrent builder doing the same is harmless. }
@@ -520,7 +543,7 @@ begin
     { runtime.start defines the bare _start entry — include it only for the
       native internal linker (Blaise owns the entry); the cc link line gets
       _start from libc and must omit it to avoid a multiple-definition. }
-    if SameText(RTL_UNITS[I], 'runtime.start') and (not AIncludeStartup) then
+    if SameText(Units.Strings[I], 'runtime.start') and (not AIncludeStartup) then
       Continue;
     { Skip this RTL object if EVERY symbol it defines is already defined by the
       caller's objects — i.e. the program compiled this RTL unit itself.  A
@@ -549,12 +572,13 @@ begin
     cache now; the build dir holds only intermediate .bif/.o stragglers.  Remove
     the known per-unit artefacts and the (now-empty) directory.  Best-effort —
     a leftover dir is harmless. }
-  for I := 0 to High(RTL_UNITS) do
+  for I := 0 to Units.Count - 1 do
   begin
-    DeleteFile(IncludeTrailingPathDelimiter(BuildDir) + RTL_UNITS[I] + '.o');
-    DeleteFile(IncludeTrailingPathDelimiter(BuildDir) + RTL_UNITS[I] + '.bif');
+    DeleteFile(IncludeTrailingPathDelimiter(BuildDir) + Units.Strings[I] + '.o');
+    DeleteFile(IncludeTrailingPathDelimiter(BuildDir) + Units.Strings[I] + '.bif');
   end;
   _driver_rmdir(PChar(ExcludeTrailingPathDelimiter(BuildDir)));
+  Units.Free();
   finally
     ProvidedSyms.Free();
     MySyms.Free();

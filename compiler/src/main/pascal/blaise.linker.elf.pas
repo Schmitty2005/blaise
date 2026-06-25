@@ -1676,19 +1676,25 @@ begin
 
         R_X86_64_64:
           begin
-            if not FDynamic then
-              raise ELinker.Create(Ctx + ': R_X86_64_64 relocation against `'
-                + Sym.Name + ''' needs dynamic linking');
             S := Self.ResolveSymbolAddr(Obj, Rel.SymIndex, Ctx);
             Val := S + Rel.Addend;
             if M.ShType = SHT_NOBITS then
               raise ELinker.Create(Ctx
                 + ': relocation into a NOBITS section');
+            { Patch the absolute 64-bit target address.  In a non-PIE ET_EXEC
+              (static mode) every symbol has a fixed load address, so this value
+              is final and needs no run-time fixup.  In PIE/dynamic mode the
+              image base is unknown until load, so the same slot also gets an
+              R_X86_64_RELATIVE entry in .rela.dyn for the loader to re-add the
+              base. }
             LkPatch64(M.Data, PFileOff, Val);
-            RE := TRelaDynEntry.Create();
-            RE.VAddr := PAddr;
-            RE.Addend := Val;
-            FRelaDyn.Add(RE);
+            if FDynamic then
+            begin
+              RE := TRelaDynEntry.Create();
+              RE.VAddr := PAddr;
+              RE.Addend := Val;
+              FRelaDyn.Add(RE);
+            end;
           end;
 
         R_X86_64_32, R_X86_64_32S:
@@ -1719,10 +1725,12 @@ begin
           end;
 
         R_X86_64_TPOFF32:
+          { Local-Exec TLS: the offset from the thread pointer (which points at
+            the END of the static TLS block) down to this threadvar.  This is the
+            STATIC TLS model — it is resolvable at link time in both static and
+            PIE/dynamic executables (the threadvar's position within the initial
+            TLS block is fixed at link), so it needs no dynamic relocation. }
           begin
-            if not FDynamic then
-              raise ELinker.Create(Ctx
-                + ': TLS relocation needs dynamic linking');
             S := Self.ResolveSymbolAddr(Obj, Rel.SymIndex, Ctx);
             Val := S - FTlsAddr + Rel.Addend - FTlsSize;
             LkPatch32(M.Data, PFileOff, Val and $FFFFFFFF);

@@ -215,8 +215,11 @@ begin
   RTLObjs := TStringList.Create();
   try
     { Native internal linker: Blaise owns the entry point, so include
-      runtime.start (its bare _start).  Pass the program's prebuilt deps so an
-      RTL unit it compiled itself is not supplied twice. }
+      runtime.start (its bare _start).  In --static mode EnsureRTLObjects swaps
+      runtime.start for the freestanding runtime.start.static.<os> and adds the
+      syscall + cstub leaves, so AIncludeStartup is irrelevant there.  Pass the
+      program's prebuilt deps so an RTL unit it compiled itself is not supplied
+      twice. }
     Result := Self.EnsureRTLObjects(AOpts, True, AExtraObjects, RTLObjs);
     if Result <> '' then Exit;
 
@@ -225,7 +228,10 @@ begin
     Lk := TLinker.Create(LinkTarget);
     try
       try
-        Lk.SetDynamic(True);
+        { --static: freestanding non-PIE ET_EXEC, no libc/PT_INTERP (the kernel
+          leaf supplies open/read/write/… + _start).  Default: dynamic PIE
+          linked against libc. }
+        Lk.SetDynamic(not AOpts.Static);
 
         Obj := ReadElfObjectFile(AObjFile);
         Lk.AddOwnedObject(Obj);
