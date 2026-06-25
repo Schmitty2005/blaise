@@ -163,6 +163,7 @@ type
     Sym:     string;       { symbol name (for RIP-rel, labels, TLS) }
     SymDisp: Int64;        { addend to symbol (sym + N) }
     TpOff:   Boolean;      { sym@tpoff — emit R_X86_64_TPOFF32 relocation }
+    Indirect: Boolean;     { memory operand reached via *mem (call/jmp *disp(%reg)) }
   end;
 
   { Parsed line types }
@@ -342,6 +343,7 @@ begin
   Result.Scale  := 1;
   Result.Sym    := '';
   Result.SymDisp := 0;
+  Result.Indirect := False;
 
   P := APos;
   while (P < Length(S)) and ((S[P]= Ord(' ')) or (S[P]= 9)) do
@@ -353,7 +355,8 @@ begin
     Exit;
   end;
 
-  { Indirect register: *%reg }
+  { Indirect operand: *%reg (register-indirect) or *disp(%reg) (memory-
+    indirect), used by `call`/`jmp` through a pointer. }
   if S[P]= Ord('*') then
   begin
     P := P + 1;
@@ -371,6 +374,11 @@ begin
       AEnd := P;
       Exit;
     end;
+    { *disp(%reg): parse the remainder as an ordinary memory operand and flag
+      it indirect so the branch encoder uses FF /4 with that memory ModRM. }
+    Result := ParseOperand(S, P, AEnd);
+    Result.Indirect := True;
+    Exit;
   end;
 
   { Immediate: $N }
@@ -1244,6 +1252,45 @@ begin
   Result := (AWidth = 8) and (ARegCode >= 4) and (ARegCode <= 7);
 end;
 
+{ Map an unsuffixed AT&T mnemonic (mov/lea/xor/…) to its size-suffixed form,
+  inferring the operand size from a register operand's width (GNU as does the
+  same).  Mnemonics that already carry a suffix, and ones that are size-fixed in
+  long mode (push/pop/call/jmp are 64-bit), pass through.  64-bit is the default
+  when no register operand pins the width. }
+function NormalizeMnemonic(const AMnem: string;
+  const AOp1, AOp2: TOperand): string;
+var
+  W: Integer;
+  Suffix: string;
+begin
+  Result := AMnem;
+  { Width from whichever operand is a register (Op2 first — it is the
+    destination in AT&T two-operand forms). }
+  W := 0;
+  if AOp2.Kind = opReg then W := AOp2.RegW
+  else if AOp1.Kind = opReg then W := AOp1.RegW;
+  if W = 64 then Suffix := 'q'
+  else if W = 32 then Suffix := 'l'
+  else if W = 16 then Suffix := 'w'
+  else if W = 8 then Suffix := 'b'
+  else Suffix := 'q';   { default 64-bit when no register pins the size }
+
+  { Size-inferred integer ALU/data mnemonics. }
+  if (AMnem = 'mov') or (AMnem = 'xor') or (AMnem = 'and') or (AMnem = 'or') or
+     (AMnem = 'add') or (AMnem = 'sub') or (AMnem = 'cmp') or (AMnem = 'test') or
+     (AMnem = 'inc') or (AMnem = 'dec') or (AMnem = 'neg') or (AMnem = 'not') or
+     (AMnem = 'imul') or (AMnem = 'shl') or (AMnem = 'shr') then
+    Result := AMnem + Suffix
+  { lea's size is the destination pointer width — always 64-bit here. }
+  else if AMnem = 'lea' then
+    Result := 'leaq'
+  { Stack/branch ops are 64-bit-only in long mode. }
+  else if AMnem = 'push' then Result := 'pushq'
+  else if AMnem = 'pop'  then Result := 'popq'
+  else if AMnem = 'call' then Result := 'callq';
+  { 'jmp' keeps its name (the encoder already handles jmp incl. indirect). }
+end;
+
 { ---- Main instruction encoder ----------------------------------------- }
 
 function EncodeInstruction(var ACtx: TEncodeContext;
@@ -1261,9 +1308,10 @@ var
 begin
   CBInit(CB);
   ACtx.ImmTail := 0;
-  Mnem := AParsed.Mnemonic;
   Op1 := AParsed.Op1;
   Op2 := AParsed.Op2;
+  { Accept unsuffixed AT&T mnemonics (mov/lea/xor/…) by inferring the size. }
+  Mnem := NormalizeMnemonic(AParsed.Mnemonic, Op1, Op2);
 
   { ---- lock prefix (F0) — emitted ahead of the instruction it guards ---- }
   if AParsed.HasLock then
@@ -1273,6 +1321,30 @@ begin
   if Mnem = 'ret' then
   begin
     CBEmit(CB, $C3);
+    Result := CB.Data;
+    Exit;
+  end;
+
+  { ---- endbr64 (CET) ---- F3 0F 1E FA }
+  if Mnem = 'endbr64' then
+  begin
+    CBEmit(CB, $F3); CBEmit(CB, $0F); CBEmit(CB, $1E); CBEmit(CB, $FA);
+    Result := CB.Data;
+    Exit;
+  end;
+
+  { ---- hlt ---- F4 }
+  if Mnem = 'hlt' then
+  begin
+    CBEmit(CB, $F4);
+    Result := CB.Data;
+    Exit;
+  end;
+
+  { ---- syscall ---- 0F 05 }
+  if Mnem = 'syscall' then
+  begin
+    CBEmit(CB, $0F); CBEmit(CB, $05);
     Result := CB.Data;
     Exit;
   end;
@@ -1433,10 +1505,25 @@ begin
     end
     else if (Op1.Kind = opIndirect) then
     begin
+      { Register-indirect: jmp *%reg / call *%reg.  FF /4 (jmp) or /2 (call). }
       if Op1.Reg >= 8 then
         CBEmit(CB, MakeRex(False, False, False, True));
       CBEmit(CB, $FF);
-      CBEmit(CB, MakeModRM(3, 4, Op1.Reg));
+      if Mnem = 'jmp' then
+        CBEmit(CB, MakeModRM(3, 4, Op1.Reg))
+      else
+        CBEmit(CB, MakeModRM(3, 2, Op1.Reg));
+    end
+    else if IsMemLike(Op1) and Op1.Indirect then
+    begin
+      { Memory-indirect: jmp *disp(%reg) / call *disp(%reg).  FF /4 or /2 with
+        the memory ModRM. }
+      EmitRexForMem(CB, False, 0, Op1, False);
+      CBEmit(CB, $FF);
+      if Mnem = 'jmp' then
+        EncodeMemOperand(CB, ACtx, Op1, 4)
+      else
+        EncodeMemOperand(CB, ACtx, Op1, 2);
     end
     else
       raise EAssembler.Create(Mnem + ': unsupported operand');
@@ -1546,22 +1633,24 @@ begin
   end;
 
   { ---- incq / decq ---- }
-  if (Mnem = 'incq') or (Mnem = 'decq') then
+  if (Mnem = 'incq') or (Mnem = 'decq') or
+     (Mnem = 'incl') or (Mnem = 'decl') then
   begin
+    { FF /0 = inc, /1 = dec; REX.W only for the 'q' (64-bit) forms. }
     if Op1.Kind = opReg then
     begin
-      EmitRexIfNeeded(CB, True, 0, Op1.Reg, False);
+      EmitRexIfNeeded(CB, (Mnem = 'incq') or (Mnem = 'decq'), 0, Op1.Reg, False);
       CBEmit(CB, $FF);
-      if Mnem = 'incq' then
+      if (Mnem = 'incq') or (Mnem = 'incl') then
         CBEmit(CB, MakeModRM(3, 0, Op1.Reg))
       else
         CBEmit(CB, MakeModRM(3, 1, Op1.Reg));
     end
     else if IsMemLike(Op1) then
     begin
-      EmitRexForMem(CB, True, 0, Op1, False);
+      EmitRexForMem(CB, (Mnem = 'incq') or (Mnem = 'decq'), 0, Op1, False);
       CBEmit(CB, $FF);
-      if Mnem = 'incq' then
+      if (Mnem = 'incq') or (Mnem = 'incl') then
         EncodeMemOperand(CB, ACtx, Op1, 0)
       else
         EncodeMemOperand(CB, ACtx, Op1, 1);

@@ -38,6 +38,10 @@ type
     procedure TestMovqRegToXmm_SseEncoding;
     procedure TestNegl_F7Slash3;
     procedure TestLockXaddl_AtomicEncoding;
+    procedure TestUnsuffixedMov_InfersSize;
+    procedure TestJmpIndirectMem_FFSlash4;
+    procedure TestEndbr64AndHlt;
+    procedure TestSyscall_0F05;
   end;
 
   { ---- ELF writer unit tests ---- }
@@ -170,6 +174,52 @@ begin
   Obj := AssembleToBytes('lock xaddl %eax, (%rdi)' + LineEnding);
   AssertTrue('f0 0f c1 07 missing',
     ContainsBytes(Obj, Chr($F0) + Chr($0F) + Chr($C1) + Chr($07)));
+end;
+
+procedure TAsmEncodingTests.TestUnsuffixedMov_InfersSize;
+var
+  Obj: string;
+begin
+  { Unsuffixed AT&T mnemonics infer size from the register operand.
+    mov %rbx, (%rdi) is 64-bit -> 48 89 1f (same as movq).  Verified vs cc. }
+  Obj := AssembleToBytes('mov %rbx, (%rdi)' + LineEnding);
+  AssertTrue('48 89 1f missing (mov inferred q)',
+    ContainsBytes(Obj, Chr($48) + Chr($89) + Chr($1F)));
+  { xor %eax, %eax is 32-bit -> 31 c0 (no REX.W). }
+  Obj := AssembleToBytes('xor %eax, %eax' + LineEnding);
+  AssertTrue('31 c0 missing (xor inferred l)',
+    ContainsBytes(Obj, Chr($31) + Chr($C0)));
+end;
+
+procedure TAsmEncodingTests.TestJmpIndirectMem_FFSlash4;
+var
+  Obj: string;
+begin
+  { jmp *56(%rdi) -> ff 67 38  (FF /4, memory-indirect).  The longjmp tail. }
+  Obj := AssembleToBytes('jmp *56(%rdi)' + LineEnding);
+  AssertTrue('ff 67 38 missing',
+    ContainsBytes(Obj, Chr($FF) + Chr($67) + Chr($38)));
+end;
+
+procedure TAsmEncodingTests.TestEndbr64AndHlt;
+var
+  Obj: string;
+begin
+  { endbr64 -> f3 0f 1e fa ; hlt -> f4 }
+  Obj := AssembleToBytes('endbr64' + LineEnding);
+  AssertTrue('f3 0f 1e fa missing',
+    ContainsBytes(Obj, Chr($F3) + Chr($0F) + Chr($1E) + Chr($FA)));
+  Obj := AssembleToBytes('hlt' + LineEnding);
+  AssertTrue('f4 missing', ContainsBytes(Obj, Chr($F4)));
+end;
+
+procedure TAsmEncodingTests.TestSyscall_0F05;
+var
+  Obj: string;
+begin
+  { syscall -> 0f 05 (needed for the FreeBSD direct-syscall stubs). }
+  Obj := AssembleToBytes('syscall' + LineEnding);
+  AssertTrue('0f 05 missing', ContainsBytes(Obj, Chr($0F) + Chr($05)));
 end;
 
 procedure TAsmEncodingTests.TestQuadSymbol_EmitsReloc;

@@ -335,7 +335,7 @@ var
   I: Integer;
   M: TArchiveMember;
   Obj: TElfObjectFile;
-  SawSetjmp: Boolean;
+  SawLongName: Boolean;
 begin
   RTLPath := ProjectRoot() + 'compiler/target/blaise_rtl.a';
   if not FileExists(RTLPath) then
@@ -348,12 +348,14 @@ begin
     ReadArchiveFile(RTLPath, Members);
     AssertTrue('expected several RTL members, got '
       + IntToStr(Members.Count), Members.Count >= 5);
-    SawSetjmp := False;
+    { A member whose name exceeds 15 chars exercises the GNU long-name (//)
+      table.  rtl_platform_layout_linux.o is the longest current RTL member. }
+    SawLongName := False;
     for I := 0 to Members.Count - 1 do
     begin
       M := Members.Get(I);
-      if M.Name = 'blaise_setjmp_x86_64.o' then
-        SawSetjmp := True;
+      if M.Name = 'rtl_platform_layout_linux.o' then
+        SawLongName := True;
       { Every member must parse as a valid x86-64 relocatable object
         with at least its NULL section + one real section. }
       Obj := ParseElfObject(M.Data, M.Name);
@@ -364,8 +366,8 @@ begin
         Obj.Free();
       end;
     end;
-    AssertTrue('long-named member blaise_setjmp_x86_64.o not found '
-      + '(GNU long-name table mishandled?)', SawSetjmp);
+    AssertTrue('long-named member rtl_platform_layout_linux.o not found '
+      + '(GNU long-name table mishandled?)', SawLongName);
   finally
     for I := 0 to Members.Count - 1 do
       Members.Get(I).Free();
