@@ -682,7 +682,17 @@ begin
       Parser := TParser.Create(Lexer);
       IsUnitMode := Parser.IsUnitTopLevel();
       if IsUnitMode then
-        TopUnit := Parser.ParseUnit()
+      begin
+        TopUnit := Parser.ParseUnit();
+        { The loader sets SourceFile on dependency units (uUnitLoader), but a
+          unit compiled standalone via --source never had it set.  Without it
+          the exported iface carries an empty SourceHash, so a later compile
+          that depends on this unit cannot validate the cached .o and falls
+          back to recompiling from source — which re-inlines the dependency
+          body and causes duplicate-symbol link errors.  Set it from the
+          --source path. }
+        TopUnit.SourceFile := ExpandFileName(SourceFile);
+      end
       else
         Prog := Parser.Parse();
     except
@@ -898,9 +908,27 @@ begin
       begin
         { Unit-as-top-level: emit just the unit's bodies, no program wrapping, no @main. }
         CG.SetSymbolTable(Semantic.GetSymbolTable());
+        { Note every dependency whose body is NOT emitted into this object so the
+          backend references its globals externally instead of re-defining them.
+          Cached (prebuilt-iface) deps are always external; source deps are
+          external only when SkipDepCodegen compiled them to their own objects.
+          Without this, a standalone unit compile re-defines an imported unit's
+          globals (e.g. GPlatformLayout), and linking the per-unit objects
+          directly — rather than via an archive whose member selection hides the
+          clash — fails with multiple-definition errors. }
+        if Loader <> nil then
+          for I := 0 to Loader.PrebuiltIfaces.Count - 1 do
+            CG.NoteDepInitUnit(
+              TUnitInterface(Loader.PrebuiltIfaces.Items[I]).Name,
+              TUnitInterface(Loader.PrebuiltIfaces.Items[I]).HasInitialization);
         if (Units <> nil) and not SkipDepCodegen then
           for I := 0 to Units.Count - 1 do
-            CG.AppendUnit(TUnit(Units.Items[I]));
+            CG.AppendUnit(TUnit(Units.Items[I]))
+        else if Units <> nil then
+          for I := 0 to Units.Count - 1 do
+            CG.NoteDepInitUnit(TUnit(Units.Items[I]).Name,
+              (TUnit(Units.Items[I]).InitStmts <> nil) and
+              (TUnit(Units.Items[I]).InitStmts.Count > 0));
         CG.AppendUnit(TopUnit);
       end
       else if ((Units <> nil) and (Units.Count > 0)) or

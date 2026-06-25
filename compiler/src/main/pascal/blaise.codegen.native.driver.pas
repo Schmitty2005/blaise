@@ -69,13 +69,8 @@ type
   private
     function LinkViaInternalLinker(const AObjFile, AOutputFile: string;
       AOpts: TBackendOpts; AExtraObjects: TStringList): string;
-    { Compile the implicit RTL units to a per-compiler object cache and return
-      their .o paths in AObjPaths (link order).  Each unit is (re)compiled only
-      when its cached .o is missing or older than the source.  Replaces the
-      pre-built blaise_rtl.a: the RTL is now built from source by the compiler
-      itself (docs/rtl-unification-plan.adoc).  '' on success, else an error. }
-    function EnsureRTLObjects(AOpts: TBackendOpts;
-      AObjPaths: TStringList): string;
+    { EnsureRTLObjects is inherited from TBackendDriver — both the native
+      internal linker and the cc link line build the RTL the same way. }
   end;
 
 implementation
@@ -189,78 +184,6 @@ begin
     Result := 'cc -c error (exit ' + IntToStr(ExitCode) + '): ' + Msg;
 end;
 
-{ The implicit RTL units, in archive/link order.  The compiler emits calls to
-  their symbols (_SetArgs, _BlaiseGetMem, _start, ARC helpers, …) in every
-  program, so every program links them.  Names are the dotted-flat unit names;
-  the source files are <name>.pas in the RTL source directory. }
-const
-  RTL_UNITS: array[0..13] of string = (
-    'runtime.start', 'runtime.atomic', 'runtime.setjmp', 'runtime.utf8',
-    'runtime.mem', 'runtime.str', 'runtime.set', 'runtime.arc',
-    'runtime.weak', 'runtime.float', 'runtime.thread', 'runtime.exc',
-    'rtl.platform.layout.linux', 'rtl.platform.posix');
-
-function TNativeBackendDriver.EnsureRTLObjects(AOpts: TBackendOpts;
-  AObjPaths: TStringList): string;
-var
-  SrcDir, CacheDir, BlaiseBin: string;
-  SrcFile, ObjFile: string;
-  I, ExitCode: Integer;
-  Args: TStringList;
-  Msg: string;
-begin
-  Result := '';
-  { RTL source lives in the compiler's own source tree.  Resolution order:
-      1. --rtl-src DIR (AOpts.RTLSrcDir) — explicit, for a relocated binary;
-      2. $BLAISE_RTL_SRC;
-      3. binary/CWD-relative default (RTLSourceDir). }
-  if AOpts.RTLSrcDir <> '' then
-    SrcDir := ExpandFileName(AOpts.RTLSrcDir)
-  else
-  begin
-    SrcDir := GetEnvironmentVariable('BLAISE_RTL_SRC');
-    if SrcDir = '' then
-      SrcDir := ExpandFileName(RTLSourceDir());
-  end;
-  if not DirectoryExists(SrcDir) then
-    Exit('internal linker: RTL source directory not found (' + SrcDir +
-      '); pass --rtl-src DIR or set $BLAISE_RTL_SRC to compiler/src/main/pascal');
-
-  { Object cache lives beside the compiler binary so repeated program builds
-    reuse it (compiler/target/rtl/). }
-  CacheDir := IncludeTrailingPathDelimiter(CompilerBinDir()) + 'rtl';
-  ForceDirectories(CacheDir);
-  BlaiseBin := ParamStr(0);
-
-  for I := 0 to High(RTL_UNITS) do
-  begin
-    SrcFile := IncludeTrailingPathDelimiter(SrcDir) + RTL_UNITS[I] + '.pas';
-    ObjFile := IncludeTrailingPathDelimiter(CacheDir) + RTL_UNITS[I] + '.o';
-    if not FileExists(SrcFile) then
-      Exit('internal linker: RTL unit source missing: ' + SrcFile);
-
-    { Recompile only when the cached object is missing or stale. }
-    if (not FileExists(ObjFile)) or (FileAge(ObjFile) < FileAge(SrcFile)) then
-    begin
-      Args := TStringList.Create();
-      try
-        Args.Add('--no-incremental');
-        Args.Add('--assembler');   Args.Add('internal');
-        Args.Add('--source');      Args.Add(SrcFile);
-        Args.Add('--unit-path');   Args.Add(SrcDir);
-        Args.Add('--output');      Args.Add(ObjFile);
-        ExitCode := RunProcess(BlaiseBin, Args, Msg);
-      finally
-        Args.Free();
-      end;
-      if ExitCode <> 0 then
-        Exit('internal linker: failed to build RTL unit ' + RTL_UNITS[I] +
-          ' (exit ' + IntToStr(ExitCode) + '): ' + Msg);
-    end;
-    AObjPaths.Add(ObjFile);
-  end;
-end;
-
 function TNativeBackendDriver.LinkViaInternalLinker(
   const AObjFile, AOutputFile: string;
   AOpts: TBackendOpts; AExtraObjects: TStringList): string;
@@ -291,7 +214,9 @@ begin
     compiled by the compiler itself. }
   RTLObjs := TStringList.Create();
   try
-    Result := Self.EnsureRTLObjects(AOpts, RTLObjs);
+    { Native internal linker: Blaise owns the entry point, so include
+      runtime.start (its bare _start). }
+    Result := Self.EnsureRTLObjects(AOpts, True, RTLObjs);
     if Result <> '' then Exit;
 
     { TLinker.Create(ATarget) borrows the target — we own and free it here. }
