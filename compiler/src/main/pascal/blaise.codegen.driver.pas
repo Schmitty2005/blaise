@@ -218,9 +218,16 @@ type
       owns the entry point); the cc/QBE link line must omit it (libc's startup
       provides `_start` and calls `main`), or the two `_start`s collide.
 
+      AAlreadyProvided lists object paths the caller already puts on the link
+      line (the program's own prebuilt/incremental deps).  A program that uses
+      an RTL unit (e.g. `uses classes` pulls runtime.arc) compiles that unit
+      into its own object cache, so supplying our copy too would double-define
+      it.  Any RTL unit whose <name>.o basename matches an entry here is skipped.
+      Pass nil when the caller adds no objects of its own.
+
       Returns '' on success, else an error message. }
     function EnsureRTLObjects(AOpts: TBackendOpts; AIncludeStartup: Boolean;
-      AObjPaths: TStringList): string;
+      AAlreadyProvided, AObjPaths: TStringList): string;
   end;
 
 { Run an external tool, capturing combined output.  Shared by the
@@ -266,7 +273,47 @@ implementation
 uses
   SysUtils,
   Process,
+  blaise.elfreader,
   uToolchain;
+
+{ Process id + directory removal, for the per-process private RTL build
+  directory.  Declared directly rather than via GRtlPlatform to avoid a
+  unit-initialisation-order dependency (this unit may run before the platform
+  layer assigns GRtlPlatform). }
+function _driver_getpid: Integer; external name 'getpid';
+function _driver_rmdir(APath: PChar): Integer; external name 'rmdir';
+
+{ Collect the names of all symbols an ELF object DEFINES with global or weak
+  binding (STB_GLOBAL/STB_WEAK and Shndx not SHN_UNDEF) into ADest.
+  Used by EnsureRTLObjects to decide, by symbol rather than by filename,
+  whether an RTL unit is already supplied by the program's own objects.  Any
+  read/parse failure (non-ELF target, truncated file) leaves ADest unchanged —
+  the caller then falls back to supplying its copy, which is always safe. }
+procedure CollectDefinedSymbols(const AObjPath: string; ADest: TStringList);
+var
+  Obj: TElfObjectFile;
+  I:   Integer;
+  Sym: TRdSymbol;
+begin
+  Obj := nil;
+  try
+    try
+      Obj := ReadElfObjectFile(AObjPath);
+    except
+      Exit;  { not a readable ELF object — be conservative }
+    end;
+    for I := 0 to Obj.Symbols.Count - 1 do
+    begin
+      Sym := Obj.Symbols.Get(I);
+      if (Sym.Name <> '') and (Sym.Shndx <> SHN_UNDEF) and
+         ((Sym.Bind = STB_GLOBAL) or (Sym.Bind = STB_WEAK)) then
+        if ADest.IndexOf(Sym.Name) < 0 then
+          ADest.Add(Sym.Name);
+    end;
+  finally
+    Obj.Free();
+  end;
+end;
 
 { Indexed by Ord(TBackendKind).  The bound is a literal because the
   parser only accepts integer literals on array decls; keep the upper
@@ -376,15 +423,33 @@ const
     'rtl.platform.layout.linux', 'rtl.platform.posix');
 
 function TBackendDriver.EnsureRTLObjects(AOpts: TBackendOpts;
-  AIncludeStartup: Boolean; AObjPaths: TStringList): string;
+  AIncludeStartup: Boolean; AAlreadyProvided, AObjPaths: TStringList): string;
 var
-  SrcDir, CacheDir, BlaiseBin: string;
-  SrcFile, ObjFile: string;
-  I, ExitCode: Integer;
+  SrcDir, CacheDir, BuildDir, BlaiseBin: string;
+  SrcFile, ObjFile, TmpObj: string;
+  I, J, ExitCode: Integer;
   Args: TStringList;
   Msg: string;
+  ProvidedSyms, MySyms: TStringList;
+  Redundant: Boolean;
 begin
   Result := '';
+  { Collect every symbol the caller's own objects already DEFINE (the program's
+    prebuilt/incremental deps).  An RTL unit the program compiled itself (e.g.
+    `uses classes` pulls runtime.arc) is already on the link line; supplying our
+    copy too would double-define it.  Match by symbol rather than by filename so
+    a same-named-but-different object (e.g. a stale mangled cache entry) does NOT
+    suppress the real provider — this mirrors the old archive's member
+    selection. }
+  ProvidedSyms := TStringList.Create();
+  ProvidedSyms.CaseSensitive := True;
+  ProvidedSyms.Sorted := True;
+  ProvidedSyms.Duplicates := dupIgnore;
+  MySyms := TStringList.Create();
+  if AAlreadyProvided <> nil then
+    for J := 0 to AAlreadyProvided.Count - 1 do
+      CollectDefinedSymbols(AAlreadyProvided.Strings[J], ProvidedSyms);
+  try
   { RTL source lives in the compiler's own source tree.  Resolution order:
       1. --rtl-src DIR (AOpts.RTLSrcDir) — explicit, for a relocated binary;
       2. $BLAISE_RTL_SRC;
@@ -402,9 +467,18 @@ begin
       '); pass --rtl-src DIR or set $BLAISE_RTL_SRC to compiler/src/main/pascal');
 
   { Object cache lives beside the compiler binary so repeated program builds
-    reuse it (compiler/target/rtl/). }
+    reuse it (compiler/target/rtl/).  The shared cache is read for reuse and is
+    the link source, but the actual build happens in a per-process private
+    sub-directory (rtl/build-<pid>/) and finished objects are atomically renamed
+    into the shared cache.  This keeps cross-build reuse while making concurrent
+    builders (e.g. parallel e2e suites all warming a cold cache) race-free: a
+    reader never sees a half-written object, and two builders just publish
+    identical results, last-writer-wins. }
   CacheDir := IncludeTrailingPathDelimiter(CompilerBinDir()) + 'rtl';
   ForceDirectories(CacheDir);
+  BuildDir := IncludeTrailingPathDelimiter(CacheDir) + 'build-' +
+              IntToStr(_driver_getpid());
+  ForceDirectories(BuildDir);
   BlaiseBin := ParamStr(0);
 
   for I := 0 to High(RTL_UNITS) do
@@ -414,21 +488,22 @@ begin
     if not FileExists(SrcFile) then
       Exit('RTL unit source missing: ' + SrcFile);
 
-    { Recompile only when the cached object is missing or stale.  The build
-      goes through --unit-cache so each unit's RTL deps are referenced
-      externally (no duplicate global definitions); building leaf-first means
-      a unit's deps are already cached when it compiles.  RTL units carry
-      inline asm, so the native backend + internal assembler is mandatory. }
+    { Recompile only when the shared cached object is missing or stale.  Build
+      into the private BuildDir (its own --unit-cache so each unit's RTL deps
+      are referenced externally and intermediate deps are built leaf-first),
+      then atomically rename the result into the shared CacheDir.  RTL units
+      carry inline asm, so the native backend + internal assembler is mandatory. }
     if (not FileExists(ObjFile)) or (FileAge(ObjFile) < FileAge(SrcFile)) then
     begin
+      TmpObj := IncludeTrailingPathDelimiter(BuildDir) + RTL_UNITS[I] + '.o';
       Args := TStringList.Create();
       try
         Args.Add('--backend');     Args.Add('native');
         Args.Add('--assembler');   Args.Add('internal');
         Args.Add('--source');      Args.Add(SrcFile);
         Args.Add('--unit-path');   Args.Add(SrcDir);
-        Args.Add('--unit-cache');  Args.Add(CacheDir);
-        Args.Add('--output');      Args.Add(ObjFile);
+        Args.Add('--unit-cache');  Args.Add(BuildDir);
+        Args.Add('--output');      Args.Add(TmpObj);
         ExitCode := RunProcess(BlaiseBin, Args, Msg);
       finally
         Args.Free();
@@ -436,6 +511,10 @@ begin
       if ExitCode <> 0 then
         Exit('failed to build RTL unit ' + RTL_UNITS[I] +
           ' (exit ' + IntToStr(ExitCode) + '): ' + Msg);
+      { Publish atomically.  RenameFile within the same directory tree is an
+        atomic rename(2); a concurrent builder doing the same is harmless. }
+      if not RenameFile(TmpObj, ObjFile) then
+        Exit('failed to publish RTL object ' + ObjFile);
     end;
 
     { runtime.start defines the bare _start entry — include it only for the
@@ -443,7 +522,42 @@ begin
       _start from libc and must omit it to avoid a multiple-definition. }
     if SameText(RTL_UNITS[I], 'runtime.start') and (not AIncludeStartup) then
       Continue;
+    { Skip this RTL object if EVERY symbol it defines is already defined by the
+      caller's objects — i.e. the program compiled this RTL unit itself.  A
+      partially-overlapping object is still supplied (its unique symbols are
+      needed); the linker resolves the shared ones to the first definition.
+      The unit is always built above so later RTL units that depend on it
+      resolve against our cache's iface. }
+    if ProvidedSyms.Count > 0 then
+    begin
+      MySyms.Clear();
+      CollectDefinedSymbols(ObjFile, MySyms);
+      Redundant := MySyms.Count > 0;
+      for J := 0 to MySyms.Count - 1 do
+        if ProvidedSyms.IndexOf(MySyms.Strings[J]) < 0 then
+        begin
+          Redundant := False;
+          Break;
+        end;
+      if Redundant then
+        Continue;
+    end;
     AObjPaths.Add(ObjFile);
+  end;
+
+  { Tidy the private build directory.  The published .o files live in the shared
+    cache now; the build dir holds only intermediate .bif/.o stragglers.  Remove
+    the known per-unit artefacts and the (now-empty) directory.  Best-effort —
+    a leftover dir is harmless. }
+  for I := 0 to High(RTL_UNITS) do
+  begin
+    DeleteFile(IncludeTrailingPathDelimiter(BuildDir) + RTL_UNITS[I] + '.o');
+    DeleteFile(IncludeTrailingPathDelimiter(BuildDir) + RTL_UNITS[I] + '.bif');
+  end;
+  _driver_rmdir(PChar(ExcludeTrailingPathDelimiter(BuildDir)));
+  finally
+    ProvidedSyms.Free();
+    MySyms.Free();
   end;
 end;
 
@@ -465,8 +579,10 @@ begin
   Args := TStringList.Create();
   RTLObjs := TStringList.Create();
   try
-    { cc link line: libc supplies _start, so omit runtime.start. }
-    RTLErr := Self.EnsureRTLObjects(AOpts, False, RTLObjs);
+    { cc link line: libc supplies _start, so omit runtime.start.  Pass the
+      program's prebuilt deps so an RTL unit it compiled itself (e.g. via
+      `uses classes`) is not supplied twice. }
+    RTLErr := Self.EnsureRTLObjects(AOpts, False, AExtraObjects, RTLObjs);
     if RTLErr <> '' then
       Exit(RTLErr);
     Args.Add('-o');

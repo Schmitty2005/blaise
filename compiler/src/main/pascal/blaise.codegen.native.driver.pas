@@ -215,8 +215,9 @@ begin
   RTLObjs := TStringList.Create();
   try
     { Native internal linker: Blaise owns the entry point, so include
-      runtime.start (its bare _start). }
-    Result := Self.EnsureRTLObjects(AOpts, True, RTLObjs);
+      runtime.start (its bare _start).  Pass the program's prebuilt deps so an
+      RTL unit it compiled itself is not supplied twice. }
+    Result := Self.EnsureRTLObjects(AOpts, True, AExtraObjects, RTLObjs);
     if Result <> '' then Exit;
 
     { TLinker.Create(ATarget) borrows the target — we own and free it here. }
