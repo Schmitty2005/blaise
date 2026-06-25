@@ -22,16 +22,17 @@ unit blaise_atomic;
 
 interface
 
-type
-  PInteger = ^Integer;
-
-function _AtomicAddInt32(Ptr: PInteger; Delta: Integer): Integer;
-function _AtomicSubInt32(Ptr: PInteger; Delta: Integer): Integer;
+{ Ptr addresses a 32-bit integer.  Typed as Pointer (not a `PInteger` alias) so
+  this unit does not export a type name that collides with the same alias in
+  other RTL units when they are compiled together (e.g. blaise_arc's PInteger).
+  The body reads/writes through %rdi regardless of the Pascal pointer type. }
+function _AtomicAddInt32(Ptr: Pointer; Delta: Integer): Integer;
+function _AtomicSubInt32(Ptr: Pointer; Delta: Integer): Integer;
 
 implementation
 
 { return *Ptr (old); *Ptr += Delta — atomically. }
-function _AtomicAddInt32(Ptr: PInteger; Delta: Integer): Integer;
+function _AtomicAddInt32(Ptr: Pointer; Delta: Integer): Integer;
   assembler; nostackframe;
 asm
     movl %esi, %eax
@@ -40,7 +41,7 @@ asm
 end;
 
 { return *Ptr (old); *Ptr -= Delta — atomically (xadd of the negated delta). }
-function _AtomicSubInt32(Ptr: PInteger; Delta: Integer): Integer;
+function _AtomicSubInt32(Ptr: Pointer; Delta: Integer): Integer;
   assembler; nostackframe;
 asm
     negl %esi
