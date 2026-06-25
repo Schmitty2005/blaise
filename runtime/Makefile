@@ -41,12 +41,12 @@ BLAISE       = $(COMPILER_BIN)/blaise
 BLAISE_FLAGS = --no-incremental --assembler internal
 
 # Assembly sources — platform-specific, no C compiler needed.
-# (blaise_atomic, blaise_setjmp migrated to inline-asm Pascal units.)
-ASM_OBJS = $(OBJ_DIR)/blaise_start_x86_64.o \
-           $(OBJ_DIR)/blaise_utf8_x86_64.o
+# (blaise_atomic, blaise_setjmp, blaise_start migrated to inline-asm units.)
+ASM_OBJS = $(OBJ_DIR)/blaise_utf8_x86_64.o
 
 # Pascal RTL units compiled via the Blaise compiler.
-PAS_OBJS = $(OBJ_DIR)/blaise_atomic.o \
+PAS_OBJS = $(OBJ_DIR)/blaise_start.o \
+           $(OBJ_DIR)/blaise_atomic.o \
            $(OBJ_DIR)/blaise_setjmp.o \
            $(OBJ_DIR)/blaise_mem.o \
            $(OBJ_DIR)/blaise_str.o \
@@ -74,6 +74,10 @@ $(OBJ_DIR)/%.o: $(ASM_DIR)/%.s
 	$(CC) -c -o $@ $<
 
 # --- Pascal unit rules (unit-as-top-level) ---
+$(OBJ_DIR)/blaise_start.o: $(PAS_SRC_DIR)/blaise_start.pas
+	@mkdir -p $(OBJ_DIR)
+	$(BLAISE) $(BLAISE_FLAGS) --source $< --unit-path $(PAS_SRC_DIR) --output $@
+
 $(OBJ_DIR)/blaise_atomic.o: $(PAS_SRC_DIR)/blaise_atomic.pas
 	@mkdir -p $(OBJ_DIR)
 	$(BLAISE) $(BLAISE_FLAGS) --source $< --unit-path $(PAS_SRC_DIR) --output $@
