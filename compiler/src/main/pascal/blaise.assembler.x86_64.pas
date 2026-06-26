@@ -679,14 +679,17 @@ begin
       Q := P + 1;
       while (Q < Length(S)) and (S[Q] <> 125) do
         Q := Q + 1;
+      { Splice out [P..Q] WITHOUT trimming mid-scan (a left-trim would shift the
+        string under P); resume from P so a following brace is still found. }
       if Q < Length(S) then
-        S := TrimStr(Copy(S, 0, P) + ' ' + Copy(S, Q + 1, Length(S)))
+        S := Copy(S, 0, P) + ' ' + Copy(S, Q + 1, Length(S))
       else
-        S := TrimStr(Copy(S, 0, P));
+        S := Copy(S, 0, P);
     end
     else
       P := P + 1;
   end;
+  S := TrimStr(S);
   if Length(S) = 0 then Exit;
 
   { Strip trailing comment, but skip over quoted strings so that '#'

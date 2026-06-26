@@ -49,6 +49,12 @@ var
   followed by the TCB self-pointer.  Returns nil when the program has no TLS. }
 function BuildThreadTLS: Pointer;
 
+{ Unmap a TLS block created by BuildThreadTLS, given the thread pointer it
+  returned.  Used to reclaim the block when thread creation fails after the TLS
+  was built (the offset from TP back to the mmap base is the same alignment math
+  BuildThreadTLS used, kept here so both sides agree). }
+procedure FreeThreadTLS(ATp: Pointer);
+
 implementation
 
 type
@@ -188,6 +194,17 @@ begin
   TpSlot := PPointer(Tp);
   TpSlot^ := Tp;
   Result := Tp;
+end;
+
+procedure FreeThreadTLS(ATp: Pointer);
+var
+  Block: Pointer;
+  BlockSize: Int64;
+begin
+  if (ATp = nil) or (GTlsMemSz = 0) then Exit;
+  Block := Pointer(PChar(ATp) - AlignUp(GTlsMemSz, GTlsAlign));
+  BlockSize := AlignUp(GTlsMemSz, GTlsAlign) + 16;
+  munmap(Block, BlockSize);
 end;
 
 { Call the program's `main(argc, argv)` (emitted by the backend) and return its

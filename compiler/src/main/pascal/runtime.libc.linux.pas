@@ -123,27 +123,13 @@ begin
 end;
 
 function execvp(File_: PChar; Argv: Pointer): Integer;
-var
-  HasSlash: Boolean;
-  I: Int64;
 begin
-  { If File contains a '/', execve it directly; otherwise a PATH search would be
-    needed.  The RTL only execs absolute/relative program paths (system() builds
-    "/bin/sh"), so direct execve covers the present call sites; a PATH search can
-    be added when a bare-name exec appears. }
-  HasSlash := False;
-  I := 0;
-  while (File_[I] and $FF) <> 0 do
-  begin
-    if (File_[I] and $FF) = Ord('/') then HasSlash := True;
-    I := I + 1;
-  end;
-  if HasSlash then
-    Result := execve(File_, Argv, environ)
-  else
-    { No PATH search yet - try as-is so the failure is the kernel's ENOENT
-      rather than a silent wrong result. }
-    Result := execve(File_, Argv, environ);
+  { No PATH search yet: execve the name directly.  The RTL only execs
+    absolute/relative program paths (system() builds "/bin/sh"), so this covers
+    the present call sites.  A bare program name resolves only relative to the
+    CWD and otherwise fails with the kernel's ENOENT (never a silent wrong
+    result); add a $PATH scan here if a bare-name exec call site appears. }
+  Result := execve(File_, Argv, environ);
 end;
 
 { Population count of a 1024-bit affinity mask (128 bytes), counting set CPUs. }

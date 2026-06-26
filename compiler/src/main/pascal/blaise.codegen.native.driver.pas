@@ -229,7 +229,7 @@ begin
     try
       try
         { --static: freestanding non-PIE ET_EXEC, no libc/PT_INTERP (the kernel
-          leaf supplies open/read/write/… + _start).  Default: dynamic PIE
+          leaf supplies open/read/write/... + _start).  Default: dynamic PIE
           linked against libc. }
         Lk.SetDynamic(not AOpts.Static);
 

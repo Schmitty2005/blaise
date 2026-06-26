@@ -223,7 +223,8 @@ function mkstemp(Template: PChar): Integer;
 const
   ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 var
-  Len, I, Tries: Integer;
+  Len, I, Tries, Got: Integer;
+  N: Int64;
   RandBuf: array[0..5] of Byte;
   Fd: Integer;
 begin
@@ -233,7 +234,15 @@ begin
   Tries := 0;
   while Tries < 256 do
   begin
-    getrandom(@RandBuf[0], 6, 0);
+    { Fill all 6 bytes; getrandom may short-read, so loop until satisfied rather
+      than leave stale/zero bytes that would weaken the random suffix. }
+    Got := 0;
+    while Got < 6 do
+    begin
+      N := getrandom(@RandBuf[Got], 6 - Got, 0);
+      if N <= 0 then Continue;   { EINTR / transient: retry }
+      Got := Got + Integer(N);
+    end;
     for I := 0 to 5 do
       Template[Len - 6 + I] := Ord(ALPHABET[(RandBuf[I] mod 62)]);
     Fd := open(Template, O_RDWR or O_CREAT or O_EXCL, 384);   { 0600 }
@@ -264,8 +273,9 @@ begin
   Pid := fork();
   if Pid = 0 then
   begin
-    { Child: replace image; on failure exit 127 like the shell. }
-    execve(PChar(@ShPath[0]), @Argv[0], nil);
+    { Child: replace image; on failure exit 127 like the shell.  Forward the
+      process environment so the spawned shell sees PATH/HOME/etc. }
+    execve(PChar(@ShPath[0]), @Argv[0], environ);
     _exit(127);
   end;
   if Pid < 0 then Exit(-1);

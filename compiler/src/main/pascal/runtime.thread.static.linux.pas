@@ -178,10 +178,9 @@ end;
   Args (SysV): %rdi=Flags, %rsi=ChildStack(top), %rdx=ParentTid,
                %rcx=ChildTid, %r8=Tls, %r9=Entry, [stack]=EntryArg.
 
-  The new stack is pre-seeded by the caller with Entry and EntryArg so the child
-  can reach them after clone (the syscall does not propagate registers reliably
-  to a freshly cloned stack across all kernels - we read them from the stack).
-  Here we instead pass them through callee-saved regs that survive the syscall. }
+  The child stack is pre-seeded (below) with Entry and EntryArg so the child can
+  reach them after clone without relying on register state surviving across the
+  syscall: the child pops them off its own stack. }
 function _clone_thread(Flags: Int64; ChildStack, ParentTid, ChildTid,
                        Tls, Entry, EntryArg: Pointer): Int64;
   assembler; nostackframe;
@@ -252,6 +251,7 @@ begin
   if Tid < 0 then
   begin
     munmap(Region, STACK_SIZE);
+    FreeThreadTLS(Tls);   { reclaim the per-thread TLS block too }
     Result := 11;   { EAGAIN }
     Exit;
   end;
