@@ -670,11 +670,30 @@ begin
   { Strip a brace comment (open/close = ASCII 123/125) that survived the lexer:
     a whole-line or trailing comment inside an asm block.  Single line only;
     remove the span from the open brace to the matching close brace, or to end
-    of line when unterminated. }
+    of line when unterminated.  Skip over quoted strings so that a brace INSIDE
+    a .ascii string literal (the string-const data the native backend emits) is
+    left intact rather than mistaken for a comment. }
   P := 0;
   while P < Length(S) do
   begin
-    if S[P] = 123 then
+    if S[P] = Ord('"') then
+    begin
+      { Skip the whole quoted string, honouring \" escapes. }
+      P := P + 1;
+      while P < Length(S) do
+      begin
+        if S[P] = Ord('\') then
+          P := P + 2
+        else if S[P] = Ord('"') then
+        begin
+          P := P + 1;
+          Break;
+        end
+        else
+          P := P + 1;
+      end;
+    end
+    else if S[P] = 123 then
     begin
       Q := P + 1;
       while (Q < Length(S)) and (S[Q] <> 125) do
