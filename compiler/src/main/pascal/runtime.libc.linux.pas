@@ -8,31 +8,24 @@
 
 unit runtime.libc.linux;
 
-// libc-shaped leaves that are MORE than a raw syscall — they need logic the
+// libc-shaped leaves that are MORE than a raw syscall - they need logic the
 // kernel does not provide: PATH/env lookup, the libc-style return shapes, etc.
 // Built on the raw syscalls in runtime.syscall.linux.  Linked only in a
 // --static (libc-free) build (docs/linux-syscall-migration.adoc).
 //
-// These DEFINE the bare POSIX names (getcwd, getenv, …) that rtl.platform.posix
+// These DEFINE the bare POSIX names (getcwd, getenv,  ) that rtl.platform.posix
 // imports via `external name`, so they resolve here instead of libc.so.6.
 
 interface
 
 uses
-  runtime.syscall.linux;
-
-{ The process environment vector (NULL-terminated array of "KEY=VALUE" PChars).
-  Captured by the freestanding _start (runtime.start.static.linux) from the
-  initial process stack; libc would otherwise own this symbol.  getenv/execvp
-  read it. }
-var
-  environ: Pointer;
+  runtime.syscall.linux;   { provides `environ`, captured by _start }
 
 { libc-shaped getcwd: returns Buf on success, nil on error (the raw syscall
   returns a length / -errno). }
 function getcwd(Buf: PChar; Size: Int64): PChar;
 
-{ getenv: linear scan of `environ` for "Name=" → returns a pointer to the value
+{ getenv: linear scan of `environ` for "Name="   returns a pointer to the value
   (just past '='), or nil if not present. }
 function getenv(Name: PChar): PChar;
 
@@ -47,7 +40,7 @@ function waitpid(Pid: Integer; Status: Pointer; Options: Integer): Integer;
   NULL-terminated argument vector; the current `environ` is passed as envp. }
 function execvp(File_: PChar; Argv: Pointer): Integer;
 
-{ sysconf for the few names the RTL queries — currently only the online CPU
+{ sysconf for the few names the RTL queries - currently only the online CPU
   count (_SC_NPROCESSORS_ONLN = 84), via sched_getaffinity + popcount. }
 function sysconf(Name: Integer): Int64;
 
@@ -103,7 +96,7 @@ begin
   if environ = nil then Exit;
   NLen := CStrLen(Name);
   { environ is a NULL-terminated array of PChar; read the I-th slot as a
-    Pointer at environ + I*8 (PPointer deref, the RTL idiom — no [] on a typed
+    Pointer at environ + I*8 (PPointer deref, the RTL idiom - no [] on a typed
     pointer). }
   Off := 0;
   Entry := PChar(PPointer(Pointer(PChar(environ) + Off))^);
@@ -148,7 +141,7 @@ begin
   if HasSlash then
     Result := execve(File_, Argv, environ)
   else
-    { No PATH search yet — try as-is so the failure is the kernel's ENOENT
+    { No PATH search yet - try as-is so the failure is the kernel's ENOENT
       rather than a silent wrong result. }
     Result := execve(File_, Argv, environ);
 end;

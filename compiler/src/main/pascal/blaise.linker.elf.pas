@@ -817,12 +817,19 @@ var
   M: TMergedSection;
   Addr: Int64;
   HdrBytes: Int64;
-  IsAlloc, IsExec, IsWrite: Boolean;
+  IsAlloc, IsExec, IsWrite, HasTlsSec: Boolean;
 begin
-  { Program-header count is known: PT_LOAD x2 (exec run, write run).
-    Reserve header space so the first section's file offset — which
-    equals (addr - base) — clears the headers.  Elf64_Phdr = 56. }
-  HdrBytes := ELF64_EHDR_SIZE + 2 * 56;
+  { Program headers: PT_LOAD x2 (exec run, write run), plus PT_TLS when the
+    program has any TLS section (.tdata/.tbss).  Reserve header space so the
+    first section's file offset (= addr - base) clears the headers; otherwise
+    the first section would overlap and overwrite the PT_TLS phdr.  Phdr = 56. }
+  HasTlsSec := False;
+  for I := 0 to FMerger.Merged.Count - 1 do
+    if (FMerger.Merged.Get(I).Flags and SHF_TLS) <> 0 then HasTlsSec := True;
+  if HasTlsSec then
+    HdrBytes := ELF64_EHDR_SIZE + 3 * 56
+  else
+    HdrBytes := ELF64_EHDR_SIZE + 2 * 56;
 
   { Executable run: header bytes share its first page. }
   Addr := FTarget.BaseAddr + HdrBytes;
@@ -844,14 +851,16 @@ begin
       Self.PlaceSection(M, Addr);
   end;
 
-  { Writable run starts on a fresh page. }
+  { Writable run starts on a fresh page.  TLS sections (.tdata/.tbss, SHF_TLS)
+    are placed separately below and must be skipped here. }
   Addr := LkAlignUp(Addr, FTarget.PageSize);
   for I := 0 to FMerger.Merged.Count - 1 do
   begin
     M := FMerger.Merged.Get(I);
     IsAlloc := (M.Flags and SHF_ALLOC) <> 0;
     IsWrite := (M.Flags and SHF_WRITE) <> 0;
-    if IsAlloc and IsWrite and (M.ShType <> SHT_NOBITS) then
+    if IsAlloc and IsWrite and (M.ShType <> SHT_NOBITS)
+       and ((M.Flags and SHF_TLS) = 0) then
       Self.PlaceSection(M, Addr);
   end;
   for I := 0 to FMerger.Merged.Count - 1 do
@@ -859,8 +868,35 @@ begin
     M := FMerger.Merged.Get(I);
     IsAlloc := (M.Flags and SHF_ALLOC) <> 0;
     IsWrite := (M.Flags and SHF_WRITE) <> 0;
-    if IsAlloc and IsWrite and (M.ShType = SHT_NOBITS) then
+    if IsAlloc and IsWrite and (M.ShType = SHT_NOBITS)
+       and ((M.Flags and SHF_TLS) = 0) then
       Self.PlaceSection(M, Addr);
+  end;
+
+  { TLS sections (.tdata then .tbss).  Mirror LayoutDynamic so a static ET_EXEC
+    also gets a correct TLS block + FTlsAddr/FTlsSize for TPOFF relocations and
+    the PT_TLS program header (which the freestanding _start reads to set up the
+    thread pointer). }
+  FTlsAddr := 0;
+  FTlsSize := 0;
+  FTlsAlign := 1;
+  FTlsFileSize := 0;
+  M := FMerger.FindMerged('.tdata');
+  if M <> nil then
+  begin
+    Self.PlaceSection(M, Addr);
+    FTlsAddr := Self.MergedAddr(M);
+    FTlsFileSize := M.Size;
+    FTlsSize := M.Size;
+    if M.Align > FTlsAlign then FTlsAlign := M.Align;
+  end;
+  M := FMerger.FindMerged('.tbss');
+  if M <> nil then
+  begin
+    Self.PlaceSection(M, Addr);
+    if FTlsAddr = 0 then FTlsAddr := Self.MergedAddr(M);
+    FTlsSize := FTlsSize + M.Size;
+    if M.Align > FTlsAlign then FTlsAlign := M.Align;
   end;
 end;
 
@@ -1804,7 +1840,12 @@ begin
   Buf := Buf + LkLE(0, 4);                   { e_flags }
   Buf := Buf + LkLE(ELF64_EHDR_SIZE, 2);     { e_ehsize }
   Buf := Buf + LkLE(56, 2);                  { e_phentsize }
-  Buf := Buf + LkLE(2, 2);                   { e_phnum (2 PT_LOAD) }
+  { 2 PT_LOAD, plus PT_TLS when the program has threadvars (so the static
+    _start can set up the thread pointer from the PT_TLS init image). }
+  if FTlsSize > 0 then
+    Buf := Buf + LkLE(3, 2)                  { e_phnum }
+  else
+    Buf := Buf + LkLE(2, 2);
   Buf := Buf + LkLE(ELF64_SHDR_SIZE, 2);     { e_shentsize }
   Buf := Buf + LkLE(0, 2);                   { e_shnum (patched later) }
   Buf := Buf + LkLE(0, 2);                   { e_shstrndx (patched later) }
@@ -1826,6 +1867,20 @@ begin
   Buf := Buf + LkLE(WriteFileHi - WriteLo, 8);{ p_filesz }
   Buf := Buf + LkLE(WriteMemHi - WriteLo, 8); { p_memsz }
   Buf := Buf + LkLE(PageSz, 8);               { p_align }
+
+  { PT_TLS — the initial TLS image (.tdata file bytes + .tbss zero size).  The
+    static _start reads this segment to build the per-thread block and set %fs.
+    Only emitted when the program has threadvars (e_phnum reflects this). }
+  if FTlsSize > 0 then
+  begin
+    Buf := Buf + LkLE(PT_TLS, 4) + LkLE(PF_R, 4);
+    Buf := Buf + LkLE(Self.FileOffset(FTlsAddr), 8);  { p_offset }
+    Buf := Buf + LkLE(FTlsAddr, 8);           { p_vaddr }
+    Buf := Buf + LkLE(FTlsAddr, 8);           { p_paddr }
+    Buf := Buf + LkLE(FTlsFileSize, 8);       { p_filesz (.tdata) }
+    Buf := Buf + LkLE(FTlsSize, 8);           { p_memsz (.tdata + .tbss) }
+    Buf := Buf + LkLE(FTlsAlign, 8);          { p_align }
+  end;
 
   { Pad headers out to the first section's file offset (the exec run's
     first byte sits at Self.FileOffset(ExecLo)). }

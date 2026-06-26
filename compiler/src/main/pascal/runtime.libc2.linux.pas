@@ -199,7 +199,7 @@ end;
 
 function localtime_r(T: Pointer; Tm: Pointer): Pointer;
 begin
-  { No timezone database in the freestanding RTL — treat local as UTC. }
+  { No timezone database in the freestanding RTL - treat local as UTC. }
   Result := gmtime_r(T, Tm);
 end;
 

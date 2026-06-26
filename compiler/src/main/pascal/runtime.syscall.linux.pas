@@ -8,13 +8,13 @@
 
 unit runtime.syscall.linux;
 
-// Linux x86_64 direct-syscall kernel leaf — the libc replacement for the thin
+// Linux x86_64 direct-syscall kernel leaf - the libc replacement for the thin
 // 1:1 syscall wrappers (docs/linux-syscall-migration.adoc).
 //
-// This unit DEFINES the bare POSIX names (open, read, write, …) that
+// This unit DEFINES the bare POSIX names (open, read, write,  ) that
 // rtl.platform.posix.pas references via `external name 'open'` etc.  When it is
 // linked into a program (the --static link-time swap), those symbols resolve
-// here as raw `syscall` stubs instead of being imported from libc.so.6 — so the
+// here as raw `syscall` stubs instead of being imported from libc.so.6 - so the
 // resulting binary is a freestanding static ET_EXEC with no libc, no PT_INTERP.
 //
 // System V AMD64 -> Linux syscall ABI:
@@ -64,7 +64,7 @@ function pipe(Fds: Pointer): Integer;
 function mmap(Addr: Pointer; Length: Int64; Prot, Flags, Fd: Integer;
              Offset: Int64): Pointer;
 function munmap(Addr: Pointer; Length: Int64): Integer;
-{ mremap(old, oldsz, newsz, flags, newaddr) — 5 args; raw syscall. }
+{ mremap(old, oldsz, newsz, flags, newaddr) - 5 args; raw syscall. }
 function mremap(OldAddr: Pointer; OldSize, NewSize: Int64; Flags: Integer;
                NewAddr: Pointer): Pointer;
 
@@ -74,7 +74,7 @@ function clock_gettime(ClockId: Integer; Ts: Pointer): Integer;
 
 { Process control + raw primitives the higher-level wrappers (runtime.libc.linux)
   build on.  These are the bare syscalls; the libc-shaped versions (execvp with
-  PATH search, waitpid, system, …) live in the wrapper unit. }
+  PATH search, waitpid, system,  ) live in the wrapper unit. }
 function fork: Integer;
 function execve(Path: PChar; Argv, Envp: Pointer): Integer;
 function wait4(Pid: Integer; Status: Pointer; Options: Integer;
@@ -88,14 +88,21 @@ function kill(Pid, Sig: Integer): Integer;
   written there.  The kernel syscall handles the out-param itself. }
 function sys_time(T: Pointer): Int64;
 { Raw getcwd(2): fills Buf (up to Size), returns the length INCLUDING the NUL on
-  success or -errno.  (libc's getcwd returns the buffer pointer — the wrapper in
+  success or -errno.  (libc's getcwd returns the buffer pointer - the wrapper in
   runtime.libc.linux adapts that.) }
 function sys_getcwd(Buf: PChar; Size: Int64): Int64;
 
-{ _exit(2) — exit_group, terminates all threads, runs NO atexit handlers.
+{ _exit(2) - exit_group, terminates all threads, runs NO atexit handlers.
   The bare `exit` (which DOES run atexit handlers, called by main's epilogue) is
   defined by runtime.libc2.linux alongside the registry, not here. }
 procedure _exit(Code: Integer);
+
+{ The process environment vector (NULL-terminated array of "KEY=VALUE" PChars),
+  captured by the freestanding _start from the initial stack.  Lives in this
+  base unit (not the higher libc wrapper) so _start can use ONLY this unit and
+  avoid a diamond import; runtime.libc.linux's getenv/execvp read it. }
+var
+  environ: Pointer;
 
 implementation
 

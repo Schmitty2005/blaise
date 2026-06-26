@@ -19,8 +19,8 @@ unit runtime.cstub;
 // (the inline-asm assembler already encodes the vector ops).
 //
 // Signatures match the C ABI the codegen assumes:
-//   void* memcpy(void* dst, const void* src, size_t n)   — returns dst
-//   void* memset(void* dst, int c, size_t n)             — returns dst
+//   void* memcpy(void* dst, const void* src, size_t n)   - returns dst
+//   void* memset(void* dst, int c, size_t n)             - returns dst
 //   int   memcmp(const void* a, const void* b, size_t n)
 //   size_t strlen(const char* s)
 
