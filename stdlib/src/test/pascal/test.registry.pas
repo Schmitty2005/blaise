@@ -28,7 +28,9 @@ uses
   WebSockets.Tests,
   HttpServer.Tests,
   Guid.Tests,
-  StrUtils.Tests;
+  StrUtils.Tests,
+  Console.Ansi.Colors.Tests,
+  Console.Ansi.Functions.Tests;
 
 implementation
 
