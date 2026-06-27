@@ -11244,8 +11244,40 @@ begin
         if Asgn.IsThreadVar then Self.MarkThreadVar(Asgn.Name);
         Self.EmitLeaqGlobal(Asgn.Name, '%rdi');
       end;
-      Self.Emit(Format(#9'movq $%d, %%rdx', [Asgn.ResolvedLhsType.RawSize()]));
-      Self.Emit(#9'callq memcpy');
+      { Record with managed fields (string / class / interface / dyn-array, or
+        nested record thereof): a bare memcpy would make the copy share the
+        source's references at the same refcount, so mutating either side later
+        drops a shared buffer to 0 and frees it under the other (use-after-free
+        / double-free).  Release the destination's prior fields, and — unless the
+        source already transferred ownership (+1, e.g. a record-returning
+        property getter / call whose Result owns its fields) — retain the
+        source's managed fields so the copy owns its own references.  Mirrors the
+        string/dyn-array assignment paths' NativeExprOwnsRef guard and the
+        record-field-store copy path. }
+      if (Asgn.ResolvedLhsType.Kind = tyRecord) and
+         not RecretManagedClean(TRecordTypeDesc(Asgn.ResolvedLhsType)) then
+      begin
+        { %rsi = source addr, %rdi = dest addr — preserve both across the ARC
+          calls in callee-saved registers (%rbx = source, %r15 = dest). }
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(#9'pushq %r15');
+        Self.Emit(#9'movq %rsi, %rbx');
+        Self.Emit(#9'movq %rdi, %r15');
+        if not NativeExprOwnsRef(Asgn.Expr) then
+          Self.EmitRecordFieldRetains(TRecordTypeDesc(Asgn.ResolvedLhsType), '%rbx');
+        Self.EmitRecordFieldReleases(TRecordTypeDesc(Asgn.ResolvedLhsType), '%r15');
+        Self.Emit(#9'movq %r15, %rdi');
+        Self.Emit(#9'movq %rbx, %rsi');
+        Self.Emit(Format(#9'movq $%d, %%rdx', [Asgn.ResolvedLhsType.RawSize()]));
+        Self.Emit(#9'callq memcpy');
+        Self.Emit(#9'popq %r15');
+        Self.Emit(#9'popq %rbx');
+      end
+      else
+      begin
+        Self.Emit(Format(#9'movq $%d, %%rdx', [Asgn.ResolvedLhsType.RawSize()]));
+        Self.Emit(#9'callq memcpy');
+      end;
     end
     else
     begin
