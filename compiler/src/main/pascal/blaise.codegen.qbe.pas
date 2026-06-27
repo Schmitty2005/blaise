@@ -5077,15 +5077,34 @@ begin
   end
   else if AExpr is TMethodCallExpr then
   begin
-    if TMethodCallExpr(AExpr).ResolvedMethod = nil then Exit;
-    MDecl := TMethodDecl(TMethodCallExpr(AExpr).ResolvedMethod);
-    Result := (MDecl.ResolvedReturnType <> nil) and
-              (MDecl.ResolvedReturnType.Kind in [tyRecord, tyStaticArray]);
+    { Interface (itab) dispatch has no ResolvedMethod — classify by the call's
+      resolved return type instead, so a record-returning itab call routes
+      through the sret/record-return path (EmitIntfSretDispatch) like a direct
+      record method call. }
+    if (TMethodCallExpr(AExpr).ResolvedClassType <> nil) and
+       (TMethodCallExpr(AExpr).ResolvedClassType.Kind = tyInterface) then
+      Result := (TMethodCallExpr(AExpr).ResolvedType <> nil) and
+                (TMethodCallExpr(AExpr).ResolvedType.Kind in [tyRecord, tyStaticArray])
+    else
+    begin
+      if TMethodCallExpr(AExpr).ResolvedMethod = nil then Exit;
+      MDecl := TMethodDecl(TMethodCallExpr(AExpr).ResolvedMethod);
+      Result := (MDecl.ResolvedReturnType <> nil) and
+                (MDecl.ResolvedReturnType.Kind in [tyRecord, tyStaticArray]);
+    end;
   end
   else if AExpr is TFieldAccessExpr then
   begin
     FldA := TFieldAccessExpr(AExpr);
     if not FldA.IsMethodCall then Exit;
+    { Zero-arg interface (itab) dispatch (G.GetThing): no ResolvedMethod —
+      classify by the resolved return type, as for the args form above. }
+    if FldA.IsInterfaceCall then
+    begin
+      Result := (FldA.ResolvedType <> nil) and
+                (FldA.ResolvedType.Kind in [tyRecord, tyStaticArray]);
+      Exit;
+    end;
     if FldA.ResolvedMethod = nil then Exit;
     MDecl := TMethodDecl(FldA.ResolvedMethod);
     Result := (MDecl.ResolvedReturnType <> nil) and
@@ -5563,9 +5582,11 @@ var
   ArgLine: string;
   SlotOff: Integer;
   PMark: Integer;
+  RetType: TRecordTypeDesc;
 begin
   PMark := PendingReleaseMark();
   AArgs := nil;
+  RetType := TRecordTypeDesc(TASTExpr(ACall).ResolvedType);
   if ACall is TMethodCallExpr then
   begin
     MCall := TMethodCallExpr(ACall);
@@ -5610,11 +5631,15 @@ begin
     EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
     EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
   end;
-  { Callee signature is (sret, Self, args...) — the same shape every
-    interface-returning method body declares (`l %_par__sret, l %_par_Self`). }
-  ArgLine := Format('l %s, l %s', [ASretAddr, SelfTemp]) +
+  { The visible arguments are (Self, method-args...).  The RECORD-RETURN ABI
+    (sret vs register-class) is decided by EmitRecordReturnCallSite from the
+    return type's classification — exactly as for a direct record-returning
+    call.  Passing an sret pointer unconditionally (the old behaviour) is only
+    correct for memory-class records; a register-class record return then
+    mismatched the callee ABI, shifting Self/args and corrupting memory. }
+  ArgLine := Format('l %s', [SelfTemp]) +
     IntfDispatchArgFragment(IntfDesc, IntfDesc.MethodIndex(MethName), AArgs);
-  EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+  EmitRecordReturnCallSite(FPtrTemp, ArgLine, RetType, ASretAddr);
   FlushPendingReleases(PMark);
 end;
 
@@ -6506,6 +6531,7 @@ var
   ItabName: string;
   SretTemp: string;
   PMark:    Integer;
+  RetTypeRec: TRecordTypeDesc;
 begin
   PMark := PendingReleaseMark();
 
@@ -6670,6 +6696,33 @@ begin
       ArgTemp := AllocTemp();
       EmitLine(Format('  %s =l loadl %s', [ArgTemp, SretTemp]));
       EmitLine(Format('  call $_ClassRelease(l %s)', [ArgTemp]));
+    end
+    else if (ACall.ResolvedReturnTypeDesc <> nil) and
+            (ACall.ResolvedReturnTypeDesc.Kind in [tyRecord, tyStaticArray]) then
+    begin
+      { Discarded RECORD/static-array return through itab dispatch: the callee
+        follows the record-return ABI (sret pointer for a memory-class record,
+        register return for a register-class one).  A plain scalar call here
+        (the old fall-through) handed the callee no sret buffer and mis-typed
+        the return, so for an sret record the first ARG register doubled as the
+        sret pointer — the callee received a garbage argument and wrote the
+        record over caller memory.  Route through EmitRecordReturnCallSite with
+        a throwaway destination so the correct ABI is used, then release the
+        throwaway's managed fields. }
+      RetTypeRec := TRecordTypeDesc(ACall.ResolvedReturnTypeDesc);
+      SretTemp := AllocTemp();
+      if ACall.ResolvedReturnTypeDesc.Kind = tyStaticArray then
+        EmitLine(Format('  %s =l alloc8 %d',
+          [SretTemp, ACall.ResolvedReturnTypeDesc.RawSize()]))
+      else if RetTypeRec.MaxAlign() >= 8 then
+        EmitLine(Format('  %s =l alloc8 %d', [SretTemp, RetTypeRec.TotalSize()]))
+      else
+        EmitLine(Format('  %s =l alloc4 %d', [SretTemp, RetTypeRec.TotalSize()]));
+      EmitLine(Format('  call $memset(l %s, w 0, l %d)',
+        [SretTemp, ACall.ResolvedReturnTypeDesc.RawSize()]));
+      EmitRecordReturnCallSite(FPtrTemp, ArgLine, RetTypeRec, SretTemp);
+      if ACall.ResolvedReturnTypeDesc.Kind = tyRecord then
+        EmitRecordReleaseFields(RetTypeRec, SretTemp);
     end
     else
       EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));

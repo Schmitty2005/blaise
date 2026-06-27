@@ -547,6 +547,15 @@ type
       EmitIntfSretCall: the 16-byte buffer is left at (%rsp); the caller loads
       the slots and pops it (addq $16, %rsp). }
     procedure EmitIntfSretMethodCall(ACall: TMethodCallExpr);
+    { Interface-method call (itab dispatch) RETURNING a RECORD: dispatch through
+      the itab and write the record result into the caller-supplied ADest,
+      honouring the full record-return ABI (hidden sret pointer for a
+      memory-class record; register capture for a register-class one).  Mirrors
+      the QBE EmitIntfSretDispatch helper.  ADestIsIndirect: ADest holds a
+      pointer to the destination buffer (var/out / Result), not the buffer. }
+    procedure EmitIntfRecordSretDispatch(ACall: TMethodCallExpr;
+                                         const ADest: string;
+                                         ADestIsIndirect: Boolean);
     { Class-receiver method call RETURNING an interface (Obj.Make() where Obj
       is class-typed): sret hidden first arg (%rdi), receiver in %rsi, static
       or vtable dispatch from the receiver's class.  Same caller contract as
@@ -4550,6 +4559,18 @@ end;
 function TX86_64Backend.IsNativeRecordCall(AExpr: TASTExpr): Boolean;
 begin
   Result := False;
+  { Interface (itab) dispatch has no ResolvedMethod — classify by the call's
+    resolved return type instead, so a record-returning itab call routes
+    through the sret/record-return path (EmitIntfRecordSretDispatch) like a
+    direct record method call.  Mirrors the QBE IsRecordCall interface case. }
+  if (AExpr is TMethodCallExpr) and
+     (TMethodCallExpr(AExpr).ResolvedClassType <> nil) and
+     (TMethodCallExpr(AExpr).ResolvedClassType.Kind = tyInterface) then
+  begin
+    Result := (TMethodCallExpr(AExpr).ResolvedType <> nil) and
+              (TMethodCallExpr(AExpr).ResolvedType.Kind = tyRecord);
+    Exit;
+  end;
   if (AExpr is TMethodCallExpr) and
      (TMethodCallExpr(AExpr).ResolvedMethod <> nil) and
      (TMethodDecl(TMethodCallExpr(AExpr).ResolvedMethod).ResolvedReturnType <> nil) and
@@ -4616,7 +4637,13 @@ end;
 
 procedure TX86_64Backend.EmitRecordCallSretAt(AExpr: TASTExpr; const ADest: string);
 begin
-  if AExpr is TMethodCallExpr then
+  if (AExpr is TMethodCallExpr) and
+     (TMethodCallExpr(AExpr).ResolvedClassType <> nil) and
+     (TMethodCallExpr(AExpr).ResolvedClassType.Kind = tyInterface) then
+    { Interface (itab) record-returning dispatch — EmitMethodSretCall raises on
+      a nil ResolvedMethod, so route through the itab record-return helper. }
+    Self.EmitIntfRecordSretDispatch(TMethodCallExpr(AExpr), ADest, False)
+  else if AExpr is TMethodCallExpr then
     Self.EmitMethodSretCall(TMethodCallExpr(AExpr), ADest, False)
   else if AExpr is TInheritedCallExpr then
     Self.EmitInheritedRecordSret(
@@ -9061,6 +9088,7 @@ var
   IsSretDiscard: Boolean;
   SretBufSize:   Integer;
   SretRT:        TRecordTypeDesc;
+  SretShim:      TMethodCallExpr;
 begin
   { Metaclass-var constructor dispatch in statement position: C.Create(args)
     where C is a 'class of' variable and the result is discarded.  Only the
@@ -9136,6 +9164,57 @@ begin
     { Discarded result: free the rc=1 instance. }
     Self.Emit(#9'movq %rax, %rdi');
     Self.Emit(#9'callq _ClassRelease');
+    Exit;
+  end;
+
+  { Discarded interface (itab) method call returning a RECORD: the callee
+    follows the record-return ABI (sret pointer for a memory-class record,
+    register return for a register-class one).  The plain EmitInterfaceCall
+    path below treats the return as a scalar / fat pointer and hands the callee
+    no sret buffer, so an sret record is written over caller memory.  Allocate
+    a zeroed throwaway buffer, dispatch into it, then release its managed
+    fields.  Mirrors the QBE EmitMethodCall record-discard branch. }
+  if (ACall.ResolvedClassType <> nil) and
+     (ACall.ResolvedClassType.Kind = tyInterface) and
+     (ACall.ResolvedReturnTypeDesc <> nil) and
+     (ACall.ResolvedReturnTypeDesc.Kind = tyRecord) then
+  begin
+    SretRT := TRecordTypeDesc(ACall.ResolvedReturnTypeDesc);
+    SretBufSize := (SretRT.TotalSize() + 15) and (-16);
+    Self.Emit(#9'pushq %rbx');
+    Self.Emit(Format(#9'subq $%d, %%rsp', [SretBufSize]));
+    Self.Emit(#9'movq %rsp, %rbx');
+    { Zero the buffer so EmitRecordFieldReleases sees nil managed fields if the
+      callee leaves any unset. }
+    Self.Emit(#9'movq %rbx, %rdi');
+    Self.Emit(#9'xorl %esi, %esi');
+    Self.Emit(Format(#9'movq $%d, %%rdx', [SretRT.TotalSize()]));
+    Self.Emit(#9'callq memset');
+    { EmitIntfRecordSretDispatch takes the expression form; build a transient
+      TMethodCallExpr view of this statement node (the relevant fields are the
+      same).  Args are borrowed and detached before Free. }
+    SretShim := TMethodCallExpr.Create();
+    try
+      SretShim.ObjectName       := ACall.ObjectName;
+      SretShim.Name             := ACall.Name;
+      SretShim.Args             := ACall.Args;
+      SretShim.ObjExpr          := ACall.ObjExpr;
+      SretShim.ResolvedClassType := ACall.ResolvedClassType;
+      SretShim.ResolvedType     := ACall.ResolvedReturnTypeDesc;
+      SretShim.IsGlobal         := ACall.IsGlobal;
+      SretShim.IsVarParam       := ACall.IsVarParam;
+      Self.EmitIntfRecordSretDispatch(SretShim, '(%rbx)', False);
+    finally
+      SretShim.Args    := nil;   { borrowed — do not free }
+      SretShim.ObjExpr := nil;   { borrowed — do not free }
+      SretShim.Free();
+    end;
+    { The dispatch may clobber %rbx during arg evaluation; %rsp is balanced and
+      still points at the buffer, so re-derive the buffer address. }
+    Self.Emit(#9'movq %rsp, %rbx');
+    Self.EmitRecordFieldReleases(SretRT, '%rbx');
+    Self.Emit(Format(#9'addq $%d, %%rsp', [SretBufSize]));
+    Self.Emit(#9'popq %rbx');
     Exit;
   end;
 
@@ -10793,6 +10872,24 @@ begin
       end
       else if (Asgn.ResolvedLhsType.Kind = tyRecord) and
               (Asgn.Expr is TMethodCallExpr) and
+              (TMethodCallExpr(Asgn.Expr).ResolvedClassType <> nil) and
+              (TMethodCallExpr(Asgn.Expr).ResolvedClassType.Kind = tyInterface) and
+              (TMethodCallExpr(Asgn.Expr).ResolvedType <> nil) and
+              (TMethodCallExpr(Asgn.Expr).ResolvedType.Kind = tyRecord) then
+      begin
+        { Interface (itab) record-returning dispatch into an implicit-Self
+          field — EmitRecordCallSretAt routes the itab case to the record-
+          return helper. }
+        Self.Emit(#9'pushq %rbx');
+        Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand('Self')]));
+        if ISFld.Offset > 0 then
+          Self.Emit(Format(#9'addq $%d, %%rbx', [ISFld.Offset]));
+        Self.EmitRecordFieldReleases(TRecordTypeDesc(Asgn.ResolvedLhsType), '%rbx');
+        Self.EmitIntfRecordSretDispatch(TMethodCallExpr(Asgn.Expr), '(%rbx)', False);
+        Self.Emit(#9'popq %rbx');
+      end
+      else if (Asgn.ResolvedLhsType.Kind = tyRecord) and
+              (Asgn.Expr is TMethodCallExpr) and
               (TMethodCallExpr(Asgn.Expr).ResolvedMethod <> nil) and
               (TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType <> nil) and
               (TMethodDecl(TMethodCallExpr(Asgn.Expr).ResolvedMethod).ResolvedReturnType.Kind = tyRecord) then
@@ -10974,6 +11071,41 @@ begin
         Self.EmitFuncCallSret(TFuncCallExpr(Asgn.Expr),
           Asgn.Name + '(%rip)', False);
       end;
+      Exit;
+    end;
+    { sret assignment: interface (itab) method call returning a record.  The
+      itab call has no ResolvedMethod, so it is classified by ResolvedClassType
+      = interface + ResolvedType = record.  EmitIntfRecordSretDispatch writes
+      the record straight into the destination, honouring the record-return ABI
+      (hidden sret pointer for a memory-class record; register capture for a
+      register-class one).  Mirrors the QBE EmitIntfSretDispatch path. }
+    if (Asgn.ResolvedLhsType <> nil) and
+       (Asgn.ResolvedLhsType.Kind = tyRecord) and
+       (Asgn.Expr is TMethodCallExpr) and
+       (TMethodCallExpr(Asgn.Expr).ResolvedClassType <> nil) and
+       (TMethodCallExpr(Asgn.Expr).ResolvedClassType.Kind = tyInterface) and
+       (TMethodCallExpr(Asgn.Expr).ResolvedType <> nil) and
+       (TMethodCallExpr(Asgn.Expr).ResolvedType.Kind = tyRecord) then
+    begin
+      { Release the destination's prior managed fields before overwriting it,
+        then dispatch.  The dispatch writes the constructed record (which owns
+        its managed fields +1) over the dest, so ownership transfers cleanly. }
+      Self.Emit(#9'pushq %rbx');
+      if FSretFunc and SameText(Asgn.Name, 'Result') then
+        Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand('Result')]))
+      else if Asgn.IsVarParam then
+        Self.Emit(Format(#9'movq %s, %%rbx', [Self.VarOperand(Asgn.Name)]))
+      else if Self.IsLocal(Asgn.Name) then
+        Self.Emit(Format(#9'leaq %s, %%rbx', [Self.VarOperand(Asgn.Name)]))
+      else
+      begin
+        Self.AddGlobal(Asgn.Name, Asgn.ResolvedLhsType);
+        if Asgn.IsThreadVar then Self.MarkThreadVar(Asgn.Name);
+        Self.EmitLeaqGlobal(Asgn.Name, '%rbx');
+      end;
+      Self.EmitRecordFieldReleases(TRecordTypeDesc(Asgn.ResolvedLhsType), '%rbx');
+      Self.EmitIntfRecordSretDispatch(TMethodCallExpr(Asgn.Expr), '(%rbx)', False);
+      Self.Emit(#9'popq %rbx');
       Exit;
     end;
     { sret assignment: method call returning a record (or jumbo set).
@@ -15754,6 +15886,209 @@ begin
   Self.EmitSretBufferSlideDown(HTotal);
   HD.Free();
   HK.Free();
+end;
+
+procedure TX86_64Backend.EmitIntfRecordSretDispatch(ACall: TMethodCallExpr;
+  const ADest: string; ADestIsIndirect: Boolean);
+var
+  I, SlotOff, ArgN, Slots: Integer;
+  Arg: TASTExpr;
+  IntfD: TInterfaceTypeDesc;
+  HD: TList<Integer>;
+  HK: TList<Integer>;
+  HTotal, Pushed: Integer;
+  VFlags: string;
+  IE: TIdentExpr;
+  OverflowBytes, ABase: Integer;
+  RC: TRecReturnClass;
+  RetRec: TRecordTypeDesc;
+begin
+  IntfD := TInterfaceTypeDesc(ACall.ResolvedClassType);
+  RetRec := TRecordTypeDesc(ACall.ResolvedType);
+  RC := ClassifyRecordReturn(RetRec);
+  ArgN := 0;
+  if ACall.Args <> nil then ArgN := ACall.Args.Count;
+
+  { Resolve the destination to an ABSOLUTE pointer FIRST, in callee-saved %r14,
+    before any %rsp movement (arg pushes / overflow spill) can drift a
+    %rsp-relative ADest. }
+  Self.Emit(#9'pushq %r14');
+  if ADestIsIndirect then
+    Self.Emit(Format(#9'movq %s, %%r14', [ADest]))
+  else
+    Self.Emit(Format(#9'leaq %s, %%r14', [ADest]));
+
+  { Same unknown-signature hoist as EmitIntfSretMethodCall; the region sits
+    BELOW any sret buffer space we reserve. }
+  HD := TList<Integer>.Create();
+  HK := TList<Integer>.Create();
+  VFlags := IntfD.MethodParamVarFlagsStr(IntfD.MethodIndex(ACall.Name));
+  HTotal := Self.EmitArgHoist(nil, nil, False, VFlags, ACall.Args, HD, HK);
+  Pushed := 0;
+  { Push args left-to-right; interface args push obj then itab (2 slots). }
+  for I := 0 to ArgN - 1 do
+  begin
+    Arg := TASTExpr(ACall.Args.Items[I]);
+    if HK.Get(I) >= akRecCall then
+    begin
+      Self.Emit(Format(#9'movq %d(%%rsp), %%rax', [HTotal - HD.Get(I) + Pushed]));
+      Self.Emit(#9'pushq %rax');
+    end
+    else if Self.VarFlagAt(VFlags, I) then
+    begin
+      Self.EmitVarArgAddrToRax(Arg);
+      Self.Emit(#9'pushq %rax');
+    end
+    else if (Arg.ResolvedType <> nil) and (Arg.ResolvedType.Kind = tyInterface) then
+    begin
+      if Arg is TIdentExpr then
+      begin
+        if TIdentExpr(Arg).IsImplicitSelf and
+           (TIdentExpr(Arg).ImplicitFieldInfo <> nil) then
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand('Self')]));
+          if TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset > 0 then
+            Self.Emit(Format(#9'addq $%d, %%rax',
+              [TFieldInfo(TIdentExpr(Arg).ImplicitFieldInfo).Offset]));
+          Self.Emit(#9'movq (%rax), %rcx');
+          Self.Emit(#9'movq 8(%rax), %rdx');
+          Self.Emit(#9'pushq %rcx');
+          Self.Emit(#9'pushq %rdx');
+        end
+        else
+        begin
+          Self.Emit(Format(#9'movq %s, %%rax',
+            [Self.IntfObjOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
+          Self.Emit(Format(#9'movq %s, %%rcx',
+            [Self.IntfItabOperand(TIdentExpr(Arg).Name, TIdentExpr(Arg).IsGlobal)]));
+          Self.Emit(#9'pushq %rax');
+          Self.Emit(#9'pushq %rcx');
+        end;
+      end
+      else if Arg is TFieldAccessExpr then
+      begin
+        Self.EmitInterfaceFieldAddr(TFieldAccessExpr(Arg), '%rax');
+        Self.Emit(#9'movq (%rax), %rcx');
+        Self.Emit(#9'movq 8(%rax), %rdx');
+        Self.Emit(#9'pushq %rcx');
+        Self.Emit(#9'pushq %rdx');
+      end
+      else
+        raise ENativeCodeGenError.Create(
+          'native backend: unsupported interface arg expression in sret interface record dispatch');
+    end
+    else
+    begin
+      Self.EmitExprToEax(Arg);
+      Self.Emit(#9'pushq %rax');
+    end;
+    if (HK.Get(I) < akRecCall) and (not Self.VarFlagAt(VFlags, I)) and
+       (Arg.ResolvedType <> nil) and
+       (Arg.ResolvedType.Kind = tyInterface) then
+      Pushed := Pushed + 16
+    else
+      Pushed := Pushed + 8;
+  end;
+  { Resolve the receiver: obj into %r10, itab into %rax. }
+  if (ACall.ObjExpr <> nil) and (ACall.ObjExpr is TFieldAccessExpr) then
+  begin
+    Self.EmitInterfaceFieldAddr(TFieldAccessExpr(ACall.ObjExpr), '%r10');
+    Self.Emit(#9'movq 8(%r10), %rax');
+    Self.Emit(#9'movq (%r10), %r10');
+  end
+  else if (ACall.ObjExpr <> nil) and (ACall.ObjExpr is TIdentExpr) and
+          TIdentExpr(ACall.ObjExpr).IsImplicitSelf and
+          (TIdentExpr(ACall.ObjExpr).ImplicitFieldInfo <> nil) then
+  begin
+    IE := TIdentExpr(ACall.ObjExpr);
+    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand('Self')]));
+    if TFieldInfo(IE.ImplicitFieldInfo).Offset > 0 then
+      Self.Emit(Format(#9'addq $%d, %%r10',
+        [TFieldInfo(IE.ImplicitFieldInfo).Offset]));
+    Self.Emit(#9'movq 8(%r10), %rax');
+    Self.Emit(#9'movq (%r10), %r10');
+  end
+  else if (ACall.ObjExpr <> nil) and (ACall.ObjExpr is TIdentExpr) then
+  begin
+    IE := TIdentExpr(ACall.ObjExpr);
+    Self.Emit(Format(#9'movq %s, %%r10',
+      [Self.IntfObjOperand(IE.Name, IE.IsGlobal)]));
+    Self.Emit(Format(#9'movq %s, %%rax',
+      [Self.IntfItabOperand(IE.Name, IE.IsGlobal)]));
+  end
+  else if ACall.ObjExpr <> nil then
+    raise ENativeCodeGenError.Create(
+      'native backend: unsupported receiver expression in sret interface record dispatch')
+  else if ACall.IsVarParam then
+  begin
+    Self.Emit(Format(#9'movq %s, %%r10', [Self.VarOperand(ACall.ObjectName)]));
+    Self.Emit(#9'movq 8(%r10), %rax');
+    Self.Emit(#9'movq (%r10), %r10');
+  end
+  else
+  begin
+    Self.Emit(Format(#9'movq %s, %%r10',
+      [Self.IntfObjOperand(ACall.ObjectName, ACall.IsGlobal)]));
+    Self.Emit(Format(#9'movq %s, %%rax',
+      [Self.IntfItabOperand(ACall.ObjectName, ACall.IsGlobal)]));
+  end;
+  SlotOff := IntfD.MethodIndex(ACall.Name) * 8;
+  if SlotOff = 0 then
+    Self.Emit(#9'movq (%rax), %r11')
+  else
+    Self.Emit(Format(#9'movq %d(%%rax), %%r11', [SlotOff]));
+
+  { Count the arg SLOTS (var positions one slot; interface args two). }
+  Slots := 0;
+  for I := 0 to ArgN - 1 do
+  begin
+    Arg := TASTExpr(ACall.Args.Items[I]);
+    if (not Self.VarFlagAt(VFlags, I)) and (Arg.ResolvedType <> nil) and
+       (Arg.ResolvedType.Kind = tyInterface) then
+      Inc(Slots, 2)
+    else
+      Inc(Slots);
+  end;
+
+  if RC = rcSret then
+  begin
+    { Memory-class record: hidden sret pointer in %rdi, receiver obj in %rsi,
+      visible args from %rdx (base index 2).  The dest buffer is %r14. }
+    Self.Emit(#9'movq %r14, %rdi');
+    Self.Emit(#9'xorl %esi, %esi');
+    Self.Emit(Format(#9'movq $%d, %%rdx', [RetRec.TotalSize()]));
+    Self.Emit(#9'pushq %r10');           { preserve receiver obj across memset }
+    Self.Emit(#9'pushq %r11');           { preserve fptr across memset }
+    Self.Emit(#9'callq memset');
+    Self.Emit(#9'popq %r11');
+    Self.Emit(#9'popq %r10');
+    ABase := 2;
+    OverflowBytes := Self.EmitSretRegArgs(Slots, ABase);
+    Self.Emit(#9'movq %r10, %rsi');
+    Self.Emit(#9'movq %r14, %rdi');
+    Self.Emit(#9'callq *%r11');
+    if OverflowBytes > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rsp', [OverflowBytes]));
+    Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 0, True);
+  end
+  else
+  begin
+    { Register-class record: NO hidden sret arg.  Receiver obj in %rdi,
+      visible args from %rsi (base index 1).  Capture the register return
+      into the dest buffer (%r14). }
+    ABase := 1;
+    OverflowBytes := Self.EmitSretRegArgs(Slots, ABase);
+    Self.Emit(#9'movq %r10, %rdi');
+    Self.Emit(#9'callq *%r11');
+    if OverflowBytes > 0 then
+      Self.Emit(Format(#9'addq $%d, %%rsp', [OverflowBytes]));
+    { %r14 still holds the dest pointer (callee-saved across the call). }
+    Self.EmitRecordRegReturnCapture('%r14', RetRec, RC, True);
+    Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 0, True);
+  end;
+  HD.Free();
+  HK.Free();
+  Self.Emit(#9'popq %r14');
 end;
 
 procedure TX86_64Backend.EmitClassIntfSretMethodCall(ACall: TMethodCallExpr);
