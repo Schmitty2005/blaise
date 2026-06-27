@@ -68,6 +68,11 @@ type
       locals entirely, so every stored element leaked on BOTH backends.  The
       fix releases each element at scope exit. }
     procedure TestDebug_StaticArrayOfInterface_NoLeak;
+    { A string-returning call/getter used DIRECTLY as a Write/WriteLn argument
+      (WriteLn(GetBar)) returns a fresh +1 string that _SysWriteStr only borrows.
+      EmitWrite previously never released it, leaking one string per call.  The
+      fix releases the owned string transient after the write (both backends). }
+    procedure TestDebug_WriteLnCallArg_NoLeak;
   end;
 
 implementation
@@ -752,6 +757,34 @@ const
     end.
     ''';
 
+  { A string-returning getter used directly as a WriteLn argument.  The getter
+    returns a fresh +1 string (Copy result); WriteLn only borrows it, so the
+    caller must release it after the write.  Three calls => three leaks before
+    the fix. }
+  SrcWriteLnCallArg = '''
+    program P;
+    type
+      TFoo = class
+      private
+        function GetBar: String;
+      public
+        property Bar: String read GetBar;
+      end;
+    function TFoo.GetBar: String;
+    begin
+      Result := Copy('abcd', 1, 3);
+    end;
+    var
+      X: TFoo;
+    begin
+      X := TFoo.Create;
+      WriteLn(X.Bar);
+      WriteLn(X.Bar);
+      WriteLn(X.Bar);
+      X := nil;
+    end.
+    ''';
+
 procedure TE2ELeakCheckTests.TestDebug_ReceiverFieldAccess_NoLeak;
 var
   Output: string;
@@ -785,6 +818,24 @@ begin
     CompileAndRunWithRTLDebugOn(beNative, SrcStaticArrayOfInterface, Output, ExitCode, True));
   AssertEquals('exit 0 (native)', 0, ExitCode);
   AssertEquals('stdout (native)', 'abc' + LE, Output);
+  AssertTrue('no leak report (native), got: ' + Output, Pos('leak', Output) < 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_WriteLnCallArg_NoLeak;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run (qbe)',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcWriteLnCallArg, Output, ExitCode, True));
+  AssertEquals('exit 0 (qbe)', 0, ExitCode);
+  AssertEquals('stdout (qbe)', 'bcd' + LE + 'bcd' + LE + 'bcd' + LE, Output);
+  AssertTrue('no leak report (qbe), got: ' + Output, Pos('leak', Output) < 0);
+  AssertTrue('compile+run (native)',
+    CompileAndRunWithRTLDebugOn(beNative, SrcWriteLnCallArg, Output, ExitCode, True));
+  AssertEquals('exit 0 (native)', 0, ExitCode);
+  AssertEquals('stdout (native)', 'bcd' + LE + 'bcd' + LE + 'bcd' + LE, Output);
   AssertTrue('no leak report (native), got: ' + Output, Pos('leak', Output) < 0);
 end;
 

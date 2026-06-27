@@ -9551,7 +9551,16 @@ begin
     IsString := (ArgExpr.ResolvedType <> nil) and ArgExpr.ResolvedType.IsString();
     ArgTemp  := EmitExpr(ArgExpr);
     if IsString then
-      EmitLine(Format('  call $_SysWriteStr(w %s, l %s)', [FdLit, ArgTemp]))
+    begin
+      EmitLine(Format('  call $_SysWriteStr(w %s, l %s)', [FdLit, ArgTemp]));
+      { A string argument that OWNS its reference (a call/concat result that
+        returned a fresh +1 string) is borrowed by _SysWriteStr and nothing
+        else holds it — release the transient here, or it leaks once per
+        Write/WriteLn.  Plain variables / literals are borrowed (ExprOwnsRef
+        false) and must not be released. }
+      if ExprOwnsRef(ArgExpr) then
+        EmitLine(Format('  call $_StringRelease(l %s)', [ArgTemp]));
+    end
     else if (ArgExpr.ResolvedType <> nil) and
             (ArgExpr.ResolvedType.Kind = tyBoolean) then
       EmitLine(Format('  call $_SysWriteBool(w %s, w %s)', [FdLit, ArgTemp]))

@@ -9685,9 +9685,27 @@ begin
     if K in [tyString, tyPChar] then
     begin
       Self.EmitExprToEax(ArgExpr);
-      Self.Emit(#9'movq %rax, %rsi');
-      Self.Emit(Format(#9'movl %s, %%edi', [FdLit]));
-      Self.Emit(#9'callq _SysWriteStr');
+      { A string argument that OWNS its reference (a call/concat result that
+        returned a fresh +1 string) is borrowed by _SysWriteStr and nothing
+        else holds it — release the transient after the write, or it leaks
+        once per Write/WriteLn.  Stash the pointer across the call, then
+        release.  Plain variables / literals / PChars are borrowed and are
+        not released. }
+      if (K = tyString) and NativeExprOwnsRef(ArgExpr) then
+      begin
+        Self.Emit(#9'pushq %rax');
+        Self.Emit(#9'movq %rax, %rsi');
+        Self.Emit(Format(#9'movl %s, %%edi', [FdLit]));
+        Self.Emit(#9'callq _SysWriteStr');
+        Self.Emit(#9'popq %rdi');
+        Self.Emit(#9'callq _StringRelease');
+      end
+      else
+      begin
+        Self.Emit(#9'movq %rax, %rsi');
+        Self.Emit(Format(#9'movl %s, %%edi', [FdLit]));
+        Self.Emit(#9'callq _SysWriteStr');
+      end;
     end
     else if K = tyDouble then
     begin
