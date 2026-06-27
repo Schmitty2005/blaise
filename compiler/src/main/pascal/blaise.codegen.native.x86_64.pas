@@ -385,6 +385,10 @@ type
                            AType: TTypeDesc);
     { Lower one statement. }
     procedure EmitStmt(AStmt: TASTStmt);
+    { Lower every statement in AList (a TObjectList of TASTStmt) in order — the
+      compound-body inline idiom used for try/finally/except bodies, loop
+      bodies, the program block, and unit init sections.  Nil AList is a no-op. }
+    procedure EmitStmtList(AList: TObjectList);
     { Lower a Write/WriteLn call (ANewline = WriteLn). }
     procedure EmitWrite(ACall: TProcCall; ANewline: Boolean);
     { Lower a for loop. }
@@ -407,6 +411,18 @@ type
       For try/finally frames, emits the finally body inline.
       For try/except frames, only calls _PopExcFrame. }
     procedure EmitExcUnwind(ATargetDepth: Integer);
+    { Emit the shared try-frame entry sequence: take the next pre-allocated
+      512-byte exc-frame slot, _PushExcFrame, bump FExcDepth, push AFinallyBody
+      onto FFinallyStack (nil for a try/except frame — keeps the stack index-
+      aligned with FExcDepth), then _blaise_setjmp; branch to ALblExc on the
+      longjmp return (eax<>0) or fall through to ALblTry.  Shared verbatim by
+      both EmitTryFinallyStmt and EmitTryExceptStmt. }
+    procedure EmitTryFramePrologue(AFinallyBody: TCompoundStmt;
+      const ALblExc, ALblTry: string);
+    { Emit the shared frame-pop bookkeeping triplet: _PopExcFrame, Dec(FExcDepth),
+      drop the FFinallyStack top.  The Dec and the Delete must always travel with
+      the pop, so they are emitted together here. }
+    procedure EmitPopExcFrame;
     { Lower try/finally. }
     procedure EmitTryFinallyStmt(AStmt: TTryFinallyStmt);
     { Lower try/except. }
@@ -10592,24 +10608,16 @@ begin
     begin
       FinBody := FFinallyStack.Get(I - 1);
       if FinBody <> nil then
-        for J := 0 to FinBody.Stmts.Count - 1 do
-          Self.EmitStmt(TASTStmt(FinBody.Stmts.Items[J]));
+        Self.EmitStmtList(FinBody.Stmts);
     end;
   end;
 end;
 
-procedure TX86_64Backend.EmitTryFinallyStmt(AStmt: TTryFinallyStmt);
+procedure TX86_64Backend.EmitTryFramePrologue(AFinallyBody: TCompoundStmt;
+  const ALblExc, ALblTry: string);
 var
-  LblTry:    string;
-  LblFinExc: string;
-  LblEnd:    string;
   FrameSlot: string;
-  I:         Integer;
 begin
-  LblTry    := Self.NewLabel('try_body');
-  LblFinExc := Self.NewLabel('fin_exc');
-  LblEnd    := Self.NewLabel('fin_end');
-
   { Use the next pre-allocated 512-byte frame slot from BuildFrame. }
   FrameSlot := '_exc_frame_' + IntToStr(FExcFrameNext);
   Inc(FExcFrameNext);
@@ -10618,24 +10626,40 @@ begin
   Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand(FrameSlot)]));
   Self.Emit(#9'callq _PushExcFrame');
   Inc(FExcDepth);
-  FFinallyStack.Add(AStmt.FinallyBody);
+  FFinallyStack.Add(AFinallyBody);
 
   { _blaise_setjmp(frame): returns 0 on normal entry, 1 on exception longjmp. }
   Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand(FrameSlot)]));
   Self.Emit(#9'callq _blaise_setjmp');
   Self.Emit(#9'testl %eax, %eax');
-  Self.Emit(#9'jnz ' + LblFinExc);
-  Self.Emit(#9'jmp ' + LblTry);
+  Self.Emit(#9'jnz ' + ALblExc);
+  Self.Emit(#9'jmp ' + ALblTry);
+end;
 
-  { Normal path: run try body, pop frame, run finally, done. }
-  Self.Emit(LblTry + ':');
-  for I := 0 to AStmt.TryBody.Stmts.Count - 1 do
-    Self.EmitStmt(TASTStmt(AStmt.TryBody.Stmts.Items[I]));
+procedure TX86_64Backend.EmitPopExcFrame;
+begin
   Self.Emit(#9'callq _PopExcFrame');
   Dec(FExcDepth);
   FFinallyStack.Delete(FFinallyStack.Count - 1);
-  for I := 0 to AStmt.FinallyBody.Stmts.Count - 1 do
-    Self.EmitStmt(TASTStmt(AStmt.FinallyBody.Stmts.Items[I]));
+end;
+
+procedure TX86_64Backend.EmitTryFinallyStmt(AStmt: TTryFinallyStmt);
+var
+  LblTry:    string;
+  LblFinExc: string;
+  LblEnd:    string;
+begin
+  LblTry    := Self.NewLabel('try_body');
+  LblFinExc := Self.NewLabel('fin_exc');
+  LblEnd    := Self.NewLabel('fin_end');
+
+  Self.EmitTryFramePrologue(AStmt.FinallyBody, LblFinExc, LblTry);
+
+  { Normal path: run try body, pop frame, run finally, done. }
+  Self.Emit(LblTry + ':');
+  Self.EmitStmtList(AStmt.TryBody.Stmts);
+  Self.EmitPopExcFrame();
+  Self.EmitStmtList(AStmt.FinallyBody.Stmts);
   Self.Emit(#9'jmp ' + LblEnd);
 
   { Exception path: capture exception, pop frame, run finally, re-raise.
@@ -10647,11 +10671,8 @@ begin
   Self.Emit(LblFinExc + ':');
   Self.Emit(#9'callq _CurrentException');
   Self.Emit(#9'pushq %rax');   { save exception pointer across finally body }
-  Self.Emit(#9'callq _PopExcFrame');
-  Dec(FExcDepth);
-  FFinallyStack.Delete(FFinallyStack.Count - 1);
-  for I := 0 to AStmt.FinallyBody.Stmts.Count - 1 do
-    Self.EmitStmt(TASTStmt(AStmt.FinallyBody.Stmts.Items[I]));
+  Self.EmitPopExcFrame();
+  Self.EmitStmtList(AStmt.FinallyBody.Stmts);
   Self.Emit(#9'popq %rdi');    { restore saved exception }
   Self.Emit(#9'callq _Reraise');
   Self.Emit(#9'jmp ' + LblEnd);  { unreachable; satisfies assembler block exit }
@@ -10666,37 +10687,21 @@ var
   LblEnd:    string;
   LblBody:   string;
   LblNext:   string;
-  FrameSlot: string;
-  I, J:      Integer;
+  I:         Integer;
   H:         TExceptHandlerClause;
 begin
   LblTry    := Self.NewLabel('try_body');
   LblExcept := Self.NewLabel('except_handler');
   LblEnd    := Self.NewLabel('except_end');
 
-  FrameSlot := '_exc_frame_' + IntToStr(FExcFrameNext);
-  Inc(FExcFrameNext);
-
-  Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand(FrameSlot)]));
-  Self.Emit(#9'callq _PushExcFrame');
-  Inc(FExcDepth);
   { Push nil so FFinallyStack stays index-aligned with FExcDepth.
     A non-local exit crossing a try/except frame only pops it — no body to run. }
-  FFinallyStack.Add(nil);
-
-  Self.Emit(Format(#9'leaq %s, %%rdi', [Self.VarOperand(FrameSlot)]));
-  Self.Emit(#9'callq _blaise_setjmp');
-  Self.Emit(#9'testl %eax, %eax');
-  Self.Emit(#9'jnz ' + LblExcept);
-  Self.Emit(#9'jmp ' + LblTry);
+  Self.EmitTryFramePrologue(nil, LblExcept, LblTry);
 
   { Normal path: run try body, pop frame on clean exit. }
   Self.Emit(LblTry + ':');
-  for I := 0 to AStmt.TryBody.Stmts.Count - 1 do
-    Self.EmitStmt(TASTStmt(AStmt.TryBody.Stmts.Items[I]));
-  Self.Emit(#9'callq _PopExcFrame');
-  Dec(FExcDepth);
-  FFinallyStack.Delete(FFinallyStack.Count - 1);
+  Self.EmitStmtList(AStmt.TryBody.Stmts);
+  Self.EmitPopExcFrame();
   Self.Emit(#9'jmp ' + LblEnd);
 
   { Exception path: dispatch handlers.
@@ -10712,9 +10717,7 @@ begin
     { Capture current exception while our frame is still on the stack. }
     Self.Emit(#9'callq _CurrentException');
     Self.Emit(#9'pushq %rax');   { save exception across _PopExcFrame }
-    Self.Emit(#9'callq _PopExcFrame');
-    Dec(FExcDepth);
-    FFinallyStack.Delete(FFinallyStack.Count - 1);
+    Self.EmitPopExcFrame();
     Self.Emit(#9'popq %r15');    { exception in %r15 (callee-saved — survives handler bodies) }
 
     for I := 0 to AStmt.Handlers.Count - 1 do
@@ -10752,8 +10755,7 @@ begin
         else
           Self.Emit(Format(#9'movq %%r15, %s(%%rip)', [H.VarName]));
       end;
-      for J := 0 to H.Body.Stmts.Count - 1 do
-        Self.EmitStmt(TASTStmt(H.Body.Stmts.Items[J]));
+      Self.EmitStmtList(H.Body.Stmts);
       Self.Emit(#9'jmp ' + LblEnd);
 
       Self.Emit(LblNext + ':');
@@ -10762,8 +10764,7 @@ begin
     { No handler matched: run else body if any, otherwise re-raise. }
     if AStmt.ElseBody <> nil then
     begin
-      for J := 0 to AStmt.ElseBody.Stmts.Count - 1 do
-        Self.EmitStmt(TASTStmt(AStmt.ElseBody.Stmts.Items[J]));
+      Self.EmitStmtList(AStmt.ElseBody.Stmts);
       Self.Emit(#9'jmp ' + LblEnd);
     end
     else
@@ -10776,11 +10777,8 @@ begin
   else
   begin
     { Plain catch-all except body. }
-    Self.Emit(#9'callq _PopExcFrame');
-    Dec(FExcDepth);
-    FFinallyStack.Delete(FFinallyStack.Count - 1);
-    for I := 0 to AStmt.ExceptBody.Stmts.Count - 1 do
-      Self.EmitStmt(TASTStmt(AStmt.ExceptBody.Stmts.Items[I]));
+    Self.EmitPopExcFrame();
+    Self.EmitStmtList(AStmt.ExceptBody.Stmts);
     Self.Emit(#9'jmp ' + LblEnd);
   end;
 
@@ -10802,6 +10800,15 @@ begin
     Self.Emit(#9'movq %rax, %rdi');
     Self.Emit(#9'callq _Reraise');
   end;
+end;
+
+procedure TX86_64Backend.EmitStmtList(AList: TObjectList);
+var
+  I: Integer;
+begin
+  if AList = nil then Exit;
+  for I := 0 to AList.Count - 1 do
+    Self.EmitStmt(TASTStmt(AList.Items[I]));
 end;
 
 procedure TX86_64Backend.EmitStmt(AStmt: TASTStmt);
@@ -11930,8 +11937,7 @@ begin
   if AStmt is TCompoundStmt then
   begin
     Comp := TCompoundStmt(AStmt);
-    for I := 0 to Comp.Stmts.Count - 1 do
-      Self.EmitStmt(TASTStmt(Comp.Stmts.Items[I]));
+    Self.EmitStmtList(Comp.Stmts);
     Exit;
   end;
 
@@ -12010,8 +12016,7 @@ begin
     FBreakExcDepths.Push(FExcDepth);
     FContinueLabels.Push(LCond);
     FContinueExcDepths.Push(FExcDepth);
-    for I := 0 to RepS.Body.Stmts.Count - 1 do
-      Self.EmitStmt(TASTStmt(RepS.Body.Stmts.Items[I]));
+    Self.EmitStmtList(RepS.Body.Stmts);
     FContinueExcDepths.Pop();
     FContinueLabels.Pop();
     FBreakExcDepths.Pop();
@@ -16373,8 +16378,7 @@ begin
   if ADecl.NoStackFrame then
   begin
     if (ADecl.Body <> nil) then
-      for I := 0 to ADecl.Body.Stmts.Count - 1 do
-        Self.EmitStmt(TASTStmt(ADecl.Body.Stmts.Items[I]));
+      Self.EmitStmtList(ADecl.Body.Stmts);
     Self.DbgEndFunc();
     Self.Emit('.type ' + Sym + ', @function');
     FExitLabel    := '';
@@ -16699,8 +16703,7 @@ begin
   { Body.  FExitLabel directs Exit statements to the epilogue. }
   FExitLabel := Self.NewLabel('exit');
   if ADecl.Body <> nil then
-    for I := 0 to ADecl.Body.Stmts.Count - 1 do
-      Self.EmitStmt(TASTStmt(ADecl.Body.Stmts.Items[I]));
+    Self.EmitStmtList(ADecl.Body.Stmts);
   { Epilogue: Exit lands here.  The Result is loaded into %rax/%xmm0 only AFTER
     the ARC release passes below — those call _ClassRelease/_StringRelease, which
     clobber %rax (and may touch the XMM regs), so loading Result first would
@@ -16947,8 +16950,7 @@ begin
     Self.Emit(#9'callq _LeakTrackerEnable');
   { Program body. }
   FExitLabel := Self.NewLabel('main_exit');
-  for I := 0 to AProg.Block.Stmts.Count - 1 do
-    Self.EmitStmt(TASTStmt(AProg.Block.Stmts.Items[I]));
+  Self.EmitStmtList(AProg.Block.Stmts);
   { Epilogue: Exit lands here; release ARC-managed globals, then return 0.
     Mirrors the QBE backend, which releases each managed global at @main_exit so
     a global object's _FieldCleanup (and hence its destructor) runs at program
@@ -17083,8 +17085,7 @@ begin
     Self.Emit(NativeMangle(AUnit.Name) + '_init:');
     Self.Emit(#9'pushq %rbp');
     Self.Emit(#9'movq %rsp, %rbp');
-    for I := 0 to AUnit.InitStmts.Count - 1 do
-      Self.EmitStmt(TASTStmt(AUnit.InitStmts.Items[I]));
+    Self.EmitStmtList(AUnit.InitStmts);
     Self.Emit(#9'movl $0, %eax');
     Self.Emit(#9'leave');
     Self.Emit(#9'ret');
