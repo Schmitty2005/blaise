@@ -393,6 +393,12 @@ type
       offset: subtract the (non-zero) low bound, then multiply by the element
       size.  The read-path subscript sites all spell this the same way. }
     procedure EmitStaticElemScale(ASAT: TStaticArrayTypeDesc);
+    { After an sret interface call whose argument hoist left AHoistTotal bytes
+      of hoist region BELOW the 16-byte return buffer at (%rsp): reclaim the
+      hoist region and leave the fat pointer (obj, itab) re-pushed at (%rsp) so
+      the caller's `fat pointer at (%rsp)` contract holds.  No-op when
+      AHoistTotal is 0 (nothing was hoisted, buffer already at the top). }
+    procedure EmitSretBufferSlideDown(AHoistTotal: Integer);
     { Lower a Write/WriteLn call (ANewline = WriteLn). }
     procedure EmitWrite(ACall: TProcCall; ANewline: Boolean);
     { Lower a for loop. }
@@ -10796,6 +10802,18 @@ begin
   Self.Emit(Format(#9'imulq $%d, %%rax', [ASAT.ElementType.RawSize()]));
 end;
 
+procedure TX86_64Backend.EmitSretBufferSlideDown(AHoistTotal: Integer);
+begin
+  if AHoistTotal > 0 then
+  begin
+    Self.Emit(#9'movq (%rsp), %rax');
+    Self.Emit(#9'movq 8(%rsp), %rcx');
+    Self.Emit(Format(#9'addq $%d, %%rsp', [16 + AHoistTotal]));
+    Self.Emit(#9'pushq %rcx');
+    Self.Emit(#9'pushq %rax');
+  end;
+end;
+
 procedure TX86_64Backend.EmitStmt(AStmt: TASTStmt);
 var
   PC:    TProcCall;
@@ -15780,14 +15798,7 @@ begin
     and the region), then slide the buffer down over the region so the
     caller's contract holds. }
   Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 16, False);
-  if HTotal > 0 then
-  begin
-    Self.Emit(#9'movq (%rsp), %rax');
-    Self.Emit(#9'movq 8(%rsp), %rcx');
-    Self.Emit(Format(#9'addq $%d, %%rsp', [16 + HTotal]));
-    Self.Emit(#9'pushq %rcx');
-    Self.Emit(#9'pushq %rax');
-  end;
+  Self.EmitSretBufferSlideDown(HTotal);
   HD.Free();
   HK.Free();
 end;
@@ -15962,14 +15973,7 @@ begin
   { Post-call: release hoisted values, then slide the buffer down over the
     hoist region so the caller's `fat pointer at (%rsp)` contract holds. }
   Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 16, False);
-  if HTotal > 0 then
-  begin
-    Self.Emit(#9'movq (%rsp), %rax');
-    Self.Emit(#9'movq 8(%rsp), %rcx');
-    Self.Emit(Format(#9'addq $%d, %%rsp', [16 + HTotal]));
-    Self.Emit(#9'pushq %rcx');
-    Self.Emit(#9'pushq %rax');
-  end;
+  Self.EmitSretBufferSlideDown(HTotal);
   HD.Free();
   HK.Free();
 end;
@@ -16071,14 +16075,7 @@ begin
   { Post-call: release hoisted values, then slide the buffer down over the
     hoist region so the caller's `fat pointer at (%rsp)` contract holds. }
   Self.EmitHoistEpilogue(ACall.Args, HD, HK, HTotal, 16, False);
-  if HTotal > 0 then
-  begin
-    Self.Emit(#9'movq (%rsp), %rax');
-    Self.Emit(#9'movq 8(%rsp), %rcx');
-    Self.Emit(Format(#9'addq $%d, %%rsp', [16 + HTotal]));
-    Self.Emit(#9'pushq %rcx');
-    Self.Emit(#9'pushq %rax');
-  end;
+  Self.EmitSretBufferSlideDown(HTotal);
   HD.Free();
   HK.Free();
 end;
