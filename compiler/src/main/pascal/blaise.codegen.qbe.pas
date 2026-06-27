@@ -3836,15 +3836,22 @@ begin
     if not MC.IsConstructorCall then Result := True;
     Exit;
   end;
-  { Explicit function calls (free functions returning a class) — owns +1.
-    Type casts (TClassName(expr)) are also TFuncCallExpr but have nil
-    ResolvedDecl — they reinterpret the pointer without AddRef. }
   if AExpr is TFuncCallExpr then
   begin
     if (TFuncCallExpr(AExpr).ResolvedDecl <> nil) or
        TFuncCallExpr(AExpr).IsIndirectCall then
       Result := True;
     Exit;
+  end;
+  { Indexed property subscript: L[I] desugars to Subscript(FieldAccess(Items))
+    where Items has a ReadMethod.  EmitStringSubscriptExpr delegates to
+    EmitExpr(StrExpr) which calls the getter — the result inherits the +1. }
+  if AExpr is TStringSubscriptExpr then
+  begin
+    if (TStringSubscriptExpr(AExpr).StrExpr is TFieldAccessExpr) and
+       (TFieldAccessExpr(TStringSubscriptExpr(AExpr).StrExpr).PropRead <> nil) and
+       (TFieldAccessExpr(TStringSubscriptExpr(AExpr).StrExpr).PropRead.ReadMethod <> '') then
+      Result := True;
   end;
 end;
 
@@ -6144,7 +6151,9 @@ var
   PropTgt: string;
   IntfDesc: TInterfaceTypeDesc;
   SlotOff: Integer;
+  ObjReleaseTemp: string;
 begin
+  ObjReleaseTemp := '';
   { Interface property write: I.Prop := V — FieldName holds the SETTER
     (rewritten by semantic); dispatch it through the itab with V as the
     single argument, mirroring EmitMethodCall's interface branch. }
@@ -6250,6 +6259,8 @@ begin
       For record-typed bases (inline storage) EmitInstancePtr returns the address
       of the record in memory — EmitExpr would incorrectly load the contents. }
     PtrTemp := EmitInstancePtr(AAssign.ObjExpr);
+    if ExprOwnsRef(AAssign.ObjExpr) then
+      ObjReleaseTemp := PtrTemp;
     if AAssign.FieldInfo.Offset > 0 then
     begin
       Ptr := AllocTemp();
@@ -6330,6 +6341,8 @@ begin
   if AAssign.IsElemWrite then
   begin
     EmitFieldElemStore(AAssign, Ptr);
+    if ObjReleaseTemp <> '' then
+      EmitLine(Format('  call $_ClassRelease(l %s)', [ObjReleaseTemp]));
     Exit;
   end;
 
@@ -6343,6 +6356,8 @@ begin
     EmitLine(Format('  %s =l add %s, 8', [PtrTemp, Ptr]));
     EmitInterfaceToFieldSlots(AAssign.Expr, Ptr, PtrTemp,
       AAssign.FieldInfo.TypeDesc);
+    if ObjReleaseTemp <> '' then
+      EmitLine(Format('  call $_ClassRelease(l %s)', [ObjReleaseTemp]));
     Exit;
   end;
 
@@ -6356,6 +6371,8 @@ begin
     end
     else
       EmitRecordCopy(TRecordTypeDesc(AAssign.FieldInfo.TypeDesc), Ptr, ValTemp);
+    if ObjReleaseTemp <> '' then
+      EmitLine(Format('  call $_ClassRelease(l %s)', [ObjReleaseTemp]));
     Exit;
   end;
 
@@ -6365,6 +6382,8 @@ begin
      TProceduralTypeDesc(AAssign.FieldInfo.TypeDesc).IsMethodPtr then
   begin
     EmitLine(Format('  call $memcpy(l %s, l %s, l 16)', [Ptr, ValTemp]));
+    if ObjReleaseTemp <> '' then
+      EmitLine(Format('  call $_ClassRelease(l %s)', [ObjReleaseTemp]));
     Exit;
   end;
 
@@ -6472,6 +6491,8 @@ begin
     end;
     EmitLine(Format('  %s %s, %s', [StoreInstr, ValTemp, Ptr]));
   end;
+  if ObjReleaseTemp <> '' then
+    EmitLine(Format('  call $_ClassRelease(l %s)', [ObjReleaseTemp]));
 end;
 
 { Emit an argument bound to an open-array parameter and return the
@@ -9674,6 +9695,7 @@ var
   SetTmpB:      string;
   SetNB:        Integer;   { jumbo set bitmap byte count }
   SetRS:        Integer;   { jumbo set slot size (RawSize, 8-rounded) }
+  BaseReleaseTemp: string;
 begin
   PMark := PendingReleaseMark();
   if AExpr is TFuncCallExpr then
@@ -11551,6 +11573,8 @@ begin
       EmitLine(Format('  %s =l add %s, 16', [T, Ptr]));
       Ptr := AllocTemp();
       EmitLine(Format('  %s =l loadl %s', [Ptr, T]));
+      if (FldAccess.Base <> nil) and ExprOwnsRef(FldAccess.Base) then
+        EmitLine(Format('  call $_ClassRelease(l %s)', [L]));
       Exit(Ptr);
     end;
 
@@ -11573,6 +11597,8 @@ begin
       { typeinfo pointer at vtable[0] }
       Ptr := AllocTemp();
       EmitLine(Format('  %s =l loadl %s', [Ptr, T]));
+      if (FldAccess.Base <> nil) and ExprOwnsRef(FldAccess.Base) then
+        EmitLine(Format('  call $_ClassRelease(l %s)', [L]));
       Exit(Ptr);
     end;
 
@@ -11597,6 +11623,8 @@ begin
       EmitLine(Format('  %s =l add %s, 16', [ArgTemp, VTblTemp]));
       EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
       EmitLine(Format('  %s =l call %s(l %s)', [T, FPtrTemp, L]));
+      if (FldAccess.Base <> nil) and ExprOwnsRef(FldAccess.Base) then
+        EmitLine(Format('  call $_ClassRelease(l %s)', [L]));
       Exit(T);
     end;
 
@@ -11608,6 +11636,10 @@ begin
       begin
         { Zero-arg method on chained base }
         L     := EmitInstancePtr(FldAccess.Base);
+        if ExprOwnsRef(FldAccess.Base) then
+          BaseReleaseTemp := L
+        else
+          BaseReleaseTemp := '';
         MDecl := TMethodDecl(FldAccess.ResolvedMethod);
         if MDecl.ResolvedReturnType.Kind = tyRecord then
         begin
@@ -11622,6 +11654,8 @@ begin
           EmitLine(Format('  call $%s(l %s, l %s)',
             [MethodEmitName(MDecl, MDecl.OwnerTypeName, FldAccess.FieldName),
              SretBuf, L]));
+          if BaseReleaseTemp <> '' then
+            EmitLine(Format('  call $_ClassRelease(l %s)', [BaseReleaseTemp]));
           Result := SretBuf;
         end
         else
@@ -11631,11 +11665,17 @@ begin
           EmitLine(Format('  %s =%s call $%s(l %s)',
             [T, QType,
              MethodEmitName(MDecl, MDecl.OwnerTypeName, FldAccess.FieldName), L]));
+          if BaseReleaseTemp <> '' then
+            EmitLine(Format('  call $_ClassRelease(l %s)', [BaseReleaseTemp]));
           Result := T;
         end;
         Exit;
       end;
       L := EmitInstancePtr(FldAccess.Base);
+      if ExprOwnsRef(FldAccess.Base) then
+        BaseReleaseTemp := L
+      else
+        BaseReleaseTemp := '';
       { Method-backed property read (indexed or non-indexed).
         When FieldInfo is also non-nil, load the field value first — the getter
         runs on the field's object, not the chained base. }
@@ -11665,6 +11705,8 @@ begin
         else
           EmitLine(Format('  %s =%s call %s(l %s)',
             [T, QType, PropTgt, L]));
+        if BaseReleaseTemp <> '' then
+          EmitLine(Format('  call $_ClassRelease(l %s)', [BaseReleaseTemp]));
         Exit(T);
       end;
       if FldAccess.FieldInfo = nil then
@@ -11691,11 +11733,17 @@ begin
           T := AllocTemp();
           EmitLine(Format('  %s =l add %s, %s', [T, Ptr, L]));
           if TDynArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType.Kind = tyRecord then
+          begin
+            if BaseReleaseTemp <> '' then
+              EmitLine(Format('  call $_ClassRelease(l %s)', [BaseReleaseTemp]));
             Exit(T);
+          end;
           QType := QbeTypeOf(TDynArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType);
           LoadInstr := LoadInstrFor(TDynArrayTypeDesc(FldAccess.FieldInfo.TypeDesc).ElementType);
           L := AllocTemp();
           EmitLine(Format('  %s =%s %s %s', [L, QType, LoadInstr, T]));
+          if BaseReleaseTemp <> '' then
+            EmitLine(Format('  call $_ClassRelease(l %s)', [BaseReleaseTemp]));
           Exit(L);
         end
         else if FldAccess.FieldInfo.TypeDesc.Kind = tyStaticArray then
@@ -11716,11 +11764,17 @@ begin
           T := AllocTemp();
           EmitLine(Format('  %s =l add %s, %s', [T, L, Ptr]));
           if SAT.ElementType.Kind = tyRecord then
+          begin
+            if BaseReleaseTemp <> '' then
+              EmitLine(Format('  call $_ClassRelease(l %s)', [BaseReleaseTemp]));
             Exit(T);
+          end;
           QType := QbeTypeOf(SAT.ElementType);
           LoadInstr := LoadInstrFor(SAT.ElementType);
           L := AllocTemp();
           EmitLine(Format('  %s =%s %s %s', [L, QType, LoadInstr, T]));
+          if BaseReleaseTemp <> '' then
+            EmitLine(Format('  call $_ClassRelease(l %s)', [BaseReleaseTemp]));
           Exit(L);
         end;
       end;
@@ -11733,11 +11787,17 @@ begin
       else
         Ptr := L;
       if IsAggregateAddrType(FldAccess.FieldInfo.TypeDesc) then
+      begin
+        if BaseReleaseTemp <> '' then
+          EmitLine(Format('  call $_ClassRelease(l %s)', [BaseReleaseTemp]));
         Exit(Ptr);
+      end;
       QType     := QbeTypeOf(FldAccess.FieldInfo.TypeDesc);
       LoadInstr := LoadInstrFor(FldAccess.FieldInfo.TypeDesc);
       T         := AllocTemp();
       EmitLine(Format('  %s =%s %s %s', [T, QType, LoadInstr, Ptr]));
+      if BaseReleaseTemp <> '' then
+        EmitLine(Format('  call $_ClassRelease(l %s)', [BaseReleaseTemp]));
       Exit(T);
     end;
     if FldAccess.IsImplicitSelf then

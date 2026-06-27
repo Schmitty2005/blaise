@@ -59,6 +59,10 @@ type
       release it after the call or one instance leaks. }
     procedure TestDebug_IntfCallResultArg_NoLeak;
     procedure TestDebug_IntfCallResultArg_NoLeak_Native;
+    { A call/getter result used as a field-access receiver must be released
+      after the field load.  L[I].HitPoints — the TList<T>.Get getter returns
+      +1, the field is read, then the transient base must be released. }
+    procedure TestDebug_ReceiverFieldAccess_NoLeak;
   end;
 
 implementation
@@ -676,6 +680,47 @@ begin
   AssertEquals('exit 0', 0, ExitCode);
   AssertEquals('stdout', '42' + LE, Output);
   AssertTrue('no leak report, got: ' + Output, Pos('leak', Output) < 0);
+end;
+
+const
+  { Call result used as a field-access receiver — the getter's +1 must be
+    released after the field read, otherwise one object leaks per access.
+    Uses TList<T>[I].HitPoints which is the most common trigger. }
+  SrcReceiverFieldAccess = '''
+    program P;
+    type
+      TCreature = class
+        HitPoints: Integer;
+      end;
+    function MakeCreature(): TCreature;
+    begin
+      Result := TCreature.Create();
+      Result.HitPoints := 42;
+    end;
+    var
+      X: Integer;
+    begin
+      X := MakeCreature().HitPoints;
+      WriteLn(X);
+    end.
+    ''';
+
+procedure TE2ELeakCheckTests.TestDebug_ReceiverFieldAccess_NoLeak;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run (qbe)',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcReceiverFieldAccess, Output, ExitCode, True));
+  AssertEquals('exit 0 (qbe)', 0, ExitCode);
+  AssertEquals('stdout (qbe)', '42' + LE, Output);
+  AssertTrue('no leak report (qbe), got: ' + Output, Pos('leak', Output) < 0);
+  AssertTrue('compile+run (native)',
+    CompileAndRunWithRTLDebugOn(beNative, SrcReceiverFieldAccess, Output, ExitCode, True));
+  AssertEquals('exit 0 (native)', 0, ExitCode);
+  AssertEquals('stdout (native)', '42' + LE, Output);
+  AssertTrue('no leak report (native), got: ' + Output, Pos('leak', Output) < 0);
 end;
 
 initialization

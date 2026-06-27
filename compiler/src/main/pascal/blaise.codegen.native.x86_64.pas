@@ -1771,6 +1771,13 @@ begin
       Result := True;
     Exit;
   end;
+  if AExpr is TStringSubscriptExpr then
+  begin
+    if (TStringSubscriptExpr(AExpr).StrExpr is TFieldAccessExpr) and
+       (TFieldAccessExpr(TStringSubscriptExpr(AExpr).StrExpr).PropRead <> nil) and
+       (TFieldAccessExpr(TStringSubscriptExpr(AExpr).StrExpr).PropRead.ReadMethod <> '') then
+      Result := True;
+  end;
 end;
 
 { Emit an immortal class-name string blob and return the label+12 reference
@@ -7053,7 +7060,11 @@ begin
   begin
     FAE := TFieldAccessExpr(AExpr);
     if FAE.Base <> nil then
-      Self.EmitExprToEax(FAE.Base)
+    begin
+      Self.EmitExprToEax(FAE.Base);
+      if NativeExprOwnsRef(FAE.Base) then
+        Self.Emit(#9'pushq %rax');
+    end
     else if Self.IsLocal(FAE.RecordName) then
       Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(FAE.RecordName)]))
     else
@@ -7061,6 +7072,13 @@ begin
     Self.Emit(#9'movq (%rax), %rax');
     Self.Emit(#9'movq (%rax), %rax');
     Self.Emit(#9'movq 16(%rax), %rax');
+    if (FAE.Base <> nil) and NativeExprOwnsRef(FAE.Base) then
+    begin
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'pushq %rax');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rax');
+    end;
     Exit;
   end;
 
@@ -7070,13 +7088,24 @@ begin
   begin
     FAE := TFieldAccessExpr(AExpr);
     if FAE.Base <> nil then
-      Self.EmitExprToEax(FAE.Base)
+    begin
+      Self.EmitExprToEax(FAE.Base);
+      if NativeExprOwnsRef(FAE.Base) then
+        Self.Emit(#9'pushq %rax');
+    end
     else if Self.IsLocal(FAE.RecordName) then
       Self.Emit(Format(#9'movq %s, %%rax', [Self.VarOperand(FAE.RecordName)]))
     else
       Self.Emit(Format(#9'movq %s(%%rip), %%rax', [FAE.RecordName]));
     Self.Emit(#9'movq (%rax), %rax');
     Self.Emit(#9'movq (%rax), %rax');
+    if (FAE.Base <> nil) and NativeExprOwnsRef(FAE.Base) then
+    begin
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'pushq %rax');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rax');
+    end;
     Exit;
   end;
 
@@ -7092,6 +7121,8 @@ begin
     if FAE.Base <> nil then
     begin
       Self.EmitExprToEax(FAE.Base);
+      if NativeExprOwnsRef(FAE.Base) then
+        Self.Emit(#9'pushq %rax');
       Self.Emit(#9'movq %rax, %rdi');
     end
     else if FAE.IsImplicitSelf then
@@ -7132,6 +7163,13 @@ begin
        not IsFloatFamily(FAE.ResolvedType) and
        (FAE.ResolvedType.Kind <> tyString) then
       Self.EmitNarrowToType(FAE.ResolvedType);
+    if (FAE.Base <> nil) and NativeExprOwnsRef(FAE.Base) then
+    begin
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'pushq %rax');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rax');
+    end;
     Exit;
   end;
 
@@ -7302,6 +7340,8 @@ begin
       Exit;
     end;
     Self.EmitExprToEax(FAE.Base);
+    if NativeExprOwnsRef(FAE.Base) then
+      Self.Emit(#9'pushq %rax');
     Self.Emit(#9'movq %rax, %rcx');
     if FAE.FieldInfo.Offset > 0 then
       Self.Emit(Format(#9'leaq %d(%%rcx), %%rcx', [FAE.FieldInfo.Offset]));
@@ -7310,6 +7350,13 @@ begin
       Self.Emit(#9'movq %rcx, %rax')
     else
       Self.EmitLoadVar('(%rcx)', FAE.FieldInfo.TypeDesc);
+    if NativeExprOwnsRef(FAE.Base) then
+    begin
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'pushq %rax');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rax');
+    end;
     Exit;
   end;
 
@@ -7425,6 +7472,8 @@ begin
     if FAE.Base <> nil then
     begin
       Self.EmitExprToEax(FAE.Base);
+      if NativeExprOwnsRef(FAE.Base) then
+        Self.Emit(#9'pushq %rax');
       Self.Emit(#9'movq %rax, %rdi');
     end
     else if MD.IsRecordMethod and FAE.IsVarParam then
@@ -7462,6 +7511,13 @@ begin
        not IsFloatFamily(MD.ResolvedReturnType) and
        (MD.ResolvedReturnType.Kind <> tyString) then
       Self.EmitNarrowToType(MD.ResolvedReturnType);
+    if (FAE.Base <> nil) and NativeExprOwnsRef(FAE.Base) then
+    begin
+      Self.Emit(#9'popq %rdi');
+      Self.Emit(#9'pushq %rax');
+      Self.Emit(#9'callq _ClassRelease');
+      Self.Emit(#9'popq %rax');
+    end;
     Exit;
   end;
 
