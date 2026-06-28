@@ -126,7 +126,7 @@ const
       end
     end;
     begin
-      DoIt;
+      DoIt();
       WriteLn('done')
     end.
     ''';

@@ -192,11 +192,11 @@ const
       end;
     begin
       Counter := 0;
-      Inner;
+      Inner();
       WriteLn(Counter);
     end;
     begin
-      Outer;
+      Outer();
     end.
     ''';
 
@@ -311,7 +311,7 @@ const
         end;
         Write(r); Write(' ');
       end;
-      WriteLn
+      WriteLn()
     end.
     ''';
 
@@ -326,7 +326,7 @@ const
           5, 7..9: Write('b');
         else Write('.');
         end;
-      WriteLn
+      WriteLn()
     end.
     ''';
 

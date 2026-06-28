@@ -3954,6 +3954,14 @@ the lexical level: `Foo()` is always a call, `Foo` is always a read.  The
 compiler AST becomes simpler — `TMethodCallExpr` for calls with explicit
 parentheses, `TFieldAccessExpr` only for field/property reads.
 
+The rule applies in *statement* position as well as expression position: a
+bare `Foo;`, `Obj.Method;`, or `Obj.Free;` used as a statement is a parse
+error (issue #148).  Earlier the statement parser silently accepted the
+bare form — expression position was already enforced, but statement-position
+parameterless calls slipped through and built a paren-less `TProcCall` /
+`TMethodCallStmt`.  Both now raise the same "requires () for a call"
+diagnostic the `inherited` and expression-position paths use.
+
 === Alternatives considered
 
 * *Deprecation warning period* — rejected.  Blaise is in alpha; there is no

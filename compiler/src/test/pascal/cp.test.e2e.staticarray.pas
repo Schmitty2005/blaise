@@ -198,7 +198,7 @@ const
       G[2] := L[2]
     end;
     begin
-      Fill;
+      Fill();
       WriteLn(G[0]);
       WriteLn(G[2])
     end.

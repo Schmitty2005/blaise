@@ -347,7 +347,7 @@ const
       Obj := TFoo.Create();
       Obj.FVal := 55;
       M := @Obj.Print;
-      M;
+      M();
       Obj.Free()
     end.
     ''';
@@ -991,11 +991,11 @@ const
         begin
           x := 5;
           WriteLn(IntToStr(x));
-          Inner;
+          Inner();
           WriteLn(IntToStr(x))
         end;
         begin
-          Outer
+          Outer()
         end.
         ''';
 var Output: string; RCode: Integer;
@@ -1022,7 +1022,7 @@ const
             R.B := Sum * 2
           end;
         begin
-          Inner
+          Inner()
         end;
         var Rec: TRec;
         begin
@@ -1050,11 +1050,11 @@ const
           end;
         begin
           R.A := 1; R.B := 2;
-          Inner;
+          Inner();
           WriteLn(IntToStr(R.A), ' ', IntToStr(R.B))
         end;
         begin
-          Outer
+          Outer()
         end.
         ''';
 begin
@@ -1073,7 +1073,7 @@ const
             A[0] := 10; A[1] := 20; A[2] := A[0] + A[1]
           end;
         begin
-          Inner
+          Inner()
         end;
         var Ar: TArr;
         begin

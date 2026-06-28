@@ -477,7 +477,7 @@ begin
         var C: TChild;
         begin
           C := TChild.Create();
-          C.NoSuchMethod
+          C.NoSuchMethod()
         end.
         ''');
 end;

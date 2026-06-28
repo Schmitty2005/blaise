@@ -47,7 +47,8 @@ type
     procedure TestAssignment_IntLit;
     procedure TestAssignment_StringLit;
     procedure TestProcCall_NoArgs;
-    procedure TestProcCall_NoParens;
+    procedure TestProcCall_BareNoParens_RequiresParens;
+    procedure TestMethodCall_BareNoParens_RequiresParens;
     procedure TestProcCall_OneStringArg;
     procedure TestProcCall_OneIntArg;
 
@@ -406,18 +407,37 @@ begin
   end;
 end;
 
-procedure TParserTests.TestProcCall_NoParens;
-var
-  Prog: TProgram;
-  Call: TProcCall;
+procedure TParserTests.TestProcCall_BareNoParens_RequiresParens;
 begin
-  Prog := ParseSource('program P; begin WriteLn end.');
+  { Issue #148: a parameterless call in statement position requires its
+    mandatory () (see language-rationale.adoc, "Mandatory parentheses on
+    zero-argument calls").  `WriteLn` without () is a parse error. }
   try
-    Call := TProcCall(Prog.Block.Stmts.Items[0]);
-    AssertEquals('Name', 'WriteLn', Call.Name);
-    AssertEquals('0 args', 0, Call.Args.Count);
-  finally
-    Prog.Free();
+    ParseSource('program P; begin WriteLn end.').Free();
+    Fail('Expected EParseError for bare parameterless call');
+  except
+    on E: EParseError do
+      AssertTrue('mentions mandatory parens',
+        Pos('requires () for a call', E.Message) >= 0);
+  end;
+end;
+
+procedure TParserTests.TestMethodCall_BareNoParens_RequiresParens;
+begin
+  { Issue #148: a parameterless METHOD call in statement position likewise
+    requires (). `tester.print` (no parens) is a parse error. }
+  try
+    ParseSource(
+      'program P;' +
+      ' type TC = class procedure P; end;' +
+      ' procedure TC.P; begin end;' +
+      ' var c: TC;' +
+      ' begin c := TC.Create(); c.P end.').Free();
+    Fail('Expected EParseError for bare parameterless method call');
+  except
+    on E: EParseError do
+      AssertTrue('mentions mandatory parens',
+        Pos('requires () for a call', E.Message) >= 0);
   end;
 end;
 

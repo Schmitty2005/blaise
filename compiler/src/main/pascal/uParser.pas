@@ -3421,6 +3421,20 @@ begin
           if not Check(tkRParen) then
             ParseMethodCallArgList(MCall);
           Expect(tkRParen);
+        end
+        else if not Check(tkDot) then
+        begin
+          { Bare 'Obj.Method' with no '(' and no further '.' chain — a
+            parameterless method call written without its mandatory parentheses.
+            (A following '.' is a post-call/field chain handled just below; a
+            terminating bare reference is the error case.)  Every call carries ()
+            even with no arguments — see language-rationale.adoc, "Mandatory
+            parentheses on zero-argument calls". }
+          MCall.Free();
+          MCall := nil;
+          raise EParseError.Create(Format(
+            'Bare reference to ''%s.%s'' requires () for a call at line %d col %d in %s',
+            [Name, SecondIdent, Line, Col, FLexer.Filename]));
         end;
         { Post-method chain: Name.Method(args).Field := value or .Method2(args) }
         if Check(tkDot) then
@@ -3595,11 +3609,13 @@ begin
       FCallNode.Free();
       Exit(Call);
     end;
-    Call      := TProcCall.Create();
-    Call.Line := Line;
-    Call.Col  := Col;
-    Call.Name := Name;
-    Result := Call;
+    { Bare identifier in statement position with no '(' — a parameterless
+      procedure/function call written without its mandatory parentheses.
+      Every call carries () even with no arguments (see language-rationale.adoc,
+      "Mandatory parentheses on zero-argument calls"). }
+    raise EParseError.Create(Format(
+      'Bare reference to ''%s'' requires () for a call at line %d col %d in %s',
+      [Name, Line, Col, FLexer.Filename]));
   end;
 end;
 

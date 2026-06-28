@@ -517,7 +517,7 @@ const
       Freed := 0;
       L := TObjectList.Create(True);
       L.Add(TThing.Create());
-      Borrow;
+      Borrow();
       WriteLn(Freed);
       L.Free();
       WriteLn(Freed)

@@ -494,7 +494,7 @@ begin
         begin
         end;
         begin
-          UseFn;
+          UseFn();
         end.
         '''
   );

@@ -964,7 +964,7 @@ begin
     'begin' + LineEnding +
     '  for I := 1 to 5 do' + LineEnding +
     '    Write(I);' + LineEnding +
-    '  WriteLn' + LineEnding +
+    '  WriteLn()' + LineEnding +
     'end.',
     Out_, EC) then
   begin
@@ -1037,7 +1037,7 @@ begin
     '    Write(N);' + LineEnding +
     '    N := N + 1' + LineEnding +
     '  end;' + LineEnding +
-    '  WriteLn' + LineEnding +
+    '  WriteLn()' + LineEnding +
     'end.',
     Out_, EC) then
   begin
@@ -1163,7 +1163,7 @@ begin
     'begin' + LineEnding +
     '  G := TGreeter.Create;' + LineEnding +
     '  WriteLn(G.Greet());' + LineEnding +
-    '  G.Free' + LineEnding +
+    '  G.Free()' + LineEnding +
     'end.',
     Out_, EC) then
   begin

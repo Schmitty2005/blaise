@@ -389,8 +389,8 @@ const
       OL := TObjectList.Create(False);
       OL.Add(SL);
       WriteLn(TStringList(OL[0])[1]);   // chained: cast(OL default) then default
-      SL.Free;
-      OL.Free
+      SL.Free();
+      OL.Free()
     end.
     ''';
 var Output: string; RCode: Integer;

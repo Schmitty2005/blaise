@@ -967,7 +967,7 @@ const
     var c: TC;
     begin
       c := TC.Create();
-      c.Fill;
+      c.Fill();
       writeln(c.A[0]);
       writeln(c.A[1]);
       writeln(c.A[2]);

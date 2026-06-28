@@ -1168,7 +1168,7 @@ var
   I: Integer;
 begin
   FProg := AProg;
-  FlushPendingGenericInstances;
+  FlushPendingGenericInstances();
   FCurrentUnitName := AProg.Name;
   BuildUsesChain(AProg.UsedUnits);
   FTable.UsesChainProvider := Self;
@@ -1202,7 +1202,7 @@ var
 begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
-  FlushPendingGenericInstances;
+  FlushPendingGenericInstances();
   FTable.PushScope();
   try
     { The unit's own name and the names of directly used units are
@@ -1223,7 +1223,7 @@ begin
       *before* any FindTypeOrInstantiate call can clone an instance, or the
       instance is born with nil bodies and codegen emits no function for it. }
     LinkGenericClassMethodImpls(AUnit.ImplBlock);
-    RepairEarlyGenericInstances;
+    RepairEarlyGenericInstances();
 
     { Register interface-section global variables — visible to impl bodies. }
     for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
@@ -1534,7 +1534,7 @@ var
 begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
-  FlushPendingGenericInstances;
+  FlushPendingGenericInstances();
   BuildUsesChain(AUnit.UsedUnits);
   FTable.UsesChainProvider := Self;
   { Auto-tag every global Define within this unit's analysis with the
@@ -1557,7 +1557,7 @@ begin
     the cloned instance method is born without a body and codegen emits
     no function — leaving call sites referencing an undefined symbol. }
   LinkGenericClassMethodImpls(AUnit.ImplBlock);
-  RepairEarlyGenericInstances;
+  RepairEarlyGenericInstances();
 
   { Register interface-section global variables.  Marked IsGlobal so
     codegen emits them as data-segment slots rather than stack allocs;
@@ -3971,7 +3971,7 @@ begin
     declarations, transferring the body so AnalyseMethodBodies can process it. }
   LinkClassMethodImpls(ABlock);
   LinkGenericClassMethodImpls(ABlock);
-  RepairEarlyGenericInstances;
+  RepairEarlyGenericInstances();
   { Register standalone proc/func signatures before class method bodies so that
     methods can call free functions declared in the same block. }
   AnalyseStandaloneDecls(ABlock);

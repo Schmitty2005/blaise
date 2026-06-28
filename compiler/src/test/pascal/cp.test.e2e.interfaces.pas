@@ -372,9 +372,9 @@ const
     begin WriteLn(g.Greet(), ' / ', g.Who()) end;
     var per: TPerson; lou: TLoud; vl: TVeryLoud;
     begin
-      per := TPerson.Create; Use(per); per.Free;
-      lou := TLoud.Create;   Use(lou); lou.Free;
-      vl := TVeryLoud.Create; Use(vl); vl.Free
+      per := TPerson.Create; Use(per); per.Free();
+      lou := TLoud.Create;   Use(lou); lou.Free();
+      vl := TVeryLoud.Create; Use(vl); vl.Free()
     end.
     ''';
 begin
@@ -406,7 +406,7 @@ const
       i := d;        // assignment to interface
       i.Hello();
       Use(d);        // parameter passing
-      d.Free
+      d.Free()
     end.
     ''';
 begin
