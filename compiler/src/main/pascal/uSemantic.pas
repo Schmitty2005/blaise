@@ -239,7 +239,11 @@ type
     procedure AnalyseStandaloneDecls(ABlock: TBlock);
     procedure AnalyseStandaloneBodies(ABlock: TBlock);
     procedure AnalyseStandaloneDecl(ADecl: TMethodDecl);
-    procedure CollectCaptures(ADecl: TMethodDecl; AOuterBlock: TBlock);
+    procedure CollectCaptures(ADecl: TMethodDecl; AOuterDecl: TMethodDecl);
+    { Add AName to ADecl.CapturedVars if it names an enclosing variable
+      (member of AOuterVars) not already recorded. }
+    procedure MaybeCaptureName(ADecl: TMethodDecl; AOuterVars: TStringList;
+                               const AName: string);
     { Inlining: after bodies are analysed, mark each TMethodDecl whose body
       qualifies for codegen-side inlining.  Conservative: primitive params
       + return + locals only; no try/loops/raise/nested defs; small body.
@@ -1164,7 +1168,7 @@ var
   I: Integer;
 begin
   FProg := AProg;
-  FlushPendingGenericInstances;
+  FlushPendingGenericInstances();
   FCurrentUnitName := AProg.Name;
   BuildUsesChain(AProg.UsedUnits);
   FTable.UsesChainProvider := Self;
@@ -1198,7 +1202,7 @@ var
 begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
-  FlushPendingGenericInstances;
+  FlushPendingGenericInstances();
   FTable.PushScope();
   try
     { The unit's own name and the names of directly used units are
@@ -1219,7 +1223,7 @@ begin
       *before* any FindTypeOrInstantiate call can clone an instance, or the
       instance is born with nil bodies and codegen emits no function for it. }
     LinkGenericClassMethodImpls(AUnit.ImplBlock);
-    RepairEarlyGenericInstances;
+    RepairEarlyGenericInstances();
 
     { Register interface-section global variables — visible to impl bodies. }
     for I := 0 to AUnit.IntfBlock.Decls.Count - 1 do
@@ -1530,7 +1534,7 @@ var
 begin
   FCurrentUnitName := AUnit.Name;
   FCurrentUnit := AUnit;
-  FlushPendingGenericInstances;
+  FlushPendingGenericInstances();
   BuildUsesChain(AUnit.UsedUnits);
   FTable.UsesChainProvider := Self;
   { Auto-tag every global Define within this unit's analysis with the
@@ -1553,7 +1557,7 @@ begin
     the cloned instance method is born without a body and codegen emits
     no function — leaving call sites referencing an undefined symbol. }
   LinkGenericClassMethodImpls(AUnit.ImplBlock);
-  RepairEarlyGenericInstances;
+  RepairEarlyGenericInstances();
 
   { Register interface-section global variables.  Marked IsGlobal so
     codegen emits them as data-segment slots rather than stack allocs;
@@ -1637,6 +1641,34 @@ begin
     end;
   end;
 
+  { Register impl-section TYPE declarations BEFORE linking class method bodies,
+    so a class declared in the implementation section has its methods registered
+    in FMethodGroups when LinkClassMethodImpls looks them up (otherwise every
+    impl-section class method reports "not declared in class").
+
+    These are registered in the GLOBAL scope (not the pushed impl scope below)
+    so the type symbols survive to codegen — EmitClassSection / EmitUnit walk
+    the AST TypeDecls but ClassUnitPrefix's symbol Lookup must still find the
+    class to derive its unit-qualified _FieldCleanup/vtable/typeinfo names.
+    Marking them IsImplPrivate (DefineImplPrivate context) keeps them visible
+    only to THIS unit: Lookup suppresses them while any other unit is analysed,
+    so they do not leak into unrelated units through the flat global scope.
+    The unit's own bodies still resolve them via layer 3 (owner = current
+    unit); code generation resolves them by setting the emitted unit as the
+    table's viewing context.
+
+    Only TYPES are hoisted.  Impl-section consts stay in the pushed scope below
+    (layer-1 visible to the unit's own bodies, never global, so they never need
+    suppression); LinkClassMethodImpls needs only the types.  An impl-section
+    type that sizes itself on an impl-section const is not currently supported
+    and would report "Unknown type" — no codebase unit relies on it. }
+  FTable.DefineImplPrivate := True;
+  try
+    AnalyseTypeDecls(AUnit.ImplBlock);
+  finally
+    FTable.DefineImplPrivate := False;
+  end;
+
   { Link class method bodies from ImplBlock to the class type method decls
     registered by AnalyseTypeDecls.  Generic-class linking happened earlier
     so instances can clone bodies at instantiation time. }
@@ -1645,13 +1677,14 @@ begin
   { --- Implementation section -------------------------------------------
     Push a scope so impl-only standalone symbols don't leak globally.
     Class method bodies are analysed inside this scope so they can call
-    impl-only helpers (e.g. TStringList.SetText -> SplitIntoList). }
+    impl-only helpers (e.g. TStringList.SetText -> SplitIntoList).
+    (Impl-section type decls were already processed above.) }
   FTable.PushScope();
   try
-    { Register impl-section global variables — marked IsGlobal so codegen
-      emits them as data-segment slots rather than stack allocations. }
+    { Register impl-section consts + global variables.  Consts stay in this
+      pushed scope (layer-1 visible to the unit's own bodies); globals are
+      marked IsGlobal so codegen emits them as data-segment slots. }
     AnalyseConstDecls(AUnit.ImplBlock);
-    AnalyseTypeDecls(AUnit.ImplBlock);
     AnalyseArrayConstDecls(AUnit.ImplBlock);
     for I := 0 to AUnit.ImplBlock.Decls.Count - 1 do
     begin
@@ -1781,8 +1814,13 @@ begin
       end;
     end;
 
-    { Analyse class method bodies — impl-only helpers now visible above }
+    { Analyse class method bodies — impl-only helpers now visible above.
+      ImplBlock is analysed too so a class declared in the implementation
+      section has its method bodies type-checked (otherwise field/param
+      references inside them carry no ResolvedType and codegen aborts with
+      "no resolved type"). }
     AnalyseMethodBodies(AUnit.IntfBlock);
+    AnalyseMethodBodies(AUnit.ImplBlock);
 
     { Verify every interface declaration has a matching implementation }
     for I := 0 to AUnit.IntfBlock.ProcDecls.Count - 1 do
@@ -3933,7 +3971,7 @@ begin
     declarations, transferring the body so AnalyseMethodBodies can process it. }
   LinkClassMethodImpls(ABlock);
   LinkGenericClassMethodImpls(ABlock);
-  RepairEarlyGenericInstances;
+  RepairEarlyGenericInstances();
   { Register standalone proc/func signatures before class method bodies so that
     methods can call free functions declared in the same block. }
   AnalyseStandaloneDecls(ABlock);
@@ -6241,7 +6279,7 @@ begin
       { After analysing the body, determine which outer-scope variables are
         captured by any nested proc declared inside this one. }
       if ADecl.EnclosingDecl <> nil then
-        CollectCaptures(ADecl, ADecl.EnclosingDecl.Body);
+        CollectCaptures(ADecl, ADecl.EnclosingDecl);
     end;
   finally
     Dec(FScopeDepth);
@@ -6268,11 +6306,24 @@ begin
   end;
 end;
 
-procedure TSemanticAnalyser.CollectCaptures(ADecl: TMethodDecl; AOuterBlock: TBlock);
-{ Walk ADecl's body statements/expressions to find all TIdentExpr nodes whose
-  name matches a variable declared in AOuterBlock (the enclosing proc's locals).
-  Each such variable is "captured": ADecl will receive an implicit hidden
-  var-by-pointer parameter, and the call site will pass the variable's address. }
+procedure TSemanticAnalyser.MaybeCaptureName(ADecl: TMethodDecl;
+  AOuterVars: TStringList; const AName: string);
+begin
+  if AName = '' then Exit;
+  if AOuterVars.IndexOf(AName) < 0 then Exit;
+  if (ADecl.CapturedVars <> nil) and (ADecl.CapturedVars.IndexOf(AName) >= 0) then
+    Exit;
+  if ADecl.CapturedVars = nil then
+    ADecl.CapturedVars := TStringList.Create();
+  ADecl.CapturedVars.Add(AName);
+end;
+
+procedure TSemanticAnalyser.CollectCaptures(ADecl: TMethodDecl; AOuterDecl: TMethodDecl);
+{ Walk ADecl's body statements/expressions to find every reference to a variable
+  belonging to the enclosing proc AOuterDecl — its locals AND its parameters
+  (a `var` record parameter captured by a nested proc is the case that broke
+  before).  Each such name is "captured": ADecl receives an implicit hidden
+  var-by-pointer parameter, and the call site passes the variable's address. }
 var
   OuterVars: TStringList;
   I, J:      Integer;
@@ -6284,21 +6335,31 @@ var
   CurStmt:   TASTStmt;
 begin
   if ADecl.Body = nil then Exit;
+  if AOuterDecl = nil then Exit;
 
   OuterVars := TStringList.Create();
   TodoExprs := TObjectList.Create(False);
   TodoStmts := TObjectList.Create(False);
   try
-    { Build set of outer-block local variable names }
-    for I := 0 to AOuterBlock.Decls.Count - 1 do
-    begin
-      VDecl := TVarDecl(AOuterBlock.Decls.Items[I]);
-      for J := 0 to VDecl.Names.Count - 1 do
+    { Build the set of enclosing names: the outer proc's local var decls ... }
+    if AOuterDecl.Body <> nil then
+      for I := 0 to AOuterDecl.Body.Decls.Count - 1 do
       begin
-        VName := VDecl.Names.Strings[J];
-        if OuterVars.IndexOf(VName) < 0 then
-          OuterVars.Add(VName);
+        VDecl := TVarDecl(AOuterDecl.Body.Decls.Items[I]);
+        for J := 0 to VDecl.Names.Count - 1 do
+        begin
+          VName := VDecl.Names.Strings[J];
+          if OuterVars.IndexOf(VName) < 0 then
+            OuterVars.Add(VName);
+        end;
       end;
+    { ... and the outer proc's PARAMETERS (value, var, out — all capturable;
+      a captured var-param carries a pointer, handled by codegen). }
+    for I := 0 to AOuterDecl.Params.Count - 1 do
+    begin
+      VName := TMethodParam(AOuterDecl.Params.Items[I]).ParamName;
+      if OuterVars.IndexOf(VName) < 0 then
+        OuterVars.Add(VName);
     end;
     if OuterVars.Count = 0 then Exit;
 
@@ -6320,18 +6381,29 @@ begin
         begin
           { LHS name — check if it's an outer var (direct assign) }
           if TAssignment(CurStmt).ImplicitSelfField = nil then
-          begin
-            VName := TAssignment(CurStmt).Name;
-            if (OuterVars.IndexOf(VName) >= 0) and
-               ((ADecl.CapturedVars = nil) or
-                (ADecl.CapturedVars.IndexOf(VName) < 0)) then
-            begin
-              if ADecl.CapturedVars = nil then
-                ADecl.CapturedVars := TStringList.Create();
-              ADecl.CapturedVars.Add(VName);
-            end;
-          end;
+            MaybeCaptureName(ADecl, OuterVars, TAssignment(CurStmt).Name);
           TodoExprs.Add(TAssignment(CurStmt).Expr);
+        end
+        else if CurStmt is TFieldAssignment then
+        begin
+          { 'R.Field := ...' — the receiver R may be an outer var/var-param.
+            (Implicit-Self writes have RecordName naming a field of Self, not an
+            outer var; those resolve through Self, never captured.) }
+          if not TFieldAssignment(CurStmt).IsImplicitSelf then
+            MaybeCaptureName(ADecl, OuterVars, TFieldAssignment(CurStmt).RecordName);
+          TodoExprs.Add(TFieldAssignment(CurStmt).ObjExpr);
+          TodoExprs.Add(TFieldAssignment(CurStmt).PropIndexExpr);
+          TodoExprs.Add(TFieldAssignment(CurStmt).Expr);
+        end
+        else if CurStmt is TStaticSubscriptAssign then
+        begin
+          { 'A[i] := ...' — the array A may be an outer var/var-param.
+            (Implicit-Self array writes resolve through Self.) }
+          if not TStaticSubscriptAssign(CurStmt).IsImplicitSelf then
+            MaybeCaptureName(ADecl, OuterVars, TStaticSubscriptAssign(CurStmt).ArrayName);
+          TodoExprs.Add(TStaticSubscriptAssign(CurStmt).BaseExpr);
+          TodoExprs.Add(TStaticSubscriptAssign(CurStmt).IndexExpr);
+          TodoExprs.Add(TStaticSubscriptAssign(CurStmt).ValueExpr);
         end
         else if CurStmt is TProcCall then
         begin
@@ -6381,16 +6453,22 @@ begin
         if CurExpr = nil then Continue;
 
         if CurExpr is TIdentExpr then
+          MaybeCaptureName(ADecl, OuterVars, TIdentExpr(CurExpr).Name)
+        else if CurExpr is TFieldAccessExpr then
         begin
-          VName := TIdentExpr(CurExpr).Name;
-          if (OuterVars.IndexOf(VName) >= 0) and
-             ((ADecl.CapturedVars = nil) or
-              (ADecl.CapturedVars.IndexOf(VName) < 0)) then
-          begin
-            if ADecl.CapturedVars = nil then
-              ADecl.CapturedVars := TStringList.Create();
-            ADecl.CapturedVars.Add(VName);
-          end;
+          { 'R.Field' read — the base R may be an outer var/var-param.  When the
+            base is a sub-expression (chain), descend; when it is a bare name,
+            capture it. }
+          if TFieldAccessExpr(CurExpr).Base <> nil then
+            TodoExprs.Add(TFieldAccessExpr(CurExpr).Base)
+          else
+            MaybeCaptureName(ADecl, OuterVars, TFieldAccessExpr(CurExpr).RecordName);
+          TodoExprs.Add(TFieldAccessExpr(CurExpr).PropIndexExpr);
+        end
+        else if CurExpr is TStringSubscriptExpr then
+        begin
+          TodoExprs.Add(TStringSubscriptExpr(CurExpr).StrExpr);
+          TodoExprs.Add(TStringSubscriptExpr(CurExpr).IndexExpr);
         end
         else if CurExpr is TBinaryExpr then
         begin

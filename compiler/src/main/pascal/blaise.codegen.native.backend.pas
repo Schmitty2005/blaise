@@ -160,7 +160,7 @@ end;
 
 procedure TNativeBackend.EmitBlank;
 begin
-  FAsm.AppendLine;
+  FAsm.AppendLine();
 end;
 
 { The record-return ABI classifier and its leaf predicates now live as shared

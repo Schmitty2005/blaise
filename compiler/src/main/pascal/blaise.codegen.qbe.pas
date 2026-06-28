@@ -460,6 +460,19 @@ type
     { Release every ARC-managed field of a record at AAddr in-line (no copy).
       Used before overwriting a record slot to prevent reference leaks. }
     procedure EmitRecordReleaseFields(ARec: TRecordTypeDesc; const AAddr: string);
+    { Release one ARC-managed value of type AType whose storage is at AAddr.
+      AAddr points AT the slot (string/class/intf/dynarray) or AT the inline
+      aggregate (record/static array).  Recurses for records and nested static
+      arrays so every managed leaf is released exactly once. }
+    procedure EmitManagedReleaseAt(AType: TTypeDesc; const AAddr: string;
+                                   AZero: Boolean);
+    { Release every managed element of a static array whose inline storage
+      starts at AAddr.  Loops AType.LowBound..HighBound, releasing each element
+      via EmitManagedReleaseAt.  When AZero is set (exception path) each scalar
+      managed slot is zeroed after release so an outer handler's cleanup is a
+      safe no-op. }
+    procedure EmitStaticArrayReleaseElems(AType: TStaticArrayTypeDesc;
+                                          const AAddr: string; AZero: Boolean);
     { Mirror of EmitRecordReleaseFields: AddRef every ARC-managed field of a
       record at AAddr.  Used in the by-value record param prologue so the
       callee owns retains on managed-field contents, balancing the matching
@@ -2390,6 +2403,27 @@ begin
       end;
       Continue;
     end
+    else if (Decl.ResolvedType.Kind = tyStaticArray)
+      and (TStaticArrayTypeDesc(Decl.ResolvedType).ElementType <> nil)
+      and (TStaticArrayTypeDesc(Decl.ResolvedType).ElementType.Kind = tyInterface) then
+    begin
+      { Static-array-of-INTERFACE local (array[0..N] of IFoo): release each
+        fat-pointer element's obj slot at scope exit.  VarRef gives the inline
+        storage base.
+
+        Scope: ONLY interface elements — kept in lockstep with the native
+        backend.  Static-array-of-class/string/record locals are excluded
+        because the element store's unconditional retain plus manual `.Free`/
+        aliasing in the owning code would double-free; reconciling that is
+        tracked separately. }
+      for J := 0 to Decl.Names.Count - 1 do
+      begin
+        VarName := Decl.Names.Strings[J];
+        EmitStaticArrayReleaseElems(TStaticArrayTypeDesc(Decl.ResolvedType),
+          VarRef(VarName, Decl.IsGlobal), False);
+      end;
+      Continue;
+    end
     else
       Continue;
     for J := 0 to Decl.Names.Count - 1 do
@@ -2473,6 +2507,21 @@ begin
       end;
       Continue;
     end
+    else if (Decl.ResolvedType.Kind = tyStaticArray)
+      and (TStaticArrayTypeDesc(Decl.ResolvedType).ElementType <> nil)
+      and (TStaticArrayTypeDesc(Decl.ResolvedType).ElementType.Kind = tyInterface) then
+    begin
+      { Static-array-of-interface local on exception path: release each element's
+        obj slot and zero it so an outer handler's cleanup is a safe no-op.
+        (Same interface-only scope as the normal path.) }
+      for J := 0 to Decl.Names.Count - 1 do
+      begin
+        VarName := Decl.Names.Strings[J];
+        EmitStaticArrayReleaseElems(TStaticArrayTypeDesc(Decl.ResolvedType),
+          VarRef(VarName, Decl.IsGlobal), True);
+      end;
+      Continue;
+    end
     else
       Continue;
     for J := 0 to Decl.Names.Count - 1 do
@@ -2523,8 +2572,11 @@ procedure TCodeGenQBE.EmitStmt(AStmt: TASTStmt);
 var
   DeadLbl: string;
 begin
+  { An empty statement (e.g. the body of `for x := 0 to N do;`) parses to a nil
+    statement — the parser's convention for "no statement here".  It is a valid,
+    do-nothing body, so emit nothing rather than rejecting it. }
   if AStmt = nil then
-    raise ECodeGenError.Create('EmitStmt called with nil statement');
+    Exit;
   if AStmt is TAsmStmt then
     raise ECodeGenError.Create(
       'inline asm blocks require the native backend (--backend native); '
@@ -4862,6 +4914,13 @@ begin
     else
       Result := '$' + AName;
   end
+  { A variable captured from an enclosing proc is reached through the hidden
+    %_cap_<Name> pointer parameter, which holds the address of the enclosing
+    slot — exactly what %_var_<Name> would be in the owning frame.  All the
+    deref logic keyed off the AST flags (IsVarParam, IsClassAccess) then applies
+    unchanged, just rooted at %_cap_ instead of %_var_. }
+  else if IsCaptured(AName) then
+    Result := '%_cap_' + AName
   else
     Result := '%_var_' + AName;
 end;
@@ -5021,15 +5080,34 @@ begin
   end
   else if AExpr is TMethodCallExpr then
   begin
-    if TMethodCallExpr(AExpr).ResolvedMethod = nil then Exit;
-    MDecl := TMethodDecl(TMethodCallExpr(AExpr).ResolvedMethod);
-    Result := (MDecl.ResolvedReturnType <> nil) and
-              (MDecl.ResolvedReturnType.Kind in [tyRecord, tyStaticArray]);
+    { Interface (itab) dispatch has no ResolvedMethod — classify by the call's
+      resolved return type instead, so a record-returning itab call routes
+      through the sret/record-return path (EmitIntfSretDispatch) like a direct
+      record method call. }
+    if (TMethodCallExpr(AExpr).ResolvedClassType <> nil) and
+       (TMethodCallExpr(AExpr).ResolvedClassType.Kind = tyInterface) then
+      Result := (TMethodCallExpr(AExpr).ResolvedType <> nil) and
+                (TMethodCallExpr(AExpr).ResolvedType.Kind in [tyRecord, tyStaticArray])
+    else
+    begin
+      if TMethodCallExpr(AExpr).ResolvedMethod = nil then Exit;
+      MDecl := TMethodDecl(TMethodCallExpr(AExpr).ResolvedMethod);
+      Result := (MDecl.ResolvedReturnType <> nil) and
+                (MDecl.ResolvedReturnType.Kind in [tyRecord, tyStaticArray]);
+    end;
   end
   else if AExpr is TFieldAccessExpr then
   begin
     FldA := TFieldAccessExpr(AExpr);
     if not FldA.IsMethodCall then Exit;
+    { Zero-arg interface (itab) dispatch (G.GetThing): no ResolvedMethod —
+      classify by the resolved return type, as for the args form above. }
+    if FldA.IsInterfaceCall then
+    begin
+      Result := (FldA.ResolvedType <> nil) and
+                (FldA.ResolvedType.Kind in [tyRecord, tyStaticArray]);
+      Exit;
+    end;
     if FldA.ResolvedMethod = nil then Exit;
     MDecl := TMethodDecl(FldA.ResolvedMethod);
     Result := (MDecl.ResolvedReturnType <> nil) and
@@ -5507,9 +5585,11 @@ var
   ArgLine: string;
   SlotOff: Integer;
   PMark: Integer;
+  RetType: TRecordTypeDesc;
 begin
   PMark := PendingReleaseMark();
   AArgs := nil;
+  RetType := TRecordTypeDesc(TASTExpr(ACall).ResolvedType);
   if ACall is TMethodCallExpr then
   begin
     MCall := TMethodCallExpr(ACall);
@@ -5554,11 +5634,15 @@ begin
     EmitLine(Format('  %s =l add %s, %d', [ArgTemp, VTblTemp, SlotOff]));
     EmitLine(Format('  %s =l loadl %s', [FPtrTemp, ArgTemp]));
   end;
-  { Callee signature is (sret, Self, args...) — the same shape every
-    interface-returning method body declares (`l %_par__sret, l %_par_Self`). }
-  ArgLine := Format('l %s, l %s', [ASretAddr, SelfTemp]) +
+  { The visible arguments are (Self, method-args...).  The RECORD-RETURN ABI
+    (sret vs register-class) is decided by EmitRecordReturnCallSite from the
+    return type's classification — exactly as for a direct record-returning
+    call.  Passing an sret pointer unconditionally (the old behaviour) is only
+    correct for memory-class records; a register-class record return then
+    mismatched the callee ABI, shifting Self/args and corrupting memory. }
+  ArgLine := Format('l %s', [SelfTemp]) +
     IntfDispatchArgFragment(IntfDesc, IntfDesc.MethodIndex(MethName), AArgs);
-  EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
+  EmitRecordReturnCallSite(FPtrTemp, ArgLine, RetType, ASretAddr);
   FlushPendingReleases(PMark);
 end;
 
@@ -5798,6 +5882,13 @@ begin
       EmitRecordReleaseFields(TRecordTypeDesc(F.TypeDesc), FldAddr);
       Continue;
     end;
+    { NOTE: a static-array-of-managed FIELD is intentionally NOT released here.
+      EmitRecordReleaseFields must stay symmetric with EmitRecordAddRefFields /
+      EmitRecordCopy, neither of which retains static-array elements; releasing
+      them here without a matching retain over-releases on every record copy /
+      by-value param pass and corrupts the heap.  Static-array element ARC is
+      handled only for scope-exit LOCALS (the bug-#4 case).  Records with such
+      fields remain a separate, latent concern. }
     if not (F.TypeDesc.IsString() or (F.TypeDesc.Kind = tyClass)
             or (F.TypeDesc.Kind = tyDynArray)
             or (F.TypeDesc.Kind = tyInterface)) then Continue;
@@ -5819,6 +5910,63 @@ begin
         For an interface field the itab slot lives at +8 and is static rodata,
         so no extra release is needed. }
       EmitLine(Format('  call $_ClassRelease(l %s)', [ValT]));
+  end;
+end;
+
+procedure TCodeGenQBE.EmitManagedReleaseAt(AType: TTypeDesc; const AAddr: string;
+  AZero: Boolean);
+var
+  ValT: string;
+begin
+  if AType = nil then Exit;
+  if AType.Kind = tyRecord then
+  begin
+    { Records are released field-by-field; the per-field scalar zeroing inside
+      EmitRecordReleaseFields is not parameterised, so the AZero contract here
+      is satisfied for the leaf scalars it touches. }
+    EmitRecordReleaseFields(TRecordTypeDesc(AType), AAddr);
+    Exit;
+  end;
+  if AType.Kind = tyStaticArray then
+  begin
+    EmitStaticArrayReleaseElems(TStaticArrayTypeDesc(AType), AAddr, AZero);
+    Exit;
+  end;
+  if not (AType.IsString() or (AType.Kind = tyClass)
+          or (AType.Kind = tyDynArray) or (AType.Kind = tyInterface)) then
+    Exit;
+  ValT := AllocTemp();
+  EmitLine(Format('  %s =l loadl %s', [ValT, AAddr]));
+  if AType.IsString() then
+    EmitLine(Format('  call $_StringRelease(l %s)', [ValT]))
+  else if AType.Kind = tyDynArray then
+    EmitLine(Format('  call $_DynArrayRelease(l %s)', [ValT]))
+  else
+    { tyClass and tyInterface both release the obj slot via _ClassRelease;
+      an interface's itab slot at +8 is static rodata, no release needed. }
+    EmitLine(Format('  call $_ClassRelease(l %s)', [ValT]));
+  if AZero then
+    EmitLine(Format('  storel 0, %s', [AAddr]));
+end;
+
+procedure TCodeGenQBE.EmitStaticArrayReleaseElems(AType: TStaticArrayTypeDesc;
+  const AAddr: string; AZero: Boolean);
+var
+  I, ElemSize: Integer;
+  ElemAddr:    string;
+begin
+  if (AType = nil) or (AType.ElementType = nil) then Exit;
+  ElemSize := AType.ElementType.RawSize();
+  for I := 0 to AType.HighBound - AType.LowBound do
+  begin
+    if I = 0 then
+      ElemAddr := AAddr
+    else
+    begin
+      ElemAddr := AllocTemp();
+      EmitLine(Format('  %s =l add %s, %d', [ElemAddr, AAddr, I * ElemSize]));
+    end;
+    EmitManagedReleaseAt(AType.ElementType, ElemAddr, AZero);
   end;
 end;
 
@@ -6386,6 +6534,7 @@ var
   ItabName: string;
   SretTemp: string;
   PMark:    Integer;
+  RetTypeRec: TRecordTypeDesc;
 begin
   PMark := PendingReleaseMark();
 
@@ -6550,6 +6699,33 @@ begin
       ArgTemp := AllocTemp();
       EmitLine(Format('  %s =l loadl %s', [ArgTemp, SretTemp]));
       EmitLine(Format('  call $_ClassRelease(l %s)', [ArgTemp]));
+    end
+    else if (ACall.ResolvedReturnTypeDesc <> nil) and
+            (ACall.ResolvedReturnTypeDesc.Kind in [tyRecord, tyStaticArray]) then
+    begin
+      { Discarded RECORD/static-array return through itab dispatch: the callee
+        follows the record-return ABI (sret pointer for a memory-class record,
+        register return for a register-class one).  A plain scalar call here
+        (the old fall-through) handed the callee no sret buffer and mis-typed
+        the return, so for an sret record the first ARG register doubled as the
+        sret pointer — the callee received a garbage argument and wrote the
+        record over caller memory.  Route through EmitRecordReturnCallSite with
+        a throwaway destination so the correct ABI is used, then release the
+        throwaway's managed fields. }
+      RetTypeRec := TRecordTypeDesc(ACall.ResolvedReturnTypeDesc);
+      SretTemp := AllocTemp();
+      if ACall.ResolvedReturnTypeDesc.Kind = tyStaticArray then
+        EmitLine(Format('  %s =l alloc8 %d',
+          [SretTemp, ACall.ResolvedReturnTypeDesc.RawSize()]))
+      else if RetTypeRec.MaxAlign() >= 8 then
+        EmitLine(Format('  %s =l alloc8 %d', [SretTemp, RetTypeRec.TotalSize()]))
+      else
+        EmitLine(Format('  %s =l alloc4 %d', [SretTemp, RetTypeRec.TotalSize()]));
+      EmitLine(Format('  call $memset(l %s, w 0, l %d)',
+        [SretTemp, ACall.ResolvedReturnTypeDesc.RawSize()]));
+      EmitRecordReturnCallSite(FPtrTemp, ArgLine, RetTypeRec, SretTemp);
+      if ACall.ResolvedReturnTypeDesc.Kind = tyRecord then
+        EmitRecordReleaseFields(RetTypeRec, SretTemp);
     end
     else
       EmitLine(Format('  call %s(%s)', [FPtrTemp, ArgLine]));
@@ -9378,7 +9554,16 @@ begin
     IsString := (ArgExpr.ResolvedType <> nil) and ArgExpr.ResolvedType.IsString();
     ArgTemp  := EmitExpr(ArgExpr);
     if IsString then
-      EmitLine(Format('  call $_SysWriteStr(w %s, l %s)', [FdLit, ArgTemp]))
+    begin
+      EmitLine(Format('  call $_SysWriteStr(w %s, l %s)', [FdLit, ArgTemp]));
+      { A string argument that OWNS its reference (a call/concat result that
+        returned a fresh +1 string) is borrowed by _SysWriteStr and nothing
+        else holds it — release the transient here, or it leaks once per
+        Write/WriteLn.  Plain variables / literals are borrowed (ExprOwnsRef
+        false) and must not be released. }
+      if ExprOwnsRef(ArgExpr) then
+        EmitLine(Format('  call $_StringRelease(l %s)', [ArgTemp]));
+    end
     else if (ArgExpr.ResolvedType <> nil) and
             (ArgExpr.ResolvedType.Kind = tyBoolean) then
       EmitLine(Format('  call $_SysWriteBool(w %s, w %s)', [FdLit, ArgTemp]))
@@ -12304,8 +12489,14 @@ begin
       if (AExpr.ResolvedType <> nil) and
          IsAggregateAddrType(AExpr.ResolvedType) then
       begin
-        { Aggregate: %_cap_Name is the storage address — return directly. }
-        EmitLine(Format('  %s =l copy %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
+        { Aggregate: %_cap_Name holds the address of the enclosing variable's
+          storage.  For a captured plain local that IS the aggregate address.
+          For a captured var/out param the enclosing slot holds the caller's
+          pointer, so one extra load yields the aggregate address. }
+        if TIdentExpr(AExpr).ParamMode <> pmNone then
+          EmitLine(Format('  %s =l loadl %%_cap_%s', [T, TIdentExpr(AExpr).Name]))
+        else
+          EmitLine(Format('  %s =l copy %%_cap_%s', [T, TIdentExpr(AExpr).Name]));
         Exit(T);
       end;
       case QType of
@@ -13759,12 +13950,38 @@ var
   E:            TVTableEntry;
   GII:          TGenericInterfaceInstance;
   SavedUnit:    string;
+  AllTD:        TObjectList;   { interface + implementation type decls, so a
+                                class declared in the implementation section
+                                gets its method bodies / typeinfo / vtable /
+                                _FieldCleanup / interface defs emitted too. }
+  SavedDOU:     string;        { prior FSymTable.DefineOwningUnit, restored at end }
 begin
   { No clears — output and string literal table accumulate across calls.
     Counter resets are safe: QBE temps and block labels are function-scoped. }
   FTempCount  := 0;
   FLabelCount := 0;
   FCurrentUnitName := AUnit.Name;
+
+  { Establish THIS unit as the symbol-table viewing context so resolving the
+    unit's own implementation-section (IsImplPrivate) types — for ClassUnitPrefix
+    mangling and the typeinfo/vtable/_FieldCleanup emission loops below — is not
+    suppressed by the cross-unit-leak guard in TSymbolTable.Lookup.  Restored at
+    the end. }
+  SavedDOU := '';
+  if FSymTable <> nil then
+  begin
+    SavedDOU := FSymTable.DefineOwningUnit;
+    FSymTable.DefineOwningUnit := AUnit.Name;
+  end;
+
+  { Combined type-decl list (interface first, then implementation) — borrowed
+    slots, not owned.  Every per-type emission loop below iterates this so
+    impl-section classes are emitted identically to interface ones. }
+  AllTD := TObjectList.Create(False);
+  for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
+    AllTD.Add(AUnit.IntfBlock.TypeDecls.Items[I]);
+  for I := 0 to AUnit.ImplBlock.TypeDecls.Count - 1 do
+    AllTD.Add(AUnit.ImplBlock.TypeDecls.Items[I]);
 
   CollectThreadVarNames(AUnit.IntfBlock);
   CollectThreadVarNames(AUnit.ImplBlock);
@@ -13794,9 +14011,9 @@ begin
         { Class and record method bodies from interface type declarations.
           After LinkClassMethodImpls the definition's TMethodDecl nodes
           hold the bodies and parameter types are resolved by AnalyseMethodBodies. }
-        for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
+        for I := 0 to AllTD.Count - 1 do
         begin
-          TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
+          TD := TTypeDecl(AllTD.Items[I]);
           if TD.Def is TClassTypeDef then
           begin
             CD := TClassTypeDef(TD.Def);
@@ -13821,9 +14038,9 @@ begin
         { Field cleanup functions — emitted here (inside redirect) because they
           are function bodies, not data.  Requires FSymTable to look up TRecordTypeDesc. }
         if FSymTable <> nil then
-          for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
+          for I := 0 to AllTD.Count - 1 do
           begin
-            TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
+            TD := TTypeDecl(AllTD.Items[I]);
             if not (TD.Def is TClassTypeDef) then Continue;
             TDesc := FSymTable.FindType(TD.Name);
             if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
@@ -13839,9 +14056,9 @@ begin
           collide across per-unit .o files, so skip them here — the main
           program's AppendProgram emits the authoritative copies. }
         if (not FSuppressSystemDefs) and (not FSystemDefsEmitted) and (FSymTable <> nil) then
-          for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
+          for I := 0 to AllTD.Count - 1 do
           begin
-            TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
+            TD := TTypeDecl(AllTD.Items[I]);
             if TD.Def is TClassTypeDef then
             begin
               EmitLine('function $_FieldCleanup_TObject(l %self) {');
@@ -13904,9 +14121,9 @@ begin
       if FSymTable <> nil then
       begin
         { Interface typeinfo blocks }
-        for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
+        for I := 0 to AllTD.Count - 1 do
         begin
-          TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
+          TD := TTypeDecl(AllTD.Items[I]);
           if TD.Def is TInterfaceTypeDef then
             EmitLine(ExportPrefix() + 'data $typeinfo_' + ClassSymName(TD.Name) + ' = { l 0 }');
         end;
@@ -13916,9 +14133,9 @@ begin
           on FSystemDefsEmitted.  Skipped in separate-compilation mode
           (FSuppressSystemDefs) — the main program provides these. }
         if (not FSuppressSystemDefs) and (not FSystemDefsEmitted) then
-          for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
+          for I := 0 to AllTD.Count - 1 do
           begin
-            TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
+            TD := TTypeDecl(AllTD.Items[I]);
             if TD.Def is TClassTypeDef then
             begin
               EmitLine('export data $typeinfo_TObject = { l 0, l 0, l ' +
@@ -13940,9 +14157,9 @@ begin
           end;
 
         { Class typeinfo blocks — full 8-slot layout matching EmitTypeInfoDefs }
-        for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
+        for I := 0 to AllTD.Count - 1 do
         begin
-          TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
+          TD := TTypeDecl(AllTD.Items[I]);
           if not (TD.Def is TClassTypeDef) then Continue;
           CD := TClassTypeDef(TD.Def);
           TDesc := FSymTable.FindType(TD.Name);
@@ -14005,9 +14222,9 @@ begin
           so the abstract class's vtable links even when no subclass
           overrides the method.  Matches EmitVTableDefs behaviour for
           program-level classes. }
-        for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
+        for I := 0 to AllTD.Count - 1 do
         begin
-          TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
+          TD := TTypeDecl(AllTD.Items[I]);
           if not (TD.Def is TClassTypeDef) then Continue;
           TDesc := FSymTable.FindType(TD.Name);
           if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
@@ -14128,9 +14345,9 @@ begin
         end;
 
         { Interface itab and impllist blocks for implementing classes }
-        for I := 0 to AUnit.IntfBlock.TypeDecls.Count - 1 do
+        for I := 0 to AllTD.Count - 1 do
         begin
-          TD := TTypeDecl(AUnit.IntfBlock.TypeDecls.Items[I]);
+          TD := TTypeDecl(AllTD.Items[I]);
           if not (TD.Def is TClassTypeDef) then Continue;
           TDesc := FSymTable.FindType(TD.Name);
           if (TDesc = nil) or not (TDesc is TRecordTypeDesc) then Continue;
@@ -14220,6 +14437,9 @@ begin
   finally
     IntfNames.Free();
   end;
+  AllTD.Free();
+  if FSymTable <> nil then
+    FSymTable.DefineOwningUnit := SavedDOU;
 end;
 
 procedure TCodeGenQBE.NoteDepInitUnit(const AUnitName: string; AHasInit: Boolean);

@@ -413,7 +413,7 @@ const
         program P;
         type TM = procedure of object;
         var G: TM;
-        begin G end.
+        begin G() end.
         ''';
 var IR: string;
 begin
@@ -448,7 +448,7 @@ const
           M.Code := MethodAddress(F, 'SayHi');
           M.Data := F;
           G := TGreet(M);
-          G;
+          G();
           F.Free()
         end.
         ''';
@@ -509,7 +509,7 @@ const
           M.Code := MethodAddress(C, 'Print');
           M.Data := C;
           G := TPrintMethod(M);
-          G;
+          G();
           C.Free()
         end.
         ''';

@@ -793,7 +793,7 @@ const
         program Prg;
         uses UPair;
         begin
-          InitPair;
+          InitPair();
         end.
         ''';
 

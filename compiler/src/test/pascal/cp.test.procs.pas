@@ -588,10 +588,10 @@ const
           begin
           end;
         begin
-          Inner;
+          Inner();
         end;
         begin
-          Outer;
+          Outer();
         end.
         ''';
 var IR: string;
@@ -619,10 +619,10 @@ const
           end;
         begin
           x := 0;
-          Inner;
+          Inner();
         end;
         begin
-          Outer;
+          Outer();
         end.
         ''';
 var IR: string;
@@ -650,7 +650,7 @@ const
             WriteLn(1);
           end;
         begin
-          Inner;
+          Inner();
         end;
         procedure OuterB;
           procedure Inner;
@@ -658,11 +658,11 @@ const
             WriteLn(2);
           end;
         begin
-          Inner;
+          Inner();
         end;
         begin
-          OuterA;
-          OuterB;
+          OuterA();
+          OuterB();
         end.
         ''';
 var

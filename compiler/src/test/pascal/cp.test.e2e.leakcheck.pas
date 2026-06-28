@@ -63,6 +63,16 @@ type
       after the field load.  L[I].HitPoints — the TList<T>.Get getter returns
       +1, the field is read, then the transient base must be released. }
     procedure TestDebug_ReceiverFieldAccess_NoLeak;
+    { A static array of interfaces (array[0..N] of IFoo): the elements are
+      ARC-managed but the scope-exit cleanup previously skipped tyStaticArray
+      locals entirely, so every stored element leaked on BOTH backends.  The
+      fix releases each element at scope exit. }
+    procedure TestDebug_StaticArrayOfInterface_NoLeak;
+    { A string-returning call/getter used DIRECTLY as a Write/WriteLn argument
+      (WriteLn(GetBar)) returns a fresh +1 string that _SysWriteStr only borrows.
+      EmitWrite previously never released it, leaking one string per call.  The
+      fix releases the owned string transient after the write (both backends). }
+    procedure TestDebug_WriteLnCallArg_NoLeak;
   end;
 
 implementation
@@ -116,7 +126,7 @@ const
       end
     end;
     begin
-      DoIt;
+      DoIt();
       WriteLn('done')
     end.
     ''';
@@ -705,6 +715,76 @@ const
     end.
     ''';
 
+  { Static array of interfaces: three IGreet elements stored into a local
+    array[0..2].  Scope-exit cleanup must release each element.  Prints the
+    three greetings, then exits with no leak report. }
+  SrcStaticArrayOfInterface = '''
+    program P;
+    type
+      IGreet = interface
+        function Name(): string;
+      end;
+      TGreet = class(IGreet)
+        FName: string;
+        function Name(): string;
+      end;
+    function TGreet.Name(): string;
+    begin
+      Result := Self.FName;
+    end;
+    procedure MakeInto(var G: IGreet; const N: string);
+    var
+      T: TGreet;
+    begin
+      T := TGreet.Create();
+      T.FName := N;
+      G := T;
+    end;
+    procedure Run();
+    var
+      Arr: array[0..2] of IGreet;
+      I: Integer;
+    begin
+      MakeInto(Arr[0], 'a');
+      MakeInto(Arr[1], 'b');
+      MakeInto(Arr[2], 'c');
+      for I := 0 to 2 do
+        Write(Arr[I].Name());
+      WriteLn('');
+    end;
+    begin
+      Run();
+    end.
+    ''';
+
+  { A string-returning getter used directly as a WriteLn argument.  The getter
+    returns a fresh +1 string (Copy result); WriteLn only borrows it, so the
+    caller must release it after the write.  Three calls => three leaks before
+    the fix. }
+  SrcWriteLnCallArg = '''
+    program P;
+    type
+      TFoo = class
+      private
+        function GetBar: String;
+      public
+        property Bar: String read GetBar;
+      end;
+    function TFoo.GetBar: String;
+    begin
+      Result := Copy('abcd', 1, 3);
+    end;
+    var
+      X: TFoo;
+    begin
+      X := TFoo.Create;
+      WriteLn(X.Bar);
+      WriteLn(X.Bar);
+      WriteLn(X.Bar);
+      X := nil;
+    end.
+    ''';
+
 procedure TE2ELeakCheckTests.TestDebug_ReceiverFieldAccess_NoLeak;
 var
   Output: string;
@@ -720,6 +800,42 @@ begin
     CompileAndRunWithRTLDebugOn(beNative, SrcReceiverFieldAccess, Output, ExitCode, True));
   AssertEquals('exit 0 (native)', 0, ExitCode);
   AssertEquals('stdout (native)', '42' + LE, Output);
+  AssertTrue('no leak report (native), got: ' + Output, Pos('leak', Output) < 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_StaticArrayOfInterface_NoLeak;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run (qbe)',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcStaticArrayOfInterface, Output, ExitCode, True));
+  AssertEquals('exit 0 (qbe)', 0, ExitCode);
+  AssertEquals('stdout (qbe)', 'abc' + LE, Output);
+  AssertTrue('no leak report (qbe), got: ' + Output, Pos('leak', Output) < 0);
+  AssertTrue('compile+run (native)',
+    CompileAndRunWithRTLDebugOn(beNative, SrcStaticArrayOfInterface, Output, ExitCode, True));
+  AssertEquals('exit 0 (native)', 0, ExitCode);
+  AssertEquals('stdout (native)', 'abc' + LE, Output);
+  AssertTrue('no leak report (native), got: ' + Output, Pos('leak', Output) < 0);
+end;
+
+procedure TE2ELeakCheckTests.TestDebug_WriteLnCallArg_NoLeak;
+var
+  Output: string;
+  ExitCode: Integer;
+begin
+  if not ToolchainAvailable() then begin Ignore('toolchain unavailable'); Exit end;
+  AssertTrue('compile+run (qbe)',
+    CompileAndRunWithRTLDebugOn(beQBE, SrcWriteLnCallArg, Output, ExitCode, True));
+  AssertEquals('exit 0 (qbe)', 0, ExitCode);
+  AssertEquals('stdout (qbe)', 'bcd' + LE + 'bcd' + LE + 'bcd' + LE, Output);
+  AssertTrue('no leak report (qbe), got: ' + Output, Pos('leak', Output) < 0);
+  AssertTrue('compile+run (native)',
+    CompileAndRunWithRTLDebugOn(beNative, SrcWriteLnCallArg, Output, ExitCode, True));
+  AssertEquals('exit 0 (native)', 0, ExitCode);
+  AssertEquals('stdout (native)', 'bcd' + LE + 'bcd' + LE + 'bcd' + LE, Output);
   AssertTrue('no leak report (native), got: ' + Output, Pos('leak', Output) < 0);
 end;
 

@@ -119,7 +119,7 @@ begin
   _libc_write(STDERR_FD, Msg, Int64(Len));
   NL := 10;
   _libc_write(STDERR_FD, @NL, 1);
-  _libc_abort;
+  _libc_abort();
 end;
 
 procedure _AbstractMethodError;

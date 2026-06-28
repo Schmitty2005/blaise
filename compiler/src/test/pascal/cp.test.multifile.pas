@@ -452,7 +452,7 @@ const
         procedure ext_abort; external name 'abort';
         procedure DoA;
         begin
-          ext_abort
+          ext_abort()
         end;
         end.
         ''';
@@ -465,7 +465,7 @@ const
         procedure ext_abort; external name 'abort';
         procedure DoB;
         begin
-          ext_abort
+          ext_abort()
         end;
         end.
         ''';
@@ -474,7 +474,7 @@ const
         program TestP;
         uses AltA, AltB;
         begin
-          DoA; DoB
+          DoA(); DoB()
         end.
         ''';
 var

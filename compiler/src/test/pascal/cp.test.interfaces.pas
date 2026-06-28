@@ -525,7 +525,7 @@ const
         end;
         procedure Tmi.use;
         begin
-          im.print;
+          im.print();
         end;
         var
           im: Tmi;

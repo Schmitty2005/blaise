@@ -473,7 +473,7 @@ end;
 
 procedure TSemanticTests.TestProcCall_WriteLn_NoArgs_OK;
 begin
-  Analyse('program P; begin WriteLn end.').Free();
+  Analyse('program P; begin WriteLn() end.').Free();
 end;
 
 procedure TSemanticTests.TestProcCall_WriteLn_StringArg_OK;
@@ -520,7 +520,7 @@ end;
 
 procedure TSemanticTests.TestProcCall_UndeclaredProc_RaisesError;
 begin
-  AnalyseExpectError('program P; begin NoSuchProc end.');
+  AnalyseExpectError('program P; begin NoSuchProc() end.');
 end;
 
 { ------------------------------------------------------------------ }

@@ -63,6 +63,8 @@ type
     procedure EmitLocalVars(ABlock: TBlock; AScopeID: Integer);
     procedure EmitFunctionScope_Main(AScopeID, ADeclIdx: Integer);
     procedure EmitUnitDirectory;
+    procedure EmitRuntimeHelper(AKind: Integer; const ASymbol: string);
+    procedure EmitRuntimeHelpers;
     procedure EmitPointer(AType: TPointerTypeDesc);
     procedure EmitArray(AType: TTypeDesc);
     procedure EmitSet(AType: TSetTypeDesc);
@@ -129,6 +131,11 @@ const
   REC_SET       = 18;
   REC_UNITDIR   = 19;
   REC_CONSTANT  = 20;
+  REC_RUNTIMEHELPER = 25;
+
+  { TRuntimeHelperKind ordinals (mirror opdf_types.TRuntimeHelperKind) }
+  RHK_STRING_RELEASE   = 0;
+  RHK_DYNARRAY_RELEASE = 1;
 
   SK_INTEGER = 0;
   SK_BOOLEAN = 1;
@@ -653,6 +660,28 @@ begin
   EmitStrField(FuncName);
 end;
 
+procedure TOPDFEmitter.EmitRuntimeHelper(AKind: Integer; const ASymbol: string);
+begin
+  { recRuntimeHelper: 1-byte kind + 8-byte linker-resolved RTL entry-point
+    address.  Lets the debugger inject a call to the RTL release routine for a
+    +1 transient an injected property getter returns — see uDebugOPDF rationale
+    and opdf-specification.adoc (recRuntimeHelper = 25). }
+  L('');
+  L('    # recRuntimeHelper: ' + ASymbol);
+  EmitRecHdr(REC_RUNTIMEHELPER, 9);
+  L('    .byte ' + IntToStr(AKind) + '  # Kind');
+  L('    .quad ' + ASymbol + '  # Address (linker-resolved)');
+end;
+
+procedure TOPDFEmitter.EmitRuntimeHelpers;
+begin
+  { Emitted once per binary (program object only).  The RTL release routines
+    are global symbols the linker resolves; the addresses land in the same
+    image as the OPDF section, so the ASLR slide applies uniformly. }
+  EmitRuntimeHelper(RHK_STRING_RELEASE,   '_StringRelease');
+  EmitRuntimeHelper(RHK_DYNARRAY_RELEASE, '_DynArrayRelease');
+end;
+
 procedure TOPDFEmitter.EmitParameters(AMethod: TMethodDecl);
 var
   I: Integer;
@@ -975,6 +1004,7 @@ var
   ReadType, WriteType: Integer;
   RecSize: Integer;
   RF: TFieldInfo;
+  ReadMethSym, WriteMethSym: string;
 begin
   if AClass.Properties.Count = 0 then Exit;
   ClassTypeID := GetOrAllocTypeID(AClass.Name);
@@ -1002,8 +1032,23 @@ begin
     else
       WriteType := PAT_NONE;
 
-    RecSize := 28 + Length(PI.Name);
-    { 4(ClassTypeID)+4(PropTypeID)+1(ReadType)+1(WriteType)+8(ReadAddr)+8(WriteAddr)+2(NameLen) }
+    { Method-backed accessors carry the getter/setter SYMBOL name so the
+      debugger can resolve it via FindFunctionByName (which matches against the
+      recFunctionScope name = the mangled symbol) and inject the call.  The
+      symbol is the same one written as ReadAddr/WriteAddr below. }
+    if ReadType = PAT_METHOD then
+      ReadMethSym := MangledClassSym(AClass.Name) + '_' + PI.ReadMethod
+    else
+      ReadMethSym := '';
+    if WriteType = PAT_METHOD then
+      WriteMethSym := MangledClassSym(AClass.Name) + '_' + PI.WriteMethod
+    else
+      WriteMethSym := '';
+
+    { Fixed-size payload (30 bytes) + the three variable-length strings.
+      4(ClassTypeID)+4(PropTypeID)+1(ReadType)+1(WriteType)+8(ReadAddr)+
+      8(WriteAddr)+2(ReadMethodNameLen)+2(WriteMethodNameLen)+2(NameLen). }
+    RecSize := 32 + Length(ReadMethSym) + Length(WriteMethSym) + Length(PI.Name);
 
     L('');
     L('    # recProperty: ' + PI.Name);
@@ -1041,7 +1086,14 @@ begin
     else
       L('    .quad 0  # WriteAddr (none)');
 
-    EmitStrField(PI.Name);
+    { The reader (TDefProperty) expects all three length words FIRST, then the
+      three strings in order: ReadMethodName, WriteMethodName, Name. }
+    L('    .word ' + IntToStr(Length(ReadMethSym)) + '  # ReadMethodNameLen');
+    L('    .word ' + IntToStr(Length(WriteMethSym)) + '  # WriteMethodNameLen');
+    L('    .word ' + IntToStr(Length(PI.Name)) + '  # NameLen');
+    EmitNameData(ReadMethSym);
+    EmitNameData(WriteMethSym);
+    EmitNameData(PI.Name);
   end;
 end;
 
@@ -1577,6 +1629,10 @@ begin
   EmitAllTypes();
   EmitGlobalVars();
   EmitConstants();
+  { recRuntimeHelper records are emitted ONLY by the program object (one set
+    per binary) — the RTL release routines are global symbols, not per-unit. }
+  if FProgram <> nil then
+    EmitRuntimeHelpers();
   EmitFunctionScopes();
   PatchTotalRecords();
   PatchUnitDirRecordCount();

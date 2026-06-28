@@ -671,7 +671,7 @@ const
       K := TMaker.Create;
       R := K.Make(0.25);
       WriteLn(R.X);
-      K.Free
+      K.Free()
     end.
     ''';
 begin

@@ -1226,7 +1226,7 @@ const
       WriteLn(D)
     end;
     begin
-      ShowDouble
+      ShowDouble()
     end.
     ''';
 
@@ -1487,7 +1487,7 @@ const
       WriteLn(B.Data[4]);
       WriteLn(B.Data[I + 2]);
       WriteLn(B.At(1));
-      B.Free;
+      B.Free();
     end.
     ''';
 
@@ -2843,13 +2843,13 @@ const
     end;
     procedure Tmi.use;
     begin
-      im.print;
+      im.print();
     end;
     var
       im: Tmi;
     begin
       im := Tmi.Create(Toutput.Create());
-      im.use;
+      im.use();
     end.
     ''';
 
@@ -4966,7 +4966,7 @@ begin
     begin
       B := TBox.Create(99);
       WriteLn(B.Val);
-      B.Free
+      B.Free()
     end.
     ''',
     '99' + LE, 0);
@@ -4992,7 +4992,7 @@ begin
       A := TArr.Create;
       WriteLn(A.Items[0]);
       WriteLn(A.Items[1]);
-      A.Free
+      A.Free()
     end.
     ''',
     '10' + LE + '30' + LE, 0);
@@ -5018,7 +5018,7 @@ begin
       B := TBox.Create;
       B.Val := 42;
       WriteLn(B.Val);
-      B.Free
+      B.Free()
     end.
     ''',
     '42' + LE, 0);
@@ -5046,7 +5046,7 @@ begin
       A.Items[1] := 30;
       WriteLn(A.Items[0]);
       WriteLn(A.Items[1]);
-      A.Free
+      A.Free()
     end.
     ''',
     '10' + LE + '30' + LE, 0);
@@ -5062,7 +5062,7 @@ begin
     begin
       F := TFoo.Create;
       WriteLn(F.ClassName);
-      F.Free
+      F.Free()
     end.
     ''',
     'TFoo' + LE, 0);
@@ -5084,7 +5084,7 @@ begin
     begin
       Obj := TCalc.Create;
       WriteLn(Obj.Sum6(1, 2, 3, 4, 5, 6));
-      Obj.Free
+      Obj.Free()
     end.
     ''',
     '21' + LE, 0);
@@ -5109,8 +5109,8 @@ begin
       O := TOuter.Create;
       O.FInner := I;
       WriteLn(O.GetVal());
-      O.Free;
-      I.Free
+      O.Free();
+      I.Free()
     end.
     ''',
     '42' + LE, 0);
@@ -5137,8 +5137,8 @@ begin
     begin
       O := TMyObj.Create;
       O.FVal := 99;
-      O.Show;
-      O.Free
+      O.Show();
+      O.Free()
     end.
     ''',
     '99' + LE, 0);
@@ -5176,7 +5176,7 @@ begin
     begin
       B := TChild.Create;
       WriteLn(B.GetVal());
-      B.Free
+      B.Free()
     end.
     ''',
     '42' + LE, 0);
@@ -5322,7 +5322,7 @@ begin
     procedure TCalc.Run;
     begin
       FVal := 5;
-      Step;
+      Step();
       WriteLn(FVal);
       WriteLn(Double())
     end;
@@ -5360,8 +5360,8 @@ begin
     var P: TParser;
     begin
       P := TParser.Create();
-      P.Setup;
-      P.Advance;
+      P.Setup();
+      P.Advance();
       WriteLn(P.FA.Kind, ':', P.FA.Value, ':', P.FA.Line, ':', P.FA.Col);
       WriteLn(P.FB.Kind, ':', P.FB.Value, ':', P.FB.Line, ':', P.FB.Col);
       P.Free()
